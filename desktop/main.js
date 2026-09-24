@@ -84,13 +84,12 @@ ipcMain.handle('pick-folder', async () => {
 
 ipcMain.handle('pick-watermark', async () => {
   const r = await dialog.showOpenDialog(win, {
-    title: '选择水印文件（AI/SVG/PNG/JPG…）',
-    properties: ['openFile'],
+    title: '选择水印文件（可多选，并排合并）',
+    properties: ['openFile', 'multiSelections'],
     filters: [{ name: '水印文件', extensions: WM_EXTS }, { name: '所有文件', extensions: ['*'] }],
   });
-  if (r.canceled || !r.filePaths[0]) return null;
-  const p = r.filePaths[0];
-  return { path: p, name: path.basename(p), base64: fs.readFileSync(p).toString('base64') };
+  if (r.canceled || !r.filePaths.length) return [];
+  return r.filePaths.map((p) => ({ path: p, name: path.basename(p), base64: fs.readFileSync(p).toString('base64') }));
 });
 
 app.whenReady().then(async () => {

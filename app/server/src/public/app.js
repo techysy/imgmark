@@ -450,10 +450,9 @@ function init() {
       .addEventListener('click', async (e) => {
         e.preventDefault();
         const picked = await native.pickWatermark();
-        if (picked) {
-          const bytes = Uint8Array.from(atob(picked.base64), (c) => c.charCodeAt(0));
-          onWmFiles([new File([bytes], picked.name)]);
-        }
+        const list = (Array.isArray(picked) ? picked : picked ? [picked] : [])
+          .map((p) => new File([Uint8Array.from(atob(p.base64), (c) => c.charCodeAt(0))], p.name));
+        if (list.length) onWmFiles(list);
       });
   }
   ['wm-bg'].forEach((id) => $(id).addEventListener('change', prepareDebounced));
