@@ -56,10 +56,10 @@ jobs:
           " "$1"; }
           pack() {
             settype "$1"
+            rm -f imgmark.fpk
             ./fnpack build -d .
-            FPK_FILE=$(ls *.fpk | head -1)
-            mv "$FPK_FILE" "imgmark-${VERSION}-$2.fpk"
-            echo "built $2"
+            mv imgmark.fpk "imgmark-${VERSION}-$2.fpk"
+            echo "built $2 -> imgmark-${VERSION}-$2.fpk"
           }
           pack iframe window
           pack url fullscreen
@@ -81,6 +81,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ inputs.release_tag || github.ref_name }}
+          overwrite: true
           name: ImgMark ${{ inputs.release_tag || github.ref_name }}
           body: |
             飞牛 fnOS 应用包（fpk），三个变体按需下载其一：
