@@ -1,14 +1,53 @@
 {
   "name": "imgmark",
-  "version": "0.1.0",
-  "description": "ImgMark 批量图片水印 — AI/SVG/PNG/JPG 水印源自动去底转透明 PNG，支持本地与飞牛 fnOS 授权目录",
-  "main": "src/server.js",
-  "bin": { "imgmark": "bin/wm.js" },
-  "engines": { "node": ">=18" },
+  "version": "0.2.2",
+  "description": "ImgMark 批量图片水印 — AI/SVG/PNG/JPG 水印源白底黑底自动去底转透明 PNG，多 logo 并排/逐个裁剪，飞牛 fnOS 授权目录支持",
+  "main": "src/core/watermark.js",
+  "exports": {
+    ".": "./src/core/watermark.js",
+    "./server": "./src/server.js",
+    "./package.json": "./package.json"
+  },
+  "bin": {
+    "imgmark": "bin/wm.js"
+  },
+  "files": [
+    "bin",
+    "src",
+    "scripts",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "watermark",
+    "image",
+    "batch",
+    "transparent",
+    "png",
+    "sharp",
+    "svg",
+    "illustrator",
+    "fnos",
+    "nas"
+  ],
   "scripts": {
     "start": "node src/server.js",
-    "test": "node ../../scripts/smoke-test.js"
+    "prepare": "node scripts/sync-readme.js",
+    "prepack": "node scripts/sync-readme.js"
   },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/techysy/imgmark.git"
+  },
+  "homepage": "https://github.com/techysy/imgmark#readme",
+  "bugs": {
+    "url": "https://github.com/techysy/imgmark/issues"
+  },
+  "license": "MIT",
+  "author": "techysy",
   "dependencies": {
     "@napi-rs/canvas": "^0.1.80",
     "@trimjs/web-app": "^0.4.2",

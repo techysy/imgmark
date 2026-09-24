@@ -19,16 +19,6 @@ Node.js 批量图片水印工具：**AI / SVG / PNG / JPG 水印源，白底或�
 
 ## 快速开始
 
-### npm 安装（CLI / Web 服务，任何机器）
-
-```bash
-npm i -g imgmark          # 全局安装（含 sharp 等原生依赖）
-imgmark apply -w logo.png -i ./photos --pos se --recursive   # CLI 批量加水印
-imgmark serve             # 启动 Web 界面 http://127.0.0.1:28110
-```
-
-程序化调用：`require('imgmark')` 返回 `prepareWatermark` / `composeWatermark` / `mergeWatermarks` / `runBatch`。fnOS 应用打包见下文（fpk 内也走同一套代码）。
-
 ### 本地开发运行（Windows / Linux / macOS）
 
 ```bash
