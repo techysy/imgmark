@@ -1,0 +1,3 @@
+#!/bin/bash
+# install_init — no-op（实际逻辑在 install_callback）
+exit 0

@@ -1,0 +1,3 @@
+#!/bin/bash
+# uninstall_init — no-op（实际逻辑在 uninstall_callback）
+exit 0
