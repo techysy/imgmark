@@ -33,7 +33,7 @@ jobs:
       - name: Stage 服务端（含 Windows 原生依赖）
         run: |
           mkdir -p desktop/server
-          cp -r app/server/bin app/server/src app/server/scripts app/server/package.json desktop/server/
+          cp -r app/server/bin app/server/src app/server/scripts app/server/package.json app/server/package-lock.json desktop/server/
           cp README.md LICENSE desktop/server/
           cd desktop/server && npm ci --omit=dev --no-audit --no-fund
 
