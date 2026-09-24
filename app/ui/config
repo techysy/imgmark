@@ -1,0 +1,13 @@
+{
+  ".url": {
+    "imgmark.Application": {
+      "title": "ImgMark 批量图片水印",
+      "icon": "images/icon_{0}.png",
+      "type": "iframe",
+      "protocol": "http",
+      "port": "28110",
+      "url": "/",
+      "allUsers": true
+    }
+  }
+}

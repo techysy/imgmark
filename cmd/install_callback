@@ -1,0 +1,19 @@
+#!/bin/bash
+# 安装/升级回调：初始化数据区配置（TRIM_PKGVAR）
+set -u
+APP_NAME="${TRIM_APPNAME:-imgmark}"
+PKGVAR="${TRIM_PKGVAR:-/vol4/@appdata/${APP_NAME}}"
+mkdir -p "${PKGVAR}"
+
+if [ ! -f "${PKGVAR}/config.json" ]; then
+  cat > "${PKGVAR}/config.json" << 'EOF'
+{
+  "outputDirName": "_watermarked",
+  "concurrency": 3,
+  "maxWatermarkSize": 1600
+}
+EOF
+fi
+
+echo "$(date '+%F %T') install/upgrade callback done (pkgvar=${PKGVAR})" >> "${PKGVAR}/imgmark.log"
+exit 0

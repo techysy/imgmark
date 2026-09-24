@@ -1,0 +1,7 @@
+node_modules/
+data/
+*.fpk
+*.log
+.DS_Store
+Thumbs.db
+tmp/

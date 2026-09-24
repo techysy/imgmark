@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head><meta charset="UTF-8"><title>ImgMark 授权回调</title></head>
+<body style="font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;color:#334155">
+<div id="msg">正在处理授权结果…</div>
+<script type="module">
+  try {
+    const { TrimApp } = await import('/vendor/index.js');
+    const sdk = new TrimApp();
+    const result = sdk.parseAppAuthCallback(window.location.href);
+    if (window.opener && !window.opener.closed) {
+      window.opener.postMessage({ type: 'imgmark:auth-result', result }, window.location.origin);
+    }
+    document.getElementById('msg').textContent = '授权完成，请回到原页面（若未自动刷新，点击"刷新授权列表"）。窗口将关闭…';
+  } catch (e) {
+    document.getElementById('msg').textContent = '授权回调解析失败：' + e.message + '。请回到原页面手动刷新。';
+  }
+  setTimeout(() => window.close(), 1500);
+</script>
+</body>
+</html>

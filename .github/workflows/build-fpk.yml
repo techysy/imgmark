@@ -1,0 +1,73 @@
+name: build-fpk
+
+# 推送 v* tag 自动打包并发布 Release（如 v0.2.2）；
+# 也可手动触发（release_tag 留空则只上传 artifact）。
+# 注意：sharp/@napi-rs/canvas 是平台相关二进制，本流水线产出 x86 包；
+# ARM 需在 aarch64 环境安装依赖后打包（参考 scripts/build-fpk.sh）。
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Release 标签（留空只传 artifact，如 v0.2.2）
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: 校验 manifest 依赖声明
+        run: grep -q "install_dep_apps      = nodejs_v24" manifest
+
+      - name: 安装生产依赖（Linux x64 二进制）
+        working-directory: app/server
+        run: npm ci --omit=dev --no-audit --no-fund
+
+      - name: 下载 fnpack 1.2.1
+        run: |
+          curl -fsSL https://static2.fnnas.com/fnpack/fnpack-1.2.1-linux-amd64 -o fnpack
+          chmod +x fnpack
+
+      - name: 打包 fpk
+        run: |
+          VERSION=$(tr -d ' \n' < VERSION)
+          sed -i "s/^platform.*/platform              = x86/" manifest
+          ./fnpack build -d .
+          FPK_FILE=$(ls *.fpk | head -1)
+          mv "$FPK_FILE" "imgmark-${VERSION}-x86.fpk"
+          echo "FPK=imgmark-${VERSION}-x86.fpk" >> "$GITHUB_ENV"
+
+      - name: 打包信息
+        run: echo "产物 ${{ env.FPK }}（tar 结构：app.tgz + manifest + cmd/ + config/ + wizard/）"
+
+      - name: 上传 artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.FPK }}
+          path: ${{ env.FPK }}
+          if-no-files-found: error
+
+      - name: 发布 Release
+        if: inputs.release_tag != '' || startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.release_tag || github.ref_name }}
+          name: ImgMark ${{ inputs.release_tag || github.ref_name }}
+          body: |
+            飞牛 fnOS 应用包（fpk）。
+
+            安装：下载 fpk → 放到应用中心扫描目录（如 `/vol1/1000/fnOS App/fpk/imgmark/`）→ 应用中心「手动安装」。
+            要求：fnOS ≥ 1.2.0401，应用中心 ≥ 1.34.0，依赖应用 nodejs_v24。
+          files: ${{ env.FPK }}

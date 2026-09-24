@@ -1,0 +1,20 @@
+#!/bin/bash
+# 应用设置页保存回调（wizard/config 表单字段以裸名环境变量传入）
+set -u
+APP_NAME="${TRIM_APPNAME:-imgmark}"
+PKGVAR="${TRIM_PKGVAR:-/vol4/@appdata/${APP_NAME}}"
+mkdir -p "${PKGVAR}"
+
+OUT_DIR_NAME="${output_dir_name:-_watermarked}"
+CONCURRENCY="${concurrency:-3}"
+MAX_WM_SIZE="${max_watermark_size:-1600}"
+
+cat > "${PKGVAR}/config.json" << EOF
+{
+  "outputDirName": "${OUT_DIR_NAME}",
+  "concurrency": ${CONCURRENCY},
+  "maxWatermarkSize": ${MAX_WM_SIZE}
+}
+EOF
+echo "$(date '+%F %T') config saved" >> "${PKGVAR}/imgmark.log"
+exit 0

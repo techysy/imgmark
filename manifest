@@ -1,0 +1,17 @@
+appname               = imgmark
+version               = 0.2.2
+display_name          = ImgMark 批量图片水印
+desc                  = 批量给图片加图片水印：AI/SVG/PNG/JPG 水印源白底黑底自动去底转透明 PNG，支持多 logo 并排、框选裁剪、九宫格定位/平铺/透明度/旋转；目录通过飞牛开放平台文件授权选取（trim.file.*），也支持本地路径与直接上传
+changelog             = v0.2.2: logo 间距改为滑杆实时调节（0=紧贴），修复间距/边距/平铺间距设 0 不生效；v0.2.1: 多 logo 逐个框选裁剪；v0.2.0: 多 logo 并排
+platform              = x86
+source                = thirdparty
+maintainer            = techysy
+maintainer_url        = https://github.com/techysy/imgmark
+distributor           = techysy
+distributor_url       = https://github.com/techysy/imgmark
+desktop_uidir         = ui
+desktop_applaunchname = imgmark.Application
+ctl_stop              = true
+checkport             = false
+install_dep_apps      = nodejs_v24
+micro_app             = true

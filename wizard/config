@@ -1,0 +1,35 @@
+[
+  {
+    "stepTitle": "ImgMark 默认设置",
+    "items": [
+      {
+        "type": "text",
+        "field": "output_dir_name",
+        "label": "输出子目录名",
+        "initValue": "_watermarked",
+        "placeholder": "_watermarked",
+        "desc": "批量处理时在图片目录下创建该子目录存放结果。留空保留当前设置。"
+      },
+      {
+        "type": "text",
+        "field": "concurrency",
+        "label": "并发数",
+        "initValue": "3",
+        "placeholder": "3",
+        "desc": "同时处理的图片数（1-8）。留空保留当前设置。"
+      },
+      {
+        "type": "text",
+        "field": "max_watermark_size",
+        "label": "水印最大边长",
+        "initValue": "1600",
+        "placeholder": "1600",
+        "desc": "水印源转透明 PNG 后的最长边像素上限，防止大图拖慢批量。留空保留当前设置。"
+      },
+      {
+        "type": "tips",
+        "helpText": "水印文件、去底容差、位置样式等在应用页面内设置即可，无需在此配置。修改后立即生效（读配置不打断服务）。"
+      }
+    ]
+  }
+]

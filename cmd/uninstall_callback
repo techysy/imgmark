@@ -1,0 +1,8 @@
+#!/bin/bash
+# 卸载回调：只清 pid/日志句柄，保留 TRIM_PKGVAR 用户数据（config.json）
+set -u
+APP_NAME="${TRIM_APPNAME:-imgmark}"
+PKGVAR="${TRIM_PKGVAR:-/vol4/@appdata/${APP_NAME}}"
+rm -f "${PKGVAR}/imgmark.pid"
+echo "$(date '+%F %T') uninstall callback done" >> "${PKGVAR}/imgmark.log"
+exit 0

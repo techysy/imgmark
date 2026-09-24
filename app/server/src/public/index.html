@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ImgMark 批量图片水印</title>
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<header>
+  <div class="brand">🖼️ <b>ImgMark</b> 批量图片水印</div>
+  <div class="status">
+    <span id="fnos-dot" class="dot"></span>
+    <span id="fnos-text">检测 fnOS 环境…</span>
+  </div>
+</header>
+
+<main>
+  <section class="col">
+    <!-- ① 水印文件 -->
+    <div class="card">
+      <h2>① 水印文件 <small>AI / SVG / PNG / JPG，白底或黑底自动转透明</small></h2>
+      <div class="row">
+        <label class="file-btn">选择水印文件（可多选，并排合并）
+          <input type="file" id="wm-file" accept=".ai,.svg,.png,.jpg,.jpeg,.webp,.bmp,.gif,.tif,.tiff" multiple hidden>
+        </label>
+        <span id="wm-name" class="muted">未选择</span>
+      </div>
+      <div class="row wm-preview-row">
+        <div class="preview-side">
+          <div class="checker" id="wm-preview-wrap">
+            <div class="img-holder">
+              <img id="wm-preview" alt="水印预览">
+              <div id="crop-rect" class="crop-rect hidden"></div>
+            </div>
+          </div>
+          <div id="logo-chips" class="row-inline hidden" style="gap:6px"></div>
+          <div id="crop-tools">
+            <div class="row-inline" style="gap:6px;margin:0">
+              <button id="crop-btn" class="btn tiny" disabled>✂ 框选裁剪</button>
+              <button id="crop-reset" class="btn tiny" disabled>重置</button>
+            </div>
+            <div id="crop-status" class="notes"></div>
+          </div>
+        </div>
+        <div class="wm-meta">
+          <div class="field">
+            <label>底色识别</label>
+            <select id="wm-bg">
+              <option value="auto">自动（白底/黑底）</option>
+              <option value="white">强制白底</option>
+              <option value="black">强制黑底</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>去底容差 <b id="tol-v">40</b></label>
+            <input type="range" id="wm-tol" min="5" max="150" value="40">
+          </div>
+          <div class="field check">
+            <label><input type="checkbox" id="wm-trim" checked> 自动裁掉边缘空白（去边）</label>
+          </div>
+          <div class="field row-inline hidden" id="arrange-row" style="gap:12px">
+            <label class="check"><input type="checkbox" id="wm-equal" checked> 等高对齐</label>
+            <span>间距 <input type="range" id="wm-gap" min="0" max="100" value="10"> <b id="gap-v">10</b>%</span>
+          </div>
+          <div class="field check">
+            <label><input type="checkbox" id="wm-force"> 已有透明通道时仍强制去底</label>
+          </div>
+          <div id="wm-notes" class="notes"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ② 水印样式 -->
+    <div class="card">
+      <h2>② 水印样式</h2>
+      <div class="row">
+        <div class="field">
+          <label>位置</label>
+          <div class="grid9" id="pos-grid"></div>
+        </div>
+        <div class="grow">
+          <div class="field">
+            <label>大小（占宽 %）<b id="size-v">20</b></label>
+            <input type="range" id="opt-size" min="2" max="90" value="20">
+          </div>
+          <div class="field">
+            <label>不透明度 <b id="op-v">80</b></label>
+            <input type="range" id="opt-opacity" min="5" max="100" value="80">
+          </div>
+          <div class="field">
+            <label>边距 <b id="mg-v">3</b>%</label>
+            <input type="range" id="opt-margin" min="0" max="25" value="3">
+          </div>
+          <div class="field row-inline">
+            <label class="check"><input type="checkbox" id="opt-tile"> 平铺整图</label>
+            <span id="tile-gap-wrap" class="hidden">间距 <input type="number" id="opt-tile-gap" value="10" min="0" max="100" class="num"> %</span>
+            <span>旋转 <input type="number" id="opt-rotate" value="0" min="-180" max="180" class="num">°</span>
+          </div>
+        </div>
+      </div>
+      <div class="row">
+        <div class="field">
+          <label>输出格式</label>
+          <select id="opt-format">
+            <option value="auto">保持原格式</option>
+            <option value="png">PNG</option>
+            <option value="jpeg">JPEG</option>
+            <option value="webp">WebP</option>
+          </select>
+        </div>
+        <div class="field" id="quality-wrap">
+          <label>质量 <b id="q-v">90</b></label>
+          <input type="range" id="opt-quality" min="50" max="100" value="90">
+        </div>
+        <div class="preview-box"><img id="style-preview" alt="样式预览"><span class="preview-cap">样式预览（示例图）</span></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="col">
+    <!-- ③ 图片来源 -->
+    <div class="card">
+      <h2>③ 图片来源</h2>
+      <div class="tabs">
+        <button class="tab" data-mode="fnos">飞牛授权目录</button>
+        <button class="tab" data-mode="local">本地路径</button>
+        <button class="tab" data-mode="upload">上传图片</button>
+      </div>
+
+      <div id="src-fnos" class="src-panel hidden">
+        <div class="row-inline">
+          <label>用户 UID <input type="number" id="fnos-uid" value="1000" class="num" style="width:90px"></label>
+          <button id="fnos-pick" class="btn">＋ 选择并授权目录</button>
+          <button id="fnos-refresh" class="btn ghost">刷新授权列表</button>
+        </div>
+        <div id="fnos-hint" class="notes"></div>
+        <div id="fnos-folders" class="folder-list"></div>
+        <div id="fnos-browser" class="browser hidden">
+          <div class="crumbs" id="fnos-crumbs"></div>
+          <div id="fnos-entries" class="entries"></div>
+        </div>
+        <div class="picked">已选：<b id="fnos-picked">无</b></div>
+      </div>
+
+      <div id="src-local" class="src-panel hidden">
+        <div class="row-inline">
+          <input type="text" id="local-path" placeholder="输入服务器上的绝对路径，如 /vol1/1000/photos" class="path-input">
+          <button id="local-browse" class="btn ghost">浏览</button>
+        </div>
+        <div id="local-browser" class="browser hidden">
+          <div class="crumbs" id="local-crumbs"></div>
+          <div id="local-entries" class="entries"></div>
+        </div>
+        <div class="picked">已选：<b id="local-picked">无</b></div>
+      </div>
+
+      <div id="src-upload" class="src-panel hidden">
+        <label class="file-btn block">选择图片（可多选）
+          <input type="file" id="up-files" accept=".jpg,.jpeg,.png,.webp,.bmp,.gif,.tif,.tiff,.avif" multiple hidden>
+        </label>
+        <div class="picked">已选：<b id="up-count">0</b> 张</div>
+      </div>
+    </div>
+
+    <!-- 输出设置 -->
+    <div class="card">
+      <h2>④ 输出设置</h2>
+      <div class="row-inline wrap">
+        <label class="check"><input type="checkbox" id="opt-recursive"> 包含子目录</label>
+        <span id="outdir-wrap">输出到子目录 <input type="text" id="opt-outdir" class="path-input short" value="_watermarked"></span>
+        <label class="check danger"><input type="checkbox" id="opt-overwrite"> 覆盖原图（危险）</label>
+      </div>
+      <div class="row-inline">
+        <button id="run" class="btn primary big" disabled>开始处理</button>
+        <span id="run-hint" class="muted">先选水印文件和图片来源</span>
+      </div>
+    </div>
+
+    <!-- ⑤ 任务 -->
+    <div class="card">
+      <h2>⑤ 任务进度</h2>
+      <div class="progress"><div id="bar"></div></div>
+      <div id="job-summary" class="muted">空闲</div>
+      <div id="job-log" class="log"></div>
+    </div>
+  </section>
+</main>
+
+<footer>ImgMark · AI/SVG/PNG/JPG 白底黑底自动转透明 · fnOS 开放平台文件授权 · 局域网工具，无鉴权，请勿暴露公网</footer>
+<script type="module" src="/app.js"></script>
+</body>
+</html>

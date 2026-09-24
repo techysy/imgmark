@@ -1,0 +1,70 @@
+#!/bin/bash
+# ImgMark 生命周期脚本 — 由 fnOS 调用：main start|stop|status|restart
+set -u
+
+APP_NAME="${TRIM_APPNAME:-imgmark}"
+APPDEST="${TRIM_APPDEST:-/var/apps/${APP_NAME}/target}"
+PKGVAR="${TRIM_PKGVAR:-/vol4/@appdata/${APP_NAME}}"
+SERVICE_PORT="${TRIM_SERVICE_PORT:-28110}"
+
+PID_FILE="${PKGVAR}/imgmark.pid"
+LOG_FILE="${PKGVAR}/imgmark.log"
+SERVER_JS="${APPDEST}/app/server/src/server.js"
+
+# Node 定位：优先 fnOS 依赖应用标准软链
+if [ -x /var/apps/nodejs_v24/target/bin/node ]; then
+  NODE_BIN=/var/apps/nodejs_v24/target/bin/node
+elif [ -x /usr/bin/node ]; then
+  NODE_BIN=/usr/bin/node
+else
+  NODE_BIN=$(command -v node || true)
+fi
+
+mkdir -p "${PKGVAR}"
+
+is_running() {
+  [ -f "${PID_FILE}" ] && kill -0 "$(cat "${PID_FILE}")" 2>/dev/null
+}
+
+start() {
+  if is_running; then echo "imgmark already running (pid $(cat "${PID_FILE}"))"; return 0; fi
+  if [ ! -x "${NODE_BIN}" ]; then echo "ERROR: node not found (install_dep_apps=nodejs_v24)" >&2; return 1; fi
+  if [ ! -f "${SERVER_JS}" ]; then echo "ERROR: server.js missing: ${SERVER_JS}" >&2; return 1; fi
+  # 依赖缺失时兜底在线安装（正常离线包已带 node_modules）
+  if [ ! -d "${APPDEST}/app/server/node_modules/sharp" ]; then
+    echo "node_modules missing, running npm install..." >> "${LOG_FILE}" 2>&1 || true
+    (cd "${APPDEST}/app/server" && "${NODE_BIN}" "$(command -v npm || echo npm)" install --omit=dev --no-audit --no-fund >> "${LOG_FILE}" 2>&1) || true
+  fi
+  echo "$(date '+%F %T') starting imgmark on :${SERVICE_PORT}" >> "${LOG_FILE}"
+  cd "${APPDEST}/app/server"
+  # TRIM_API_TOKEN / TRIM_APPNAME / TRIM_PKGVAR 由系统注入本脚本环境，原样传给子进程
+  PORT="${SERVICE_PORT}" IMGMARK_DATA_DIR="${PKGVAR}" \
+    nohup "${NODE_BIN}" "${SERVER_JS}" >> "${LOG_FILE}" 2>&1 &
+  echo $! > "${PID_FILE}"
+  sleep 1
+  is_running && echo "imgmark started (pid $(cat "${PID_FILE}"), port ${SERVICE_PORT})" || { echo "imgmark failed to start, see ${LOG_FILE}" >&2; return 1; }
+}
+
+stop() {
+  if is_running; then
+    kill "$(cat "${PID_FILE}")" 2>/dev/null
+    for _ in $(seq 1 10); do is_running || break; sleep 1; done
+    is_running && kill -9 "$(cat "${PID_FILE}")" 2>/dev/null
+    echo "imgmark stopped"
+  else
+    echo "imgmark not running"
+  fi
+  rm -f "${PID_FILE}"
+}
+
+status() {
+  if is_running; then echo "imgmark running (pid $(cat "${PID_FILE}"))"; return 0; else echo "imgmark stopped"; return 1; fi
+}
+
+case "${1:-}" in
+  start)   start ;;
+  stop)    stop ;;
+  status)  status ;;
+  restart) stop; start ;;
+  *)       echo "usage: $0 {start|stop|status|restart}"; exit 1 ;;
+esac
