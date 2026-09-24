@@ -39,6 +39,17 @@ npm start          # http://127.0.0.1:28110
 
 非 fnOS 环境自动降级：「飞牛授权目录」页签不可用，用「本地路径」或「上传图片」即可。
 
+### Windows 桌面壳（Electron）
+
+`desktop/` 目录提供 Windows 壳（参考 CreditDaddy 模式）：双击即用，自动拉起内嵌服务（28110 被占用自动换端口，已有 imgmark 实例则复用），并通过 preload 桥接**原生文件/文件夹对话框**——比网页版 `<input type=file>` 强：多选图片返回真实路径（本地文件批量不经过上传）、选文件夹、按扩展名过滤水印源。
+
+```bash
+cd desktop && npm install && npm run dev    # 开发
+npm run dist                                # 打包 → dist/ImgMark-Setup-*.exe / ImgMark-Portable-*.exe
+```
+
+CI 推 `v*` tag 时与 fpk 一同发布。前端检测到 `window.imgmarkDesktop` 后自动启用：水印文件选择走原生对话框、「上传图片」变为本地文件路径直处理、「本地路径」页签出现「选择文件夹」按钮；纯浏览器环境自动降级为原有行为。
+
 ### 打包为 fnOS 应用（fpk）
 
 要求系统 ≥ **1.2.0401**、应用中心版本 ≥ **1.34.0**（`trim.file.*` 开放能力要求）。
@@ -47,6 +58,11 @@ npm start          # http://127.0.0.1:28110
 # 在 NAS 本机或任意 Linux（x86）上：
 ./scripts/build-fpk.sh x86
 # 产物：imgmark-<版本>-x86.fpk → 应用中心「手动安装」
+# CI 推 v* tag 会自动产出三个变体：
+#   imgmark-<版本>-x86-window.fpk      桌面窗口入口（推荐，新版 fnOS，全功能）
+#   imgmark-<版本>-x86-fullscreen.fpk  全屏/新标签页入口（全功能）
+#   imgmark-<版本>-x86-compat.fpk      兼容旧版应用中心（不含 micro_app/api-scope；
+#                                      飞牛授权目录标签不可用，用本地路径/上传）
 ```
 
 安装要点（照搬 deepseek-harness-fnos 已验证的模式）：

@@ -213,9 +213,10 @@ app.post('/api/process', upload.array('files'), express.json(), async (req, res)
     const cfg = loadConfig();
     const overwrite = !!payload.overwrite;
     const jobId = crypto.randomUUID();
-    const mode = payload.mode; // local | fnos | upload
+    const mode = payload.mode; // local | fnos | upload | local-files（桌面壳：本地显式文件列表）
 
-    let inputDir, outputDir, files = null, dirKind;
+    let inputDir, outputDir, dirKind;
+    let filesArgExplicit = null; // local-files：显式文件列表（桌面壳原生对话框）
     if (mode === 'upload') {
       if (!req.files || !req.files.length) return res.status(400).json({ error: '未收到图片文件' });
       const jobTmp = path.join(os.tmpdir(), 'imgmark-jobs', jobId, 'out');
@@ -223,6 +224,17 @@ app.post('/api/process', upload.array('files'), express.json(), async (req, res)
       dirKind = 'upload';
       inputDir = null;
       outputDir = jobTmp;
+    } else if (mode === 'local-files') {
+      // 桌面壳：原生文件对话框选出的绝对路径列表，不走目录扫描
+      const list = Array.isArray(payload.files) ? payload.files.filter((p) => typeof p === 'string' && path.isAbsolute(p)) : [];
+      if (!list.length) return res.status(400).json({ error: '未提供有效的文件路径' });
+      for (const fp of list) {
+        if (!fs.existsSync(fp)) return res.status(400).json({ error: `文件不存在：${fp}` });
+      }
+      inputDir = path.dirname(list[0]);
+      dirKind = 'local';
+      outputDir = overwrite ? null : (payload.outputDir && String(payload.outputDir).trim()) || path.join(inputDir, cfg.outputDirName);
+      filesArgExplicit = list;
     } else {
       inputDir = String(payload.inputDir || '').trim();
       if (!path.isAbsolute(inputDir)) return res.status(400).json({ error: '请输入绝对路径' });
@@ -269,7 +281,7 @@ app.post('/api/process', upload.array('files'), express.json(), async (req, res)
             fs.writeFileSync(tmpFile, f.buffer);
             return tmpFile;
           })
-      : null;
+      : filesArgExplicit;
 
     try {
       const result = await runBatch({
@@ -325,7 +337,20 @@ app.post('/api/browse', express.json(), async (req, res) => {
   }
 });
 
-app.listen(PORT, HOST, () => {
-  console.log(`[imgmark] 监听 http://${HOST}:${PORT}  (数据目录 ${DATA_DIR})`);
-  console.log(`[imgmark] fnOS 开放 API: ${fnos.isAvailable() ? '可用' : '不可用（本地模式：本地路径 / 上传图片）'}`);
-});
+/** 启动 HTTP 服务（Electron 桌面壳复用：require('./server').start({port})） */
+function start({ port = PORT, host = HOST } = {}) {
+  return new Promise((resolve, reject) => {
+    const srv = app.listen(port, host, () => {
+      console.log(`[imgmark] 监听 http://${host}:${port}  (数据目录 ${DATA_DIR})`);
+      console.log(`[imgmark] fnOS 开放 API: ${fnos.isAvailable() ? '可用' : '不可用（本地模式：本地路径 / 上传图片）'}`);
+      resolve(srv);
+    });
+    srv.on('error', reject);
+  });
+}
+
+if (require.main === module) {
+  start().catch((e) => { console.error('[imgmark] 启动失败:', e.message); process.exit(1); });
+}
+
+module.exports = { app, start, loadConfig };

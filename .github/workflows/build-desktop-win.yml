@@ -1,0 +1,70 @@
+name: build-desktop-win
+
+# 推送 v* tag 或手动触发：打包 ImgMark Windows 桌面壳（Electron，内嵌 server）。
+# 产物：ImgMark-Setup-<ver>.exe（安装版）/ ImgMark-Portable-<ver>.exe（便携版）。
+# 与 build-fpk 同 tag 触发时，两边的资产合并到同一个 Release。
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Release 标签（留空只传 artifact）
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Stage 服务端（含 Windows 原生依赖）
+        run: |
+          mkdir -p desktop/server
+          cp -r app/server/bin app/server/src app/server/scripts app/server/package.json desktop/server/
+          cp README.md LICENSE desktop/server/
+          cd desktop/server && npm ci --omit=dev --no-audit --no-fund
+
+      - name: 安装 Electron 与打包工具
+        working-directory: desktop
+        run: npm install --no-audit --no-fund
+
+      - name: electron-builder 打包
+        working-directory: desktop
+        run: npx electron-builder --win --x64 --publish never
+        env:
+          ELECTRON_MIRROR: https://npmmirror.com/mirrors/electron/
+
+      - name: 收集产物
+        run: |
+          VERSION=$(tr -d ' \n' < VERSION)
+          mkdir -p out
+          cp desktop/dist/ImgMark-Setup-*.exe out/ 2>/dev/null || true
+          cp desktop/dist/ImgMark-Portable-*.exe out/ 2>/dev/null || true
+          ls -la out
+
+      - name: 上传 artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-win-${{ github.ref_name }}
+          path: out/*.exe
+          if-no-files-found: error
+
+      - name: 发布 Release
+        if: inputs.release_tag != '' || startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.release_tag || github.ref_name }}
+          files: out/*.exe

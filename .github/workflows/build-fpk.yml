@@ -2,6 +2,11 @@ name: build-fpk
 
 # 推送 v* tag 自动打包并发布 Release（如 v0.2.2）；
 # 也可手动触发（release_tag 留空则只上传 artifact）。
+# 产物三变体：
+#   window     — fnOS 桌面窗口（iframe），全功能（micro_app + api-scope，需 appcenter ≥ 1.34.0）
+#   fullscreen — 全屏/新标签页入口，全功能
+#   compat     — 兼容旧版 fnOS：不含 micro_app/api-scope（飞牛授权目录标签不可用，
+#                用本地路径/上传；管理员仍可在应用设置页配置授权目录）
 # 注意：sharp/@napi-rs/canvas 是平台相关二进制，本流水线产出 x86 包；
 # ARM 需在 aarch64 环境安装依赖后打包（参考 scripts/build-fpk.sh）。
 
@@ -40,23 +45,35 @@ jobs:
           curl -fsSL https://static2.fnnas.com/fnpack/fnpack-1.2.1-linux-amd64 -o fnpack
           chmod +x fnpack
 
-      - name: 打包 fpk
+      - name: 打包三变体 fpk
         run: |
           VERSION=$(tr -d ' \n' < VERSION)
-          sed -i "s/^platform.*/platform              = x86/" manifest
-          ./fnpack build -d .
-          FPK_FILE=$(ls *.fpk | head -1)
-          mv "$FPK_FILE" "imgmark-${VERSION}-x86.fpk"
-          echo "FPK=imgmark-${VERSION}-x86.fpk" >> "$GITHUB_ENV"
-
-      - name: 打包信息
-        run: echo "产物 ${{ env.FPK }}（tar 结构：app.tgz + manifest + cmd/ + config/ + wizard/）"
+          settype() { node -e "
+            const fs=require('fs');const p='app/ui/config';
+            const j=JSON.parse(fs.readFileSync(p,'utf8'));
+            j['.url']['imgmark.Application'].type=process.argv[1];
+            fs.writeFileSync(p,JSON.stringify(j,null,2)+'\n');
+          " "$1"; }
+          pack() {
+            settype "$1"
+            ./fnpack build -d .
+            FPK_FILE=$(ls *.fpk | head -1)
+            mv "$FPK_FILE" "imgmark-${VERSION}-$2.fpk"
+            echo "built $2"
+          }
+          pack iframe window
+          pack url fullscreen
+          # compat：去掉开放平台声明（micro_app/api-scope），兼容旧版应用中心
+          sed -i '/^micro_app/d' manifest
+          echo '{ "data-share": { "shares": [] } }' > config/resource
+          pack iframe compat
+          ls -la *.fpk
 
       - name: 上传 artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ env.FPK }}
-          path: ${{ env.FPK }}
+          name: fpk-${{ github.ref_name }}
+          path: "*.fpk"
           if-no-files-found: error
 
       - name: 发布 Release
@@ -66,8 +83,12 @@ jobs:
           tag_name: ${{ inputs.release_tag || github.ref_name }}
           name: ImgMark ${{ inputs.release_tag || github.ref_name }}
           body: |
-            飞牛 fnOS 应用包（fpk）。
+            飞牛 fnOS 应用包（fpk），三个变体按需下载其一：
 
-            安装：下载 fpk → 放到应用中心扫描目录（如 `/vol1/1000/fnOS App/fpk/imgmark/`）→ 应用中心「手动安装」。
-            要求：fnOS ≥ 1.2.0401，应用中心 ≥ 1.34.0，依赖应用 nodejs_v24。
-          files: ${{ env.FPK }}
+            - **imgmark-*-x86-window.fpk**：桌面窗口入口（推荐，新版 fnOS）。全功能：应用内选择并授权飞牛目录。
+            - **imgmark-*-x86-fullscreen.fpk**：全屏/新标签页入口，功能同上。
+            - **imgmark-*-x86-compat.fpk**：兼容旧版应用中心（安装报「设置目录权限失败」时用它）。飞牛授权目录标签不可用，请用本地路径/上传模式。
+
+            安装：fpk 放到应用中心扫描目录（如 `/vol1/1000/fnOS App/fpk/imgmark/`）→ 应用中心「手动安装」。
+            要求：fnOS ≥ 1.2.0401，应用中心 ≥ 1.34.0（window/fullscreen 变体），依赖应用 nodejs_v24。
+          files: "*.fpk"

@@ -307,6 +307,19 @@ async function main() {
       const expect0 = await mergeWatermarks([soloA, soloB], { gapPct: 0, equalHeight: true });
       assert.strictEqual(prepared5.width, expect0.width, `gap=0 时应为无缝拼接宽 ${expect0.width}，实际 ${prepared5.width}`);
 
+      // 回归：local-files 模式（桌面壳显式文件列表）
+      const pfd2 = new FormData();
+      pfd2.append('payload', JSON.stringify({ watermarkId: prepared.id, mode: 'local-files', files: [F.photoJpg, F.photoPng], options: { position: 'w' } }));
+      const { jobId: lJobId } = await (await fetch(`${base}/api/process`, { method: 'POST', body: pfd2 })).json();
+      let lJob;
+      for (let i = 0; i < 60; i++) {
+        lJob = await (await fetch(`${base}/api/jobs/${lJobId}`)).json();
+        if (lJob.status !== 'running') break;
+        await new Promise((r) => setTimeout(r, 400));
+      }
+      assert.strictEqual(lJob.status, 'done', `local-files 应完成: ${JSON.stringify(lJob.error)}`);
+      assert.strictEqual(lJob.ok, 2, `local-files 应成功 2 张: ${JSON.stringify(lJob.results)}`);
+
       const preview = await (await fetch(`${base}/api/preview`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ watermarkId: prepared.id, options: { position: 'ne' } }),

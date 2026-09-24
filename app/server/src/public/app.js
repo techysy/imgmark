@@ -6,6 +6,7 @@
  */
 
 const $ = (id) => document.getElementById(id);
+const native = window.imgmarkDesktop || null; // Electron 桌面壳桥接（纯浏览器环境为 null）
 const state = {
   watermarkId: null,
   wmFiles: [],   // 多个 logo → 并排合并成一个组合水印
@@ -13,6 +14,7 @@ const state = {
   fnosPicked: null,
   localPicked: null,
   uploadCount: 0,
+  nativePaths: [], // 桌面壳：原生对话框选出的图片绝对路径
   sdk: null,
   fnosAvailable: false,
   // 裁剪（每个 logo 各自一份裁剪框，单文件 = 只有一项）
@@ -331,6 +333,7 @@ async function browseLocal(dir) {
 function currentSource() {
   if (state.mode === 'fnos') return state.fnosPicked ? { mode: 'fnos', inputDir: state.fnosPicked, uid: +$('fnos-uid').value || 0 } : null;
   if (state.mode === 'local') return state.localPicked ? { mode: 'local', inputDir: state.localPicked } : null;
+  if (native && state.nativePaths.length) return { mode: 'local-files', files: state.nativePaths };
   return state.uploadCount ? { mode: 'upload' } : null;
 }
 function updateRun() {
@@ -351,10 +354,11 @@ async function run() {
     inputDir: src.inputDir,
     uid: src.uid,
     options: options(),
-    recursive: $('opt-recursive').checked,
+    recursive: $('opt-recursive').checked && src.mode !== 'local-files',
     overwrite,
     outputDir: overwrite ? null : $('opt-outdir').value.trim() || null,
   };
+  if (src.files) payload.files = src.files;
   const fd = new FormData();
   fd.append('payload', JSON.stringify(payload));
   if (src.mode === 'upload') {
@@ -421,25 +425,37 @@ function init() {
   $('opt-tile').addEventListener('change', () => { $('tile-gap-wrap').classList.toggle('hidden', !$('opt-tile').checked); refreshPreview(); });
   $('opt-format').addEventListener('change', () => { $('quality-wrap').style.opacity = ['jpeg', 'webp'].includes($('opt-format').value) ? 1 : .4; refreshPreview(); });
 
-  // 水印文件（可多选 → 并排合并，每个 logo 可独立裁剪）
-  $('wm-file').addEventListener('change', (e) => {
-    state.wmFiles = Array.from(e.target.files || []);
-    const names = state.wmFiles.map((f) => f.name);
-    $('wm-name').textContent = state.wmFiles.length
-      ? (state.wmFiles.length > 1 ? `${state.wmFiles.length} 个文件：` : '') + (names.join('、').length > 60 ? names.join('、').slice(0, 60) + '…' : names.join('、'))
+  // 水印文件（可多选 → 并排合并，每个 logo 可独立裁剪；桌面壳用原生对话框）
+  const onWmFiles = (files) => {
+    state.wmFiles = files;
+    const names = files.map((f) => f.name);
+    $('wm-name').textContent = files.length
+      ? (files.length > 1 ? `${files.length} 个文件：` : '') + (names.join('、').length > 60 ? names.join('、').slice(0, 60) + '…' : names.join('、'))
       : '未选择';
     // 换文件：清空裁剪状态
-    state.crops = state.wmFiles.map(() => null);
+    state.crops = files.map(() => null);
     state.sourcePreviews = [];
     state.sourceSizes = [];
     state.editingIdx = 0;
     cropMode = false; dragStart = null;
     hideRect();
-    $('arrange-row').classList.toggle('hidden', state.wmFiles.length < 2);
+    $('arrange-row').classList.toggle('hidden', files.length < 2);
     renderChips();
     updateCropUI();
     prepareWatermark();
-  });
+  };
+  $('wm-file').addEventListener('change', (e) => onWmFiles(Array.from(e.target.files || [])));
+  if (native) {
+    document.querySelector('label[for="wm-file"], .file-btn').closest('.row').querySelector('.file-btn')
+      .addEventListener('click', async (e) => {
+        e.preventDefault();
+        const picked = await native.pickWatermark();
+        if (picked) {
+          const bytes = Uint8Array.from(atob(picked.base64), (c) => c.charCodeAt(0));
+          onWmFiles([new File([bytes], picked.name)]);
+        }
+      });
+  }
   ['wm-bg'].forEach((id) => $(id).addEventListener('change', prepareDebounced));
   $('wm-tol').addEventListener('input', prepareDebounced);
   $('wm-force').addEventListener('change', prepareDebounced);
@@ -479,11 +495,27 @@ function init() {
   });
 
   // 本地
+  if (native) $('local-pick').classList.remove('hidden');
+  $('local-pick').addEventListener('click', async () => {
+    const dir = await native.pickFolder();
+    if (dir) { $('local-path').value = dir; browseLocal(dir); }
+  });
   $('local-browse').addEventListener('click', () => browseLocal($('local-path').value.trim()));
   $('local-path').addEventListener('keydown', (e) => { if (e.key === 'Enter') browseLocal($('local-path').value.trim()); });
 
-  // 上传
-  $('up-files').addEventListener('change', (e) => { state.uploadCount = e.target.files.length; $('up-count').textContent = state.uploadCount; updateRun(); });
+  // 上传（桌面壳：原生多选对话框，直接走 local-files 模式处理本地路径，不上传内容）
+  if (native) {
+    $('up-file-btn').textContent = '选择图片（原生对话框，可多选）';
+    $('up-file-btn').addEventListener('click', async (e) => {
+      e.preventDefault();
+      state.nativePaths = await native.pickImages();
+      state.uploadCount = state.nativePaths.length;
+      $('up-count').textContent = state.uploadCount;
+      updateRun();
+    });
+  } else {
+    $('up-files').addEventListener('change', (e) => { state.uploadCount = e.target.files.length; $('up-count').textContent = state.uploadCount; updateRun(); });
+  }
 
   // 输出
   $('opt-overwrite').addEventListener('change', () => {

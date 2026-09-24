@@ -21,7 +21,7 @@
     <div class="card">
       <h2>① 水印文件 <small>AI / SVG / PNG / JPG，白底或黑底自动转透明</small></h2>
       <div class="row">
-        <label class="file-btn">选择水印文件（可多选，并排合并）
+        <label class="file-btn" id="wm-file-btn">选择水印文件（可多选，并排合并）
           <input type="file" id="wm-file" accept=".ai,.svg,.png,.jpg,.jpeg,.webp,.bmp,.gif,.tif,.tiff" multiple hidden>
         </label>
         <span id="wm-name" class="muted">未选择</span>
@@ -146,6 +146,7 @@
       <div id="src-local" class="src-panel hidden">
         <div class="row-inline">
           <input type="text" id="local-path" placeholder="输入服务器上的绝对路径，如 /vol1/1000/photos" class="path-input">
+          <button id="local-pick" class="btn hidden">选择文件夹</button>
           <button id="local-browse" class="btn ghost">浏览</button>
         </div>
         <div id="local-browser" class="browser hidden">
@@ -156,7 +157,7 @@
       </div>
 
       <div id="src-upload" class="src-panel hidden">
-        <label class="file-btn block">选择图片（可多选）
+        <label class="file-btn block" id="up-file-btn">选择图片（可多选）
           <input type="file" id="up-files" accept=".jpg,.jpeg,.png,.webp,.bmp,.gif,.tif,.tiff,.avif" multiple hidden>
         </label>
         <div class="picked">已选：<b id="up-count">0</b> 张</div>

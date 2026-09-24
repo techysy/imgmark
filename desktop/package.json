@@ -1,0 +1,38 @@
+{
+  "name": "imgmark-desktop",
+  "productName": "ImgMark",
+  "version": "0.3.0",
+  "description": "ImgMark 批量图片水印 Windows 桌面壳",
+  "main": "main.js",
+  "type": "commonjs",
+  "scripts": {
+    "dev": "electron .",
+    "dist": "electron-builder --win --x64"
+  },
+  "devDependencies": {
+    "electron": "^37.2.0",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "cn.techysy.imgmark",
+    "productName": "ImgMark",
+    "directories": { "output": "dist", "buildResources": "." },
+    "asar": false,
+    "files": ["main.js", "preload.js", "package.json", "icon.png"],
+    "win": {
+      "target": [
+        { "target": "nsis", "arch": ["x64"] },
+        { "target": "portable", "arch": ["x64"] }
+      ],
+      "icon": "icon.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "artifactName": "ImgMark-Setup-${version}.${ext}",
+      "shortcutName": "ImgMark"
+    },
+    "portable": { "artifactName": "ImgMark-Portable-${version}.${ext}" },
+    "extraResources": [{ "from": "server", "to": "imgmark" }]
+  }
+}
