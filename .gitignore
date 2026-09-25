@@ -6,3 +6,4 @@ data/
 Thumbs.db
 tmp/
 *.tgz
+_watermarked/

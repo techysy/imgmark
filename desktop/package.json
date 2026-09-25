@@ -1,7 +1,7 @@
 {
   "name": "imgmark-desktop",
   "productName": "ImgMark",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "ImgMark 批量图片水印 Windows 桌面壳",
   "main": "main.js",
   "type": "commonjs",
