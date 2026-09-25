@@ -1,8 +1,8 @@
 appname               = imgmark
-version               = 0.3.2
+version               = 0.3.3
 display_name          = ImgMark 批量图片水印
 desc                  = 批量给图片加图片水印：AI/SVG/PNG/JPG 水印源白底黑底自动去底转透明 PNG，支持多 logo 并排、框选裁剪、九宫格定位/平铺/透明度/旋转；目录通过飞牛开放平台文件授权选取（trim.file.*），也支持本地路径与直接上传
-changelog             = v0.3.2: 修复 fpk 生命周期脚本缺少可执行位导致安装报「设置目录权限失败」；清理包内测试产物；v0.3.1: Windows 壳水印多选
+changelog             = v0.3.3: 修复桌面壳/本地模式相对输出目录(_watermarked)落到服务进程 CWD 的问题——现锚定到图片所在目录；v0.3.2: 修复 fpk 脚本执行位(安装报错根因)
 platform              = x86
 source                = thirdparty
 maintainer            = techysy

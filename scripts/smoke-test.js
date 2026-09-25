@@ -307,9 +307,9 @@ async function main() {
       const expect0 = await mergeWatermarks([soloA, soloB], { gapPct: 0, equalHeight: true });
       assert.strictEqual(prepared5.width, expect0.width, `gap=0 时应为无缝拼接宽 ${expect0.width}，实际 ${prepared5.width}`);
 
-      // 回归：local-files 模式（桌面壳显式文件列表）
+      // 回归：local-files 模式（桌面壳显式文件列表）+ 相对输出目录名锚定到图片目录
       const pfd2 = new FormData();
-      pfd2.append('payload', JSON.stringify({ watermarkId: prepared.id, mode: 'local-files', files: [F.photoJpg, F.photoPng], options: { position: 'w' } }));
+      pfd2.append('payload', JSON.stringify({ watermarkId: prepared.id, mode: 'local-files', files: [F.photoJpg, F.photoPng], options: { position: 'w' }, outputDir: '_watermarked2' }));
       const { jobId: lJobId } = await (await fetch(`${base}/api/process`, { method: 'POST', body: pfd2 })).json();
       let lJob;
       for (let i = 0; i < 60; i++) {
@@ -319,6 +319,8 @@ async function main() {
       }
       assert.strictEqual(lJob.status, 'done', `local-files 应完成: ${JSON.stringify(lJob.error)}`);
       assert.strictEqual(lJob.ok, 2, `local-files 应成功 2 张: ${JSON.stringify(lJob.results)}`);
+      assert(path.isAbsolute(lJob.outputDir) && lJob.outputDir.startsWith(F.photoJpg ? path.dirname(F.photoJpg) : ''), `相对输出目录应锚定到图片目录，实际 ${lJob.outputDir}`);
+      assert(fs.existsSync(lJob.results[0].output), `输出文件应真实存在: ${lJob.results[0].output}`);
 
       const preview = await (await fetch(`${base}/api/preview`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },

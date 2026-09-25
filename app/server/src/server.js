@@ -255,6 +255,10 @@ app.post('/api/process', upload.array('files'), express.json(), async (req, res)
       }
       outputDir = overwrite ? null : (payload.outputDir && String(payload.outputDir).trim()) || path.join(inputDir, cfg.outputDirName);
     }
+    // 相对输出目录名（UI 默认传 "_watermarked"）锚定到图片所在目录，而非服务进程 CWD
+    if (mode !== 'upload' && outputDir && !path.isAbsolute(outputDir)) {
+      outputDir = path.join(inputDir, outputDir);
+    }
 
     const job = {
       id: jobId, status: 'running', mode, dirKind, inputDir, outputDir, overwrite,
