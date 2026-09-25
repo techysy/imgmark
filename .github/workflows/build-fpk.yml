@@ -40,6 +40,9 @@ jobs:
         working-directory: app/server
         run: npm ci --omit=dev --no-audit --no-fund
 
+      - name: 删除符号链接（fnpack 不支持，解包后 .bin 循环链接导致安装失败）
+        run: find app -type l -delete || true
+
       - name: 下载 fnpack 1.2.1
         run: |
           curl -fsSL https://static2.fnnas.com/fnpack/fnpack-1.2.1-linux-amd64 -o fnpack
