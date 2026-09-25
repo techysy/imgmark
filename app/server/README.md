@@ -1,6 +1,6 @@
 # ImgMark 批量图片水印
 
-Node.js 批量图片水印工具：**AI / SVG / PNG / JPG 水印源，白底或黑底自动去底转透明 PNG**，支持九宫格定位 / 平铺 / 透明度 / 旋转 / 缩放，一键批量合成到整个文件夹。文件夹来源支持 **飞牛 fnOS 开放平台文件授权**（最新 `trim.file.*` API）、本地路径、直接上传三种方式；可打包为 fnOS 应用（fpk）。
+Node.js 批量图片水印工具：**AI / SVG / PNG / JPG 水印源，白底或黑底自动去底转透明 PNG**，支持水印**分组**（每组独立定位/间距/大小/logo 比例）、**方案保存**一键恢复、**亮度自适应黑白**（按图片明暗自动换黑/白标）、大小基准（长边/短边/图宽）、九宫格定位 / 平铺 / 透明度 / 旋转 / 缩放，一键批量合成到整个文件夹。文件夹来源支持 **飞牛 fnOS 开放平台文件授权**（最新 `trim.file.*` API）、本地路径、直接上传三种方式；可打包为 fnOS 应用（fpk）。
 
 ## 功能
 
@@ -9,6 +9,10 @@ Node.js 批量图片水印工具：**AI / SVG / PNG / JPG 水印源，白底或�
 - **水印裁剪**：① 手动框选——预览图上拖拽画框，只保留选中区域（百分比坐标，AI/SVG 渲染缩放无关）；② 自动去边——按内容包围盒裁掉四周空白（AI 大画板、logo 白边场景）。先裁剪再去底，裁剪区边缘的白底仍会被正常去除
 - **多 logo 并排**：水印文件可多选，各 logo 独立去底/去边后水平拼排成一个组合水印（默认等高对齐、间距滑杆 0-100% 可调，0=紧贴排列），后续定位/平铺/批量照常使用；CLI 用 `-w` 重复传参或 `prepare --merge`
 - **水印样式**：九宫格定位（nw…se）、大小（占宽 %）、不透明度、边距、平铺 + 间距、旋转、EXIF 自动摆正
+- **方案保存**：一键保存当前 logo 文件 + 全部分组布局 + 全局参数（分组/选项存 localStorage、logo 文件存 IndexedDB），换页面/重启浏览器后下拉选择即可一键恢复
+- **水印分组**：可建多个分组，每组独立九宫格定位、logo 组合（1 个或多个）、横排/竖排、水平/垂直间距（占基准高/宽 %）、大小、边距、不透明度，以及多 logo 时逐个的高度/宽度比例；任一参数改动即时重新合成单张预览（亮/暗双示例）。批量时每张图按全部分组一次合成
+- **大小基准**：长边（默认，同一相机的横构图/竖构图水印实际像素大小一致）/ 短边 / 图宽，全局可选
+- **亮度自适应黑白**：纯黑/白墨的 logo 可开启独立开关，按每组水印落点区域的平均亮度自动选黑标或白标（整组一起切换），服务端自动生成反色变体，彩色 logo 不受影响；样式预览同时给出亮图/暗图两种效果
 - **批量处理**：目录递归、并发池、保持原格式（或强制 PNG/JPEG/WebP）、默认输出到 `<目录>/_watermarked/` 子目录（可选覆盖原图）
 - **三种图片来源**：
   - 🐮 **飞牛授权目录**——在 fnOS 应用内通过 `pickUserFile` / `pickSharedFile`（JS SDK）选目录即授权，后端用 `getUserAccessibleFolders` / `getSharedAccessibleFolders` 查询、`checkUserACL` 鉴权、`convertPath` 显示语义化路径
@@ -18,6 +22,16 @@ Node.js 批量图片水印工具：**AI / SVG / PNG / JPG 水印源，白底或�
 - **fnOS 应用打包**：manifest / 生命周期脚本 / api-scope / 设置向导 / 图标 / fnpack 脚本 / GitHub Actions 全套
 
 ## 快速开始
+
+### npm 安装（CLI / Web 服务，任何机器）
+
+```bash
+npm i -g imgmark          # 全局安装（含 sharp 等原生依赖）
+imgmark apply -w logo.png -i ./photos --pos se --recursive   # CLI 批量加水印
+imgmark serve             # 启动 Web 界面 http://127.0.0.1:28110
+```
+
+程序化调用：`require('imgmark')` 返回 `prepareWatermark` / `composeWatermark` / `composeGroups` / `buildGroupWatermark` / `mergeWatermarks` / `analyzeInk` / `runBatch`。fnOS 应用打包见下文（fpk 内也走同一套代码）。
 
 ### 本地开发运行（Windows / Linux / macOS）
 
@@ -29,6 +43,17 @@ npm start          # http://127.0.0.1:28110
 
 非 fnOS 环境自动降级：「飞牛授权目录」页签不可用，用「本地路径」或「上传图片」即可。
 
+### Windows 桌面壳（Electron）
+
+`desktop/` 目录提供 Windows 壳（参考 CreditDaddy 模式）：双击即用，自动拉起内嵌服务（28110 被占用自动换端口，已有 imgmark 实例则复用），并通过 preload 桥接**原生文件/文件夹对话框**——比网页版 `<input type=file>` 强：多选图片返回真实路径（本地文件批量不经过上传）、选文件夹、按扩展名过滤水印源。
+
+```bash
+cd desktop && npm install && npm run dev    # 开发
+npm run dist                                # 打包 → dist/ImgMark-Setup-*.exe / ImgMark-Portable-*.exe
+```
+
+CI 推 `v*` tag 时自动产出 **Windows**（`ImgMark-Setup-*.exe` 安装版 / `ImgMark-Portable-*.exe` 便携版）与 **macOS**（`ImgMark-mac-arm64-*.dmg` Apple Silicon 为主；Intel x64 包为独立任务，runner 空闲时自行补传到 Release，不阻塞发版）。macOS 包未做代码签名：首次打开需**右键 → 打开**，或执行 `xattr -cr /Applications/ImgMark.app`。前端检测到 `window.imgmarkDesktop` 后自动启用：水印文件选择走原生对话框、「上传图片」变为本地文件路径直处理、「本地路径」页签出现「选择文件夹」按钮；纯浏览器环境自动降级为原有行为。桌面壳的「方案」保存走浏览器存储（localStorage + IndexedDB），在壳内同样生效。
+
 ### 打包为 fnOS 应用（fpk）
 
 要求系统 ≥ **1.2.0401**、应用中心版本 ≥ **1.34.0**（`trim.file.*` 开放能力要求）。
@@ -37,6 +62,11 @@ npm start          # http://127.0.0.1:28110
 # 在 NAS 本机或任意 Linux（x86）上：
 ./scripts/build-fpk.sh x86
 # 产物：imgmark-<版本>-x86.fpk → 应用中心「手动安装」
+# CI 推 v* tag 会自动产出三个变体：
+#   imgmark-<版本>-x86-window.fpk      桌面窗口入口（推荐，新版 fnOS，全功能）
+#   imgmark-<版本>-x86-fullscreen.fpk  全屏/新标签页入口（全功能）
+#   imgmark-<版本>-x86-compat.fpk      兼容旧版应用中心（不含 micro_app/api-scope；
+#                                      飞牛授权目录标签不可用，用本地路径/上传）
 ```
 
 安装要点（照搬 deepseek-harness-fnos 已验证的模式）：
@@ -90,10 +120,10 @@ node bin/wm.js apply -w brand.png -w partner.png -i /vol1/1000/photos \
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
-| POST | `/api/prepare` | multipart `watermark`（可多个，并排合并）+ `bg/tolerance/force/maxSize/trim/crop("x,y,w,h"百分比，仅单文件)/gap/equalHeight` → 透明 PNG（返回 id、预览 dataURL、`logoCount`、单文件时附 `sourcePreview`/`sourceWidth`/`sourceHeight`/`cropApplied`） |
-| POST | `/api/preview` | `{watermarkId, options}` → 内置示例图的合成预览 |
-| POST | `/api/process` | multipart：`payload`(JSON) + 可选 `files[]`；`mode=local/fnos/upload` → `{jobId}` |
-| GET | `/api/jobs/:id` | 任务进度与逐文件结果 |
+| POST | `/api/prepare` | multipart `watermark`（可多个）。**合并模式**（默认）：`bg/tolerance/force/maxSize/trim/crop("x,y,w,h"百分比，多文件传 JSON 数组)/gap/equalHeight` → 多 logo 并排合并为一个透明 PNG（返回 id、预览、`logoCount`）。**分组模式**（`split=true`）：每个 logo 独立去底，返回 `{id, logos:[{key,name,width,height,monochrome,inkDark,hasAlt,preview,sourcePreview,sourceWidth,sourceHeight,cropApplied}]}`，供 preview/process 的 `groups` 引用 |
+| POST | `/api/preview` | `{watermarkId, options}` → 内置示例图的合成预览。带 `groups:[{logos:[序号], position, sizePct, marginPct, direction(h/v), gapX, gapY, ratios[], opacity, offsetX, offsetY}]` 时按分组合成，`options.autoColor=true` 且组内 logo 均有反色变体时额外返回暗图预览 `previewAuto` |
+| POST | `/api/process` | multipart：`payload`(JSON) + 可选 `files[]`；`mode=local/fnos/upload/local-files` → `{jobId}`。payload 可带 `groups`（同 preview，配合 split 模式）实现多分组合成 |
+| GET | `/api/jobs/:id` | 任务进度（处理中逐文件实时更新）与逐文件结果 |
 | GET | `/api/jobs/:id/file/:idx` | 上传模式的单文件下载 |
 | POST | `/api/browse` | 本地模式目录浏览 |
 | GET | `/api/fnos/status` | fnOS 开放 API 可用性 + 平台配置 |
@@ -101,7 +131,9 @@ node bin/wm.js apply -w brand.png -w partner.png -i /vol1/1000/photos \
 | POST | `/api/fnos/list` | `{uid, path}`：ACL 校验后列目录（图片计数） |
 | POST | `/api/fnos/delete-authorization` | 删除授权目录 |
 
-`options` 字段：`position, sizePct, opacity, marginPct, offsetX, offsetY, rotate, tile, tileGapPct, format(auto|png|jpeg|webp), quality`
+`options` 字段：`position, sizePct, opacity, marginPct, offsetX, offsetY, rotate, tile, tileGapPct, format(auto|png|jpeg|webp), quality, autoColor(亮度自适应黑白), sizeBase(long|short|width，大小基准，默认 long)`
+
+分组模型：每个分组先把组内 logo 按 `direction` 横/竖排 + `gapX/gapY`（占基准 100px 的 %）+ `ratios`（逐 logo 相对大小）拼成一个组合水印，再按 `sizePct`（占大小基准边 %）缩放、按 `position` 九宫格落位；autoColor 开启时整组按落点区域平均亮度二选一（黑/白）。
 
 ## 架构
 
@@ -115,7 +147,7 @@ watermark-app/
 │       └── src/
 │           ├── server.js                          ← Express + multer + 任务/水印状态
 │           ├── core/transparency.js               ← 底色识别/洪泛去底/羽化去色染
-│           ├── core/watermark.js                  ← prepareWatermark / composeWatermark
+│           ├── core/watermark.js                  ← prepareWatermark / mergeWatermarks / analyzeInk / buildGroupWatermark / composeWatermark / composeGroups
 │           ├── core/batch.js                      ← 目录扫描 + 并发池 + 进度
 │           ├── formats/ai.js                      ← .ai → PNG（pdfjs-dist + @napi-rs/canvas，gs 兜底）
 │           ├── fnos/trimapp.js                    ← 开放平台后端 API 客户端（Unix Socket）
@@ -135,12 +167,15 @@ watermark-app/
 - `.ai` 依赖「创建 PDF 兼容文件」导出；纯 PostScript 旧版 AI 需系统安装 Ghostscript（`gs`/`gswin64c`）
 - 目录授权为单选（fnOS 平台限制）；文件授权结果不进目录列表，仅目录授权可被后端查询
 - 独立浏览器打开时无法发起新授权（需 fnOS 宿主环境），但已授权目录可正常使用
-- 服务重启后已上传的水印需重新选择（水印 PNG 缓存在临时目录，进程内持有映射）
+- 服务重启后已上传的 logo 需重新选择或重新恢复方案（水印 PNG 缓存在临时目录，进程内持有映射；「方案」恢复会自动重走准备流程）
+- 分组布局与「方案」保存为网页版能力，CLI 暂只支持单/多 logo 合并 + 单一位置（`composeGroups` 已进核心库，CLI 后续可接）
+- 「方案」的 logo 文件与配置存在浏览器 localStorage/IndexedDB，换浏览器/清站点数据后方案不可用（logo 原文件请自行留存）
+- 相对大小基准（长边/短边/图宽）与图片分辨率成比例：混用不同分辨率的图片时水印像素尺寸会随分辨率缩放（同分辨率横竖构图用长边基准可完全一致）
 
 ## 测试
 
 ```bash
-node scripts/smoke-test.js    # fixtures 生成 → 去底/合成/批量/CLI/HTTP 全链路 11 项断言
+node scripts/smoke-test.js    # fixtures 生成 → 去底/合成/批量/CLI/HTTP 全链路 15 项断言
 ```
 
 ## License
