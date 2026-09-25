@@ -12,7 +12,7 @@ const express = require('express');
 const multer = require('multer');
 const sharp = require('sharp');
 
-const { prepareWatermark, mergeWatermarks, composeWatermark, analyzeInk, WM_INPUT_EXTS, extOf } = require('./core/watermark');
+const { prepareWatermark, mergeWatermarks, composeWatermark, composeGroups, buildGroupWatermark, analyzeInk, WM_INPUT_EXTS, extOf } = require('./core/watermark');
 const { runBatch } = require('./core/batch');
 const { TrimAppClient } = require('./fnos/trimapp');
 const { createFnosRouter } = require('./fnos/routes');
@@ -44,7 +44,11 @@ const upload = multer({
 
 // ---- 水印与任务状态 ----
 const watermarks = new Map(); // id -> {path,width,height,bgColor,notes,preview}
+const logoSets = new Map();   // setId -> { logos: [{key,path,altPath,name,width,height,monochrome,inkDark}] }（分组模式）
 const jobs = new Map();       // id -> {status,total,done,ok,failed,current,results,error,outputDir,dirKind}
+
+const POSITIONS = new Set(['nw', 'n', 'ne', 'w', 'c', 'e', 'sw', 's', 'se']);
+const clampNum = (v, min, max) => Math.max(min, Math.min(max, v));
 
 function savePrepared(id, prepared) {
   const file = path.join(WM_DIR, `${id}.png`);
@@ -155,6 +159,40 @@ app.post('/api/prepare', upload.fields([
       return res.json({ id, preview, ...meta });
     }
 
+    // ---- 分组模式：每个 logo 独立准备（不合并），布局由前端在 preview/process 时以 groups 传入 ----
+    if (req.body.split === 'true' && wmFiles.length) {
+      const cropArr = parseCropArray(req.body.crop, wmFiles.length);
+      const entries = [];
+      for (let i = 0; i < wmFiles.length; i++) {
+        const crop = wmFiles.length === 1 ? parseCropField(req.body.crop) : (cropArr ? cropArr[i] : null);
+        const p = await prepareWatermark(wmFiles[i].buffer, wmFiles[i].originalname, { ...base, crop });
+        const ink = await analyzeInk(p.buffer);
+        const key = crypto.randomUUID();
+        const logoPath = path.join(WM_DIR, `${key}.png`);
+        fs.writeFileSync(logoPath, p.buffer);
+        let altPath = null;
+        if (ink.monochrome && ink.altBuffer) {
+          altPath = path.join(WM_DIR, `${key}.alt.png`);
+          fs.writeFileSync(altPath, ink.altBuffer);
+        }
+        entries.push({
+          key, name: wmFiles[i].originalname, path: logoPath, altPath,
+          width: p.width, height: p.height,
+          monochrome: ink.monochrome, inkDark: ink.dark,
+          notes: p.notes, preview: await smallPreview(p.buffer),
+          sourcePreview: p.sourcePreview, sourceWidth: p.sourceWidth, sourceHeight: p.sourceHeight,
+          cropApplied: p.cropApplied,
+        });
+      }
+      const setId = crypto.randomUUID();
+      logoSets.set(setId, { logos: entries });
+      res.json({
+        id: setId, split: true, pairMode: false,
+        logos: entries.map(({ path: _p2, altPath: _a2, ...rest }) => ({ ...rest, hasAlt: !!_a2 })),
+      });
+      return;
+    }
+
     const cropList = files.length > 1 ? parseCropArray(req.body.crop, files.length) : null;
     const preparedList = [];
     for (let i = 0; i < files.length; i++) {
@@ -221,6 +259,46 @@ app.post('/api/prepare', upload.fields([
   }
 });
 
+// ---- 分组模式：把前端 groups 配置解析成可合成的 groupDefs ----
+function normGroup(g) {
+  const src = g || {};
+  return {
+    logos: (Array.isArray(src.logos) ? src.logos : []).map((i) => Math.max(0, Math.floor(Number(i) || 0))).slice(0, 8),
+    position: POSITIONS.has(src.position) ? src.position : 'se',
+    sizePct: clampNum(numOr(src.sizePct, 20), 2, 100),
+    marginPct: clampNum(numOr(src.marginPct, 3), 0, 30),
+    direction: src.direction === 'v' ? 'v' : 'h',
+    gapX: clampNum(numOr(src.gapX, 12), 0, 200),
+    gapY: clampNum(numOr(src.gapY, 12), 0, 200),
+    ratios: Array.isArray(src.ratios) ? src.ratios.map((r) => clampNum(numOr(r, 1), 0.05, 6)) : null,
+    opacity: clampNum(numOr(src.opacity, 80), 1, 100),
+    offsetX: numOr(src.offsetX, 0),
+    offsetY: numOr(src.offsetY, 0),
+  };
+}
+
+async function resolveGroups(set, rawGroups, autoColor) {
+  const defs = [];
+  for (const raw of rawGroups.slice(0, 8)) {
+    const g = normGroup(raw);
+    if (!g.logos.length) throw new Error('存在没有 logo 的分组');
+    const picked = g.logos.map((i) => set.logos[i]).filter(Boolean);
+    if (!picked.length) throw new Error('分组引用了不存在的 logo');
+    const baseList = picked.map((l) => ({ buffer: fs.readFileSync(l.path), width: l.width, height: l.height }));
+    const useAlt = autoColor && picked.every((l) => l.altPath);
+    const altList = useAlt ? picked.map((l) => ({ buffer: fs.readFileSync(l.altPath), width: l.width, height: l.height })) : null;
+    defs.push({
+      wmBuffer: (await buildGroupWatermark(baseList, g)).buffer,
+      wmAltBuffer: useAlt ? (await buildGroupWatermark(altList, g)).buffer : null,
+      options: {
+        position: g.position, sizePct: g.sizePct, marginPct: g.marginPct,
+        offsetX: g.offsetX, offsetY: g.offsetY, opacity: g.opacity, autoColor,
+      },
+    });
+  }
+  return defs;
+}
+
 // ---- 样式预览：把水印合成到内置示例图（亮/暗两张，验证亮度自适应）----
 const sampleImages = {};
 async function getSampleImage(kind = 'light') {
@@ -249,9 +327,25 @@ async function getSampleImage(kind = 'light') {
 
 app.post('/api/preview', express.json(), async (req, res) => {
   try {
+    const options = req.body.options || {};
+    const groups = Array.isArray(req.body.groups) && req.body.groups.length ? req.body.groups : null;
+    // 分组模式：多个分组一次性合成到示例图
+    if (groups) {
+      const set = logoSets.get(req.body.watermarkId);
+      if (!set) return res.status(404).json({ error: 'logo 组不存在或服务已重启，请重新上传' });
+      const auto = !!options.autoColor;
+      const groupDefs = await resolveGroups(set, groups, auto);
+      const toPreviewG = async (kind) => {
+        const { buffer } = await composeGroups(await getSampleImage(kind), groupDefs);
+        const out = await sharp(buffer).resize({ width: 520 }).jpeg({ quality: 88 }).toBuffer();
+        return `data:image/jpeg;base64,${out.toString('base64')}`;
+      };
+      const preview = await toPreviewG('light');
+      const previewAuto = auto && groupDefs.some((g) => g.wmAltBuffer) ? await toPreviewG('dark') : null;
+      return res.json({ preview, previewAuto });
+    }
     const wm = watermarks.get(req.body.watermarkId);
     if (!wm) return res.status(404).json({ error: '水印不存在或服务已重启，请重新上传' });
-    const options = req.body.options || {};
     const altBuf = options.autoColor && wm.altPath ? fs.readFileSync(wm.altPath) : null;
     const toPreview = async (sample) => {
       const { buffer } = await composeWatermark(await getSampleImage(sample), fs.readFileSync(wm.path), options, altBuf);
@@ -289,13 +383,23 @@ function parseOptions(raw) {
 app.post('/api/process', upload.array('files'), express.json(), async (req, res) => {
   try {
     const payload = req.body.payload ? JSON.parse(req.body.payload) : req.body;
-    const wm = watermarks.get(payload.watermarkId);
-    if (!wm) return res.status(404).json({ error: '水印不存在或服务已重启，请重新上传' });
     const options = parseOptions(payload.options);
     const cfg = loadConfig();
     const overwrite = !!payload.overwrite;
     const jobId = crypto.randomUUID();
     const mode = payload.mode; // local | fnos | upload | local-files（桌面壳：本地显式文件列表）
+
+    // 分组模式：watermarkId 是 logo 组 id，groups 描述布局；否则走单/合并水印
+    let groupDefs = null;
+    let wm = null;
+    if (Array.isArray(payload.groups) && payload.groups.length) {
+      const set = logoSets.get(payload.watermarkId);
+      if (!set) return res.status(404).json({ error: 'logo 组不存在或服务已重启，请重新上传' });
+      groupDefs = await resolveGroups(set, payload.groups, options.autoColor);
+    } else {
+      wm = watermarks.get(payload.watermarkId);
+      if (!wm) return res.status(404).json({ error: '水印不存在或服务已重启，请重新上传' });
+    }
 
     let inputDir, outputDir, dirKind;
     let filesArgExplicit = null; // local-files：显式文件列表（桌面壳原生对话框）
@@ -350,9 +454,9 @@ app.post('/api/process', upload.array('files'), express.json(), async (req, res)
     jobs.set(jobId, job);
     res.json({ jobId, total: null });
 
-    const watermark = fs.readFileSync(wm.path);
-    // 亮度自适应黑白：logo 有反色变体且开关开启时才读取
-    const watermarkAlt = options.autoColor && wm.altPath ? fs.readFileSync(wm.altPath) : null;
+    const watermark = groupDefs ? null : fs.readFileSync(wm.path);
+    // 亮度自适应黑白：logo 有反色变体且开关开启时才读取（分组模式在 resolveGroups 内处理）
+    const watermarkAlt = groupDefs || !wm ? null : (options.autoColor && wm.altPath ? fs.readFileSync(wm.altPath) : null);
     const onProgress = (p) => {
       job.total = p.total; job.done = p.done; job.current = p.current || job.current;
       if (p.ok !== undefined) {
@@ -374,7 +478,7 @@ app.post('/api/process', upload.array('files'), express.json(), async (req, res)
     try {
       const result = await runBatch({
         inputDir, files: filesArg, outputDir,
-        watermark, watermarkAlt, options,
+        watermark, watermarkAlt, groups: groupDefs, options,
         recursive: !!payload.recursive,
         overwrite,
         suffix: payload.suffix || '_wm',

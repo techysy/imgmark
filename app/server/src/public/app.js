@@ -8,8 +8,10 @@
 const $ = (id) => document.getElementById(id);
 const native = window.imgmarkDesktop || null; // Electron 桌面壳桥接（纯浏览器环境为 null）
 const state = {
-  watermarkId: null,
-  wmFiles: [],   // 多个 logo → 并排合并成一个组合水印
+  watermarkId: null,      // logo 组 id（split 模式：每个 logo 独立去底）
+  logoSet: null,          // {id, logos:[{key,name,width,height,preview,monochrome,inkDark,sourcePreview,sourceWidth,sourceHeight,hasAlt}]}
+  groups: [],             // 分组布局：{logos:[idx], position, sizePct, marginPct, direction, gapX, gapY, ratios, opacity}
+  wmFiles: [],            // 本次待准备/已准备的 logo 文件
   mode: 'fnos',
   fnosPicked: null,
   localPicked: null,
@@ -17,17 +19,9 @@ const state = {
   nativePaths: [], // 桌面壳：原生对话框选出的图片绝对路径
   sdk: null,
   fnosAvailable: false,
-  // 裁剪（每个 logo 各自一份裁剪框，单文件 = 只有一项）
-  sourcePreviews: [],
-  sourceSizes: [],
+  // 裁剪（每个 logo 各自一份裁剪框）
   crops: [],
   editingIdx: 0,
-  // 亮度自适应黑白：logo 墨色分析结果（服务端 prepare 返回）
-  monochrome: false,
-  inkDark: null,
-  // 黑白 logo 对（logo 管理）：成对上传后按图片亮度自动切换
-  logoPair: { black: null, white: null },
-  pairMode: false,
 };
 let cropMode = false, dragStart = null;
 
@@ -41,47 +35,45 @@ async function api(path, opts) {
 const debounce = (fn, ms) => { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; };
 function esc(s) { return String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
 
-// ---------- 水印准备 ----------
+// ---------- 水印准备（split：每个 logo 独立去底；布局在 ② 分组里配置） ----------
 async function prepareWatermark() {
-  // 黑白成对 → logo 组模式；否则走单文件/多选合并流程
-  if (state.logoPair.black && state.logoPair.white) return preparePair();
   if (!state.wmFiles.length) {
-    // 两套来源都为空：失效当前水印，避免误用旧水印
-    state.watermarkId = null;
-    state.pairMode = false;
-    state.monochrome = false;
+    if (state.logoSet) {
+      state.logoSet = null; state.watermarkId = null; state.groups = [];
+      renderLogoList(); renderGroups();
+    }
     updateAutoColorUI();
     updateRun();
     return;
   }
-  const multi = state.wmFiles.length > 1;
   const fd = new FormData();
   for (const f of state.wmFiles) fd.append('watermark', f);
+  fd.append('split', 'true');
   fd.append('bg', $('wm-bg').value);
   fd.append('tolerance', $('wm-tol').value);
   fd.append('force', $('wm-force').checked ? 'true' : 'false');
   fd.append('trim', $('wm-trim').checked ? 'true' : 'false');
-  fd.append('gap', $('wm-gap').value);
-  fd.append('equalHeight', $('wm-equal').checked ? 'true' : 'false');
-  if (state.crops.some(Boolean)) {
-    fd.append('crop', multi
-      ? JSON.stringify(state.crops)
-      : [state.crops[0].x, state.crops[0].y, state.crops[0].w, state.crops[0].h].map((n) => n.toFixed(2)).join(','));
-  }
+  if (state.crops.some(Boolean)) fd.append('crop', JSON.stringify(state.crops));
   $('wm-notes').textContent = '处理中…';
   try {
     const r = await api('/api/prepare', { method: 'POST', body: fd });
     state.watermarkId = r.id;
-    state.sourcePreviews = r.sourcePreviews || (r.sourcePreview ? [r.sourcePreview] : []);
-    state.sourceSizes = r.sourceSizes || (r.sourceWidth ? [[r.sourceWidth, r.sourceHeight]] : []);
+    state.logoSet = { id: r.id, logos: r.logos };
+    if (state.editingIdx >= r.logos.length) state.editingIdx = 0;
+    // 首次上传：建一个含全部 logo 的默认分组；已有分组则清掉失效引用、对齐比例数组
+    if (!state.groups.length) {
+      state.groups = [defaultGroup(r.logos.map((_, i) => i))];
+    } else {
+      state.groups.forEach((g) => { g.logos = g.logos.filter((i) => i < r.logos.length); });
+      state.groups = state.groups.filter((g) => g.logos.length);
+      if (!state.groups.length) state.groups = [defaultGroup(r.logos.map((_, i) => i))];
+      state.groups.forEach((g) => { g.ratios = g.logos.map((_, k) => (g.ratios && g.ratios[k]) || 1); });
+    }
     $('crop-btn').disabled = false;
-    state.pairMode = false;
-    state.monochrome = !!r.monochrome;
-    state.inkDark = r.inkDark === undefined ? null : r.inkDark;
-    const editingSrc = state.sourcePreviews[state.editingIdx];
-    $('wm-preview').src = cropMode && editingSrc ? editingSrc : r.preview;
-    $('wm-notes').textContent = `${r.width}×${r.height}\n` + (r.notes || []).join('\n');
-    renderChips();
+    $('wm-preview').src = cropMode && logoSource(state.editingIdx) ? logoSource(state.editingIdx) : r.logos[0].preview;
+    $('wm-notes').textContent = r.logos.map((l) => `[${l.name}] ${l.width}×${l.height}${l.monochrome ? ' · 纯黑白' : ' · 含彩色'}${l.hasAlt ? ' · 已生成反色变体' : ''}`).join('\n');
+    renderLogoList();
+    renderGroups();
     updateCropUI();
     updateAutoColorUI();
     refreshPreview();
@@ -89,71 +81,148 @@ async function prepareWatermark() {
   } catch (e) {
     $('wm-notes').textContent = '✗ ' + e.message;
     state.watermarkId = null;
-    state.monochrome = false;
+    state.logoSet = null;
     updateAutoColorUI();
     updateRun();
   }
 }
 const prepareDebounced = debounce(prepareWatermark, 500);
 
-// ---------- 黑白 logo 对（logo 管理） ----------
-function updatePairUI() {
-  const pair = state.logoPair;
-  const pairs = [['black', pair.black], ['white', pair.white]];
-  for (const [slot, f] of pairs) {
-    const img = $(`pair-${slot}-thumb`);
-    const clear = $(`pair-${slot}-clear`);
-    if (img.dataset.objurl) URL.revokeObjectURL(img.dataset.objurl);
-    if (f) {
-      img.dataset.objurl = URL.createObjectURL(f);
-      img.src = img.dataset.objurl;
-      img.classList.remove('hidden');
-      clear.classList.remove('hidden');
-    } else {
-      img.removeAttribute('src');
-      img.classList.add('hidden');
-      clear.classList.add('hidden');
+function defaultGroup(idxs) {
+  return {
+    logos: idxs.slice(), position: 'se', sizePct: 20, marginPct: 3,
+    direction: 'h', gapX: 12, gapY: 12, ratios: idxs.map(() => 1), opacity: 80,
+  };
+}
+const logoOf = (i) => (state.logoSet ? state.logoSet.logos[i] : null);
+const logoSource = (i) => { const l = logoOf(i); return l && l.sourcePreview ? l.sourcePreview : null; };
+
+// ---------- logo 列表（点击选中某个 logo 进行框选裁剪） ----------
+function renderLogoList() {
+  const box = $('logo-list');
+  const logos = state.logoSet ? state.logoSet.logos : [];
+  if (!logos.length) { box.innerHTML = '<span class="muted">未添加 logo</span>'; return; }
+  box.innerHTML = logos.map((l, i) => `
+    <div class="logo-item ${i === state.editingIdx ? 'on' : ''}" data-i="${i}" title="${esc(l.name)}（点击选中后可框选裁剪）">
+      <img src="${l.preview}" alt="">
+      <div class="li-meta"><b>${esc(l.name.length > 14 ? l.name.slice(0, 13) + '…' : l.name)}</b>
+        <span>${l.width}×${l.height}${l.monochrome ? ' · 纯黑白' : ' · 含彩色'}${state.crops[i] ? ' · ✂' : ''}</span></div>
+    </div>`).join('');
+  box.querySelectorAll('.logo-item').forEach((el) => el.addEventListener('click', () => {
+    state.editingIdx = +el.dataset.i;
+    renderLogoList();
+    if (cropMode) {
+      const src = logoSource(state.editingIdx);
+      if (src) $('wm-preview').src = src;
+      if (state.crops[state.editingIdx]) drawRectPct(state.crops[state.editingIdx]); else hideRect();
     }
-  }
-  // 成对模式隐藏旧的单/多选合并行，互斥避免状态混乱
-  const pairMode = !!(pair.black && pair.white);
-  $('wm-file-row').classList.toggle('hidden', pairMode);
-  if (pairMode) { cropMode = false; hideRect(); }
+    updateCropUI();
+  }));
 }
 
-async function preparePair() {
-  const fd = new FormData();
-  fd.append('pairBlack', state.logoPair.black, state.logoPair.black.name);
-  fd.append('pairWhite', state.logoPair.white, state.logoPair.white.name);
-  fd.append('bg', $('wm-bg').value);
-  fd.append('tolerance', $('wm-tol').value);
-  fd.append('force', $('wm-force').checked ? 'true' : 'false');
-  fd.append('trim', $('wm-trim').checked ? 'true' : 'false');
-  $('wm-notes').textContent = '处理中…';
-  try {
-    const r = await api('/api/prepare', { method: 'POST', body: fd });
-    state.watermarkId = r.id;
-    state.pairMode = true;
-    state.monochrome = false;
-    state.inkDark = r.inkDark;
-    state.crops = [null, null];
-    state.sourcePreviews = [];
-    state.sourceSizes = [];
-    $('crop-btn').disabled = true;
-    $('crop-reset').disabled = true;
-    $('wm-preview').src = r.preview;
-    $('wm-notes').textContent = `${r.width}×${r.height}\n` + (r.notes || []).join('\n');
-    renderChips();
-    updateCropUI();
-    updateAutoColorUI();
-    refreshPreview();
-    updateRun();
-  } catch (e) {
-    $('wm-notes').textContent = '✗ ' + e.message;
-    state.watermarkId = null;
-    updateAutoColorUI();
-    updateRun();
+// ---------- 分组（每组：logo 组合 + 九宫格定位 + 大小/间距/比例） ----------
+const POS_NAMES = { nw: '左上', n: '上', ne: '右上', w: '左', c: '中', e: '右', sw: '左下', s: '下', se: '右下' };
+
+function renderGroups() {
+  const box = $('groups-box');
+  if (!state.groups.length) {
+    box.innerHTML = '<div class="muted">还没有分组：点「＋ 添加分组」，每组可放 1 个或多个 logo</div>';
+    return;
   }
+  const logos = state.logoSet ? state.logoSet.logos : [];
+  box.innerHTML = state.groups.map((g, gi) => {
+    const multi = g.logos.length > 1;
+    return `
+    <div class="group-card" data-gi="${gi}">
+      <div class="row-inline gc-head">
+        <b>分组 ${gi + 1}</b>
+        <span class="gc-logos">${logos.map((l, li) => `
+          <label class="gc-logo ${g.logos.includes(li) ? 'on' : ''}" title="${esc(l.name)}">
+            <input type="checkbox" data-li="${li}" ${g.logos.includes(li) ? 'checked' : ''}>
+            <img src="${l.preview}" alt=""><span>${li + 1}</span>
+          </label>`).join('')}</span>
+        <button class="btn tiny gc-del" data-gi="${gi}">✕ 删除分组</button>
+      </div>
+      <div class="row-inline wrap gc-ctrl">
+        <div class="field"><label>位置</label>
+          <div class="grid9">${Object.entries(POS_NAMES).map(([k, v]) =>
+            `<button data-pos="${k}" class="${g.position === k ? 'on' : ''}" title="${v}">${v}</button>`).join('')}</div>
+        </div>
+        ${multi ? `
+        <div class="field"><label>排列</label>
+          <select class="gc-dir">
+            <option value="h" ${g.direction !== 'v' ? 'selected' : ''}>横排</option>
+            <option value="v" ${g.direction === 'v' ? 'selected' : ''}>竖排</option>
+          </select></div>` : ''}
+        <div class="field"><label>大小 <b class="gc-sv">${g.sizePct}</b>%</label>
+          <input type="range" class="gc-size" min="2" max="90" value="${g.sizePct}"></div>
+        <div class="field"><label>边距 <b class="gc-mv">${g.marginPct}</b>%</label>
+          <input type="range" class="gc-mg" min="0" max="25" value="${g.marginPct}"></div>
+        ${multi ? `
+        <div class="field ${g.direction === 'v' ? 'dim' : ''}"><label>水平间距 <b class="gc-gxv">${g.gapX}</b></label>
+          <input type="range" class="gc-gapx" min="0" max="100" value="${g.gapX}"></div>
+        <div class="field ${g.direction === 'h' ? 'dim' : ''}"><label>垂直间距 <b class="gc-gyv">${g.gapY}</b></label>
+          <input type="range" class="gc-gapy" min="0" max="100" value="${g.gapY}"></div>
+        ${g.logos.map((li, k) => `
+        <div class="field"><label>logo ${li + 1} ${g.direction === 'v' ? '宽' : '高'}比 <b class="gc-rv" data-k="${k}">${(g.ratios[k] || 1).toFixed(2)}</b></label>
+          <input type="range" class="gc-ratio" data-k="${k}" min="0.2" max="3" step="0.05" value="${g.ratios[k] || 1}"></div>`).join('')}` : ''}
+        <div class="field"><label>不透明度 <b class="gc-ov">${g.opacity}</b></label>
+          <input type="range" class="gc-op" min="5" max="100" value="${g.opacity}"></div>
+      </div>
+    </div>`;
+  }).join('');
+  bindGroupEvents();
+}
+
+function bindGroupEvents() {
+  const box = $('groups-box');
+  box.querySelectorAll('.group-card').forEach((card) => {
+    const gi = +card.dataset.gi;
+    const g = state.groups[gi];
+    card.querySelector('.gc-del').addEventListener('click', () => {
+      state.groups.splice(gi, 1);
+      renderGroups(); refreshPreview();
+    });
+    card.querySelectorAll('.gc-logo input').forEach((c) => c.addEventListener('change', () => {
+      const li = +c.dataset.li;
+      if (c.checked) { if (!g.logos.includes(li)) g.logos.push(li); }
+      else g.logos = g.logos.filter((x) => x !== li);
+      const old = g.ratios;
+      g.ratios = g.logos.map((_, k) => old[k] || 1);
+      renderGroups(); refreshPreview();
+    }));
+    card.querySelectorAll('.gc-pos button').forEach((b) => b.addEventListener('click', () => {
+      card.querySelectorAll('.gc-pos button').forEach((x) => x.classList.remove('on'));
+      b.classList.add('on');
+      g.position = b.dataset.pos;
+      refreshPreview();
+    }));
+    const dir = card.querySelector('.gc-dir');
+    if (dir) dir.addEventListener('change', () => { g.direction = dir.value; renderGroups(); refreshPreview(); });
+    const bindSlider = (cls, fn) => {
+      const el = card.querySelector(cls);
+      if (el) el.addEventListener('input', () => { fn(+el.value); refreshPreview(); });
+    };
+    bindSlider('.gc-size', (v) => { g.sizePct = v; card.querySelector('.gc-sv').textContent = v; });
+    bindSlider('.gc-mg', (v) => { g.marginPct = v; card.querySelector('.gc-mv').textContent = v; });
+    bindSlider('.gc-gapx', (v) => { g.gapX = v; card.querySelector('.gc-gxv').textContent = v; });
+    bindSlider('.gc-gapy', (v) => { g.gapY = v; card.querySelector('.gc-gyv').textContent = v; });
+    bindSlider('.gc-op', (v) => { g.opacity = v; card.querySelector('.gc-ov').textContent = v; });
+    card.querySelectorAll('.gc-ratio').forEach((el) => el.addEventListener('input', () => {
+      const k = +el.dataset.k;
+      g.ratios[k] = +el.value;
+      const lbl = card.querySelector(`.gc-rv[data-k="${k}"]`);
+      if (lbl) lbl.textContent = (+el.value).toFixed(2);
+      refreshPreview();
+    }));
+  });
+}
+
+function addGroup() {
+  if (!state.logoSet || !state.logoSet.logos.length) return;
+  state.groups.push(defaultGroup([0]));
+  renderGroups();
+  refreshPreview();
 }
 
 // ---------- 框选裁剪 ----------
@@ -181,12 +250,14 @@ function updateCropUI() {
   $('crop-btn').classList.toggle('on', cropMode);
   previewWrap.classList.toggle('cropmode', cropMode);
   $('crop-btn').textContent = cropMode ? '✕ 取消裁剪' : '✂ 框选裁剪';
+  $('crop-btn').disabled = !state.logoSet;
   const cur = state.crops[state.editingIdx];
   $('crop-reset').disabled = !cur;
+  const l = logoOf(state.editingIdx);
   $('crop-status').textContent = cropMode
-    ? `在「${(state.wmFiles[state.editingIdx] || {}).name || 'logo ' + (state.editingIdx + 1)}」的原图上拖拽框选要保留的区域`
+    ? `在「${l ? l.name : 'logo ' + (state.editingIdx + 1)}」的原图上拖拽框选要保留的区域`
     : cur
-      ? `logo ${state.editingIdx + 1} 裁剪：${cur.x.toFixed(0)},${cur.y.toFixed(0)} 起 ${cur.w.toFixed(0)}×${cur.h.toFixed(0)}%（原图 ${(state.sourceSizes[state.editingIdx] || [0, 0]).join('×')}）`
+      ? `logo ${state.editingIdx + 1} 裁剪：${cur.x.toFixed(0)},${cur.y.toFixed(0)} 起 ${cur.w.toFixed(0)}×${cur.h.toFixed(0)}%（原图 ${l ? [l.sourceWidth, l.sourceHeight].join('×') : ''}）`
       : '';
 }
 
@@ -218,10 +289,10 @@ window.addEventListener('mouseup', (e) => {
 });
 
 function toggleCropMode() {
-  if (!state.watermarkId) return;
+  if (!state.logoSet) return;
   cropMode = !cropMode;
   if (cropMode) {
-    const src = state.sourcePreviews[state.editingIdx];
+    const src = logoSource(state.editingIdx);
     if (src) $('wm-preview').src = src; // 参考系=当前 logo 的原始画布
     if (state.crops[state.editingIdx]) drawRectPct(state.crops[state.editingIdx]); else hideRect();
   } else {
@@ -231,83 +302,39 @@ function toggleCropMode() {
   updateCropUI();
 }
 
-// 多 logo：切换当前编辑的 logo（裁剪框各自独立）
-function renderChips() {
-  const box = $('logo-chips');
-  if (state.wmFiles.length < 2) { box.classList.add('hidden'); box.innerHTML = ''; return; }
-  box.classList.remove('hidden');
-  box.innerHTML = state.wmFiles.map((f, i) => {
-    const name = f.name.length > 16 ? f.name.slice(0, 14) + '…' : f.name;
-    return `<button class="chip ${i === state.editingIdx ? 'on' : ''}" data-i="${i}" title="${esc(f.name)}">${i + 1}. ${esc(name)}${state.crops[i] ? ' ✂' : ''}</button>`;
-  }).join('');
-  box.querySelectorAll('.chip').forEach((b) => b.addEventListener('click', () => selectLogo(+b.dataset.i)));
-}
-function selectLogo(i) {
-  state.editingIdx = i;
-  renderChips();
-  if (cropMode) {
-    const src = state.sourcePreviews[i];
-    if (src) $('wm-preview').src = src;
-    if (state.crops[i]) drawRectPct(state.crops[i]); else hideRect();
-  }
-  updateCropUI();
-}
-
 // ---------- 亮度自适应黑白 ----------
-// 仅纯黑白墨的 logo 支持（服务端 analyzeInk 判定）；彩色 logo 开关置灰并提示
 function updateAutoColorUI() {
   const t = $('opt-autocolor');
-  if (state.pairMode) {
-    t.disabled = false;
-    $('autocolor-hint').textContent = '黑白 logo 对：亮图盖黑标，暗图自动换白标';
-    return;
-  }
-  t.disabled = !state.monochrome;
-  if (!state.monochrome) t.checked = false;
-  $('autocolor-hint').textContent = state.monochrome
-    ? (state.inkDark === true
-        ? '当前 logo 为深色墨：亮图盖黑标，暗图自动换白标'
-        : state.inkDark === false
-          ? '当前 logo 为浅色墨：暗图盖白标，亮图自动换黑标'
-          : '纯黑白 logo 已就绪：按每张图的亮度自动选黑/白')
-    : 'logo 含彩色墨，不支持自动黑白（不影响正常使用）';
+  const logos = state.logoSet ? state.logoSet.logos : [];
+  const allMono = logos.length > 0 && logos.every((l) => l.monochrome);
+  t.disabled = !allMono;
+  if (!allMono) t.checked = false;
+  $('autocolor-hint').textContent = allMono
+    ? '全部 logo 为纯黑白：每组按图片落点亮度自动选黑/白标'
+    : '存在彩色 logo：彩色所在分组不参与自动换色（不影响正常使用）';
 }
 
-// ---------- 样式预览 ----------
+// ---------- 样式预览（单张实时：任一分组参数变化都重新合成示例图） ----------
 const refreshPreview = debounce(async () => {
-  if (!state.watermarkId) return;
+  if (!state.watermarkId || !state.groups.length) return;
   try {
     const r = await api('/api/preview', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ watermarkId: state.watermarkId, options: options() }),
+      body: JSON.stringify({ watermarkId: state.watermarkId, options: options(), groups: state.groups }),
     });
     $('style-preview').src = r.preview;
     const auto = !!r.previewAuto;
     $('style-preview-auto').classList.toggle('hidden', !auto);
     $('preview-cap-auto').classList.toggle('hidden', !auto);
-    if (auto) {
-      $('preview-cap').textContent = '样式预览（亮图示例）';
-      const baseDark = state.inkDark !== false; // 深色墨/多 logo 组合：暗图展示换白；浅色墨：暗图保持白标
-      $('preview-cap-auto').textContent = baseDark ? '暗图示例（自动换白标）' : '暗图示例（白标保持）';
-    } else {
-      $('preview-cap').textContent = '样式预览（示例图）';
-    }
   } catch { /* 预览失败不打断 */ }
-}, 400);
+}, 350);
 
-// ---------- 选项 ----------
+// ---------- 选项（全局：输出格式/质量 + 亮度自适应开关；布局参数在各分组里） ----------
 function options() {
   return {
-    position: document.querySelector('#pos-grid button.on')?.dataset.pos || 'se',
-    sizePct: +$('opt-size').value,
-    opacity: +$('opt-opacity').value,
-    marginPct: +$('opt-margin').value,
-    rotate: +$('opt-rotate').value,
-    tile: $('opt-tile').checked,
-    tileGapPct: +$('opt-tile-gap').value,
-    autoColor: !$('opt-autocolor').disabled && $('opt-autocolor').checked,
     format: $('opt-format').value,
     quality: +$('opt-quality').value,
+    autoColor: !$('opt-autocolor').disabled && $('opt-autocolor').checked,
   };
 }
 function bindPreviewOn(selector, ev = 'input') {
@@ -450,7 +477,7 @@ function currentSource() {
   return state.uploadCount ? { mode: 'upload' } : null;
 }
 function updateRun() {
-  const ok = !!state.watermarkId && !!currentSource();
+  const ok = !!state.watermarkId && !!state.groups.length && !!currentSource();
   $('run').disabled = !ok;
   $('run-hint').textContent = ok ? '准备就绪' : '先选水印文件和图片来源';
 }
@@ -467,6 +494,7 @@ async function run() {
     inputDir: src.inputDir,
     uid: src.uid,
     options: options(),
+    groups: state.groups,
     recursive: $('opt-recursive').checked && src.mode !== 'local-files',
     overwrite,
     outputDir: overwrite ? null : $('opt-outdir').value.trim() || null,
@@ -518,99 +546,53 @@ async function pollJob(jobId) {
 
 // ---------- 初始化 ----------
 function init() {
-  // 九宫格
-  const posNames = { nw: '左上', n: '上', ne: '右上', w: '左', c: '中', e: '右', sw: '左下', s: '下', se: '右下' };
-  $('pos-grid').innerHTML = Object.entries(posNames)
-    .map(([k, v]) => `<button data-pos="${k}" ${k === 'se' ? 'class="on"' : ''} title="${v}">${v}</button>`).join('');
-  $('pos-grid').querySelectorAll('button').forEach((b) => b.addEventListener('click', () => {
-    $('pos-grid').querySelectorAll('button').forEach((x) => x.classList.remove('on'));
-    b.classList.add('on');
-    refreshPreview();
-  }));
-
-  // 滑杆数值联动
-  const slider = (bar, label) => $(bar).addEventListener('input', () => { $(label).textContent = $(bar).value; });
-  slider('wm-tol', 'tol-v'); slider('opt-size', 'size-v'); slider('opt-opacity', 'op-v');
-  slider('opt-margin', 'mg-v'); slider('opt-quality', 'q-v'); slider('wm-gap', 'gap-v');
-  ['wm-tol', 'opt-size', 'opt-opacity', 'opt-margin', 'opt-quality', 'opt-rotate', 'opt-tile-gap'].forEach((id) => $(id).addEventListener('input', refreshPreview));
-  $('wm-gap').addEventListener('input', prepareDebounced);
+  // 全局滑杆联动（布局滑杆在各分组卡片内自绑定）
+  const slider = (bar, label) => { const b = $(bar); if (b) b.addEventListener('input', () => { $(label).textContent = b.value; }); };
+  slider('wm-tol', 'tol-v'); slider('opt-quality', 'q-v');
+  ['wm-tol', 'opt-quality'].forEach((id) => $(id).addEventListener('input', refreshPreview));
   bindPreviewOn('#opt-format', 'change');
-  $('opt-tile').addEventListener('change', () => { $('tile-gap-wrap').classList.toggle('hidden', !$('opt-tile').checked); refreshPreview(); });
   $('opt-autocolor').addEventListener('change', refreshPreview);
   $('opt-format').addEventListener('change', () => { $('quality-wrap').style.opacity = ['jpeg', 'webp'].includes($('opt-format').value) ? 1 : .4; refreshPreview(); });
+  $('group-add').addEventListener('click', addGroup);
 
-  // 水印文件（可多选 → 并排合并，每个 logo 可独立裁剪；桌面壳用原生对话框）
+  // logo 文件（可多选，每个独立去底；分组布局在 ② 配置；桌面壳用原生对话框）
   const onWmFiles = (files) => {
     state.wmFiles = files;
-    // 手动选择单/多文件时清空黑白 logo 对（两套模式互斥）
-    if (state.logoPair.black || state.logoPair.white) {
-      state.logoPair = { black: null, white: null };
-      $('pair-black-file').value = ''; $('pair-white-file').value = '';
-      updatePairUI();
-    }
     const names = files.map((f) => f.name);
     $('wm-name').textContent = files.length
       ? (files.length > 1 ? `${files.length} 个文件：` : '') + (names.join('、').length > 60 ? names.join('、').slice(0, 60) + '…' : names.join('、'))
       : '未选择';
     // 换文件：清空裁剪状态
     state.crops = files.map(() => null);
-    state.sourcePreviews = [];
-    state.sourceSizes = [];
     state.editingIdx = 0;
     cropMode = false; dragStart = null;
     hideRect();
-    $('arrange-row').classList.toggle('hidden', files.length < 2);
-    renderChips();
+    renderLogoList();
+    renderGroups();
     updateCropUI();
     prepareWatermark();
   };
   $('wm-file').addEventListener('change', (e) => onWmFiles(Array.from(e.target.files || [])));
   if (native) {
-    // 直接用 id 定位按钮：新增黑白 logo 槽位后 .file-btn 首元素已变成 pair 槽，
-    // 旧的选择器会拿到 null 引发 init 中断（桌面壳内所有按钮失联）
+    // 直接用 id 定位按钮：卡片区 DOM 顺序变化会让"取首元素"类选择器拿到错误目标
     $('wm-file-btn').addEventListener('click', async (e) => {
-        e.preventDefault();
-        const picked = await native.pickWatermark();
-        const list = (Array.isArray(picked) ? picked : picked ? [picked] : [])
-          .map((p) => new File([Uint8Array.from(atob(p.base64), (c) => c.charCodeAt(0))], p.name));
-        if (list.length) onWmFiles(list);
-      });
+      e.preventDefault();
+      const picked = await native.pickWatermark();
+      const list = (Array.isArray(picked) ? picked : picked ? [picked] : [])
+        .map((p) => new File([Uint8Array.from(atob(p.base64), (c) => c.charCodeAt(0))], p.name));
+      if (list.length) onWmFiles(list);
+    });
   }
-  // 黑白 logo 对（logo 管理）：成对上传走 pairMode；单边上传按普通单文件处理
-  const onPairFile = (slot) => (e) => {
-    const f = e.target.files[0];
-    if (!f) return;
-    state.logoPair[slot] = f;
-    // 选择 logo 对文件时清空旧的单/多选合并状态（互斥）
-    if (state.wmFiles.length) {
-      state.wmFiles = [];
-      $('wm-file').value = '';
-      $('wm-name').textContent = '未选择';
-    }
-    updatePairUI();
-    prepareWatermark();
-  };
-  $('pair-black-file').addEventListener('change', onPairFile('black'));
-  $('pair-white-file').addEventListener('change', onPairFile('white'));
-  const onPairClear = (slot) => () => {
-    state.logoPair[slot] = null;
-    $(`pair-${slot}-file`).value = '';
-    updatePairUI();
-    prepareWatermark();
-  };
-  $('pair-black-clear').addEventListener('click', onPairClear('black'));
-  $('pair-white-clear').addEventListener('click', onPairClear('white'));
 
   ['wm-bg'].forEach((id) => $(id).addEventListener('change', prepareDebounced));
   $('wm-tol').addEventListener('input', prepareDebounced);
   $('wm-force').addEventListener('change', prepareDebounced);
   $('wm-trim').addEventListener('change', prepareDebounced);
-  ['wm-gap', 'wm-equal'].forEach((id) => $(id).addEventListener('change', prepareDebounced));
   $('crop-btn').addEventListener('click', toggleCropMode);
   $('crop-reset').addEventListener('click', () => {
     state.crops[state.editingIdx] = null;
     hideRect();
-    renderChips();
+    renderLogoList();
     updateCropUI();
     prepareWatermark();
   });

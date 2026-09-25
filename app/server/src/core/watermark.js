@@ -307,6 +307,11 @@ async function composeWatermark(targetBuffer, wmBuffer, o = {}, wmAltBuffer = nu
 
   base.composite([{ input: overlay, left: 0, top: 0 }]);
 
+  return encodeCompose(base, meta, { format, quality });
+}
+
+/** 合成结果编码（保持原格式/指定格式 + 质量）。composeWatermark / composeGroups 共用 */
+async function encodeCompose(base, meta, { format = 'auto', quality = 90 }) {
   const fmt = format === 'auto' ? (meta.format || 'png') : format;
   let out, ext;
   switch (fmt) {
@@ -318,6 +323,107 @@ async function composeWatermark(targetBuffer, wmBuffer, o = {}, wmAltBuffer = nu
     default: out = base.png({ compressionLevel: 9 }); ext = '.png';
   }
   return { buffer: await out.toBuffer(), ext };
+}
+
+/**
+ * 把一个分组内的若干透明 logo 排成一个组合水印。
+ * 产物只表达比例关系（ratio=1 → 高(h 排)/宽(v 排) 100px 为基准），最终大小由
+ * composeGroups 按该分组的 sizePct 统一缩放。
+ * @param {Array<{buffer,width,height}>} logoList
+ * @param {object} o direction:'h'|'v'  gapX/gapY: 间距 = 基准高(宽) × %  ratios: 每 logo 比例
+ * @returns {{buffer, width, height}}
+ */
+async function buildGroupWatermark(logoList, o = {}) {
+  const { direction = 'h', gapX = 12, gapY = 12, ratios = null } = o;
+  if (!logoList.length) throw new Error('分组内没有 logo');
+  const n = logoList.length;
+  const r = (Array.isArray(ratios) && ratios.length === n ? ratios : Array(n).fill(1))
+    .map((x) => Math.max(0.05, Math.min(6, Number(x) || 1)));
+  const BASE = 100;
+  const scaled = [];
+  for (let i = 0; i < n; i++) {
+    const p = logoList[i];
+    let w, h;
+    if (direction === 'v') {
+      w = Math.max(1, Math.round(BASE * r[i]));
+      h = Math.max(1, Math.round(p.height * w / p.width));
+    } else {
+      h = Math.max(1, Math.round(BASE * r[i]));
+      w = Math.max(1, Math.round(p.width * h / p.height));
+    }
+    scaled.push({ buf: await sharp(p.buffer).resize(w, h).png().toBuffer(), w, h });
+  }
+  const transparent = { r: 0, g: 0, b: 0, alpha: 0 };
+  if (n === 1) return { buffer: scaled[0].buf, width: scaled[0].w, height: scaled[0].h };
+  const entries = [];
+  if (direction === 'v') {
+    const W = Math.max(...scaled.map((s) => s.w));
+    const gap = Math.max(0, Math.round(BASE * gapY / 100));
+    let y = 0;
+    for (const s of scaled) { entries.push({ input: s.buf, left: Math.round((W - s.w) / 2), top: y }); y += s.h + gap; }
+    const H = y - gap;
+    const buffer = await sharp({ create: { width: W, height: H, channels: 4, background: transparent } })
+      .composite(entries).png().toBuffer();
+    return { buffer, width: W, height: H };
+  }
+  const H = Math.max(...scaled.map((s) => s.h));
+  const gap = Math.max(0, Math.round(BASE * gapX / 100));
+  let x = 0;
+  for (const s of scaled) { entries.push({ input: s.buf, left: x, top: Math.round((H - s.h) / 2) }); x += s.w + gap; }
+  const W = x - gap;
+  const buffer = await sharp({ create: { width: W, height: H, channels: 4, background: transparent } })
+    .composite(entries).png().toBuffer();
+  return { buffer, width: W, height: H };
+}
+
+/**
+ * 多分组合成：一次叠加所有分组的水印并编码输出（相比多次 composeWatermark 少几次编解码）。
+ * @param {Buffer} targetBuffer
+ * @param {Array<{wmBuffer:Buffer, wmAltBuffer?:Buffer, options:object}>} groupDefs
+ *   options: position/sizePct/marginPct/offsetX/offsetY/opacity/autoColor
+ * @param {object} o format/quality（输出编码，全局）
+ */
+async function composeGroups(targetBuffer, groupDefs, o = {}) {
+  const { format = 'auto', quality = 90 } = o;
+  if (!groupDefs.length) throw new Error('没有可合成的分组');
+  const meta = await sharp(targetBuffer).metadata();
+  const oriented = meta.orientation && meta.orientation >= 5;
+  const W = oriented ? meta.height : meta.width;
+  const H = oriented ? meta.width : meta.height;
+  const entries = [];
+  for (const g of groupDefs) {
+    const go = g.options || {};
+    const targetW = Math.max(8, Math.round(W * clampNum(go.sizePct ?? 20, 2, 100) / 100));
+    const buildWm = (src) => sharp(src).resize({ width: targetW }).png().toBuffer();
+    let wmBuf = await buildWm(g.wmBuffer);
+    const wmMeta = await sharp(wmBuf).metadata();
+    const wmW = wmMeta.width, wmH = wmMeta.height;
+    // 亮度自适应黑白：分组内所有 logo 都有反色变体时，整组按落点亮度二选一
+    if (go.autoColor && Buffer.isBuffer(g.wmAltBuffer)) {
+      const margin = Math.round(Math.min(W, H) * clampNum(go.marginPct ?? 3, 0, 30) / 100);
+      const [gx, gy] = positionXY(go.position || 'se', W, H, wmW, wmH, margin);
+      const left = Math.max(0, Math.min(W - 2, Math.round(gx + (go.offsetX || 0))));
+      const top = Math.max(0, Math.min(H - 2, Math.round(gy + (go.offsetY || 0))));
+      const region = { left, top, width: Math.max(2, Math.min(wmW, W - left)), height: Math.max(2, Math.min(wmH, H - top)) };
+      const lum = await regionLuminance(targetBuffer, region);
+      const [lumBase, lumAlt] = await Promise.all([inkLuminance(g.wmBuffer), inkLuminance(g.wmAltBuffer)]);
+      const altBuf = await buildWm(g.wmAltBuffer);
+      const wantDark = lum > LUM_THRESHOLD;
+      const baseIsDarker = lumBase <= lumAlt;
+      wmBuf = wantDark ? (baseIsDarker ? wmBuf : altBuf) : (baseIsDarker ? altBuf : wmBuf);
+    }
+    wmBuf = await scaledAlphaOpacity(wmBuf, Math.max(1, Math.min(100, go.opacity ?? 80)));
+    const margin = Math.round(Math.min(W, H) * clampNum(go.marginPct ?? 3, 0, 30) / 100);
+    const [x, y] = positionXY(go.position || 'se', W, H, wmW, wmH, margin);
+    entries.push({
+      input: wmBuf,
+      left: Math.max(0, Math.round(x + (go.offsetX || 0))),
+      top: Math.max(0, Math.round(y + (go.offsetY || 0))),
+    });
+  }
+  const base = sharp(targetBuffer).rotate().withMetadata();
+  base.composite(entries);
+  return encodeCompose(base, meta, { format, quality });
 }
 
 /**
@@ -360,4 +466,4 @@ async function mergeWatermarks(preparedList, o = {}) {
   return { buffer, width: totalW, height: H, notes };
 }
 
-module.exports = { prepareWatermark, mergeWatermarks, composeWatermark, analyzeInk, IMAGE_EXTS, WM_INPUT_EXTS, extOf };
+module.exports = { prepareWatermark, mergeWatermarks, composeWatermark, composeGroups, buildGroupWatermark, analyzeInk, IMAGE_EXTS, WM_INPUT_EXTS, extOf };

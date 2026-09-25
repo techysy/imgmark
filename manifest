@@ -1,8 +1,8 @@
 appname               = imgmark
-version               = 0.4.3
+version               = 0.5.0
 display_name          = ImgMark 批量图片水印
-desc                  = 批量给图片加图片水印：AI/SVG/PNG/JPG 水印源白底黑底自动去底转透明 PNG，支持黑白 logo 对/单 logo 亮度自适应黑白（按图片明暗自动换黑标白标）、多 logo 并排、框选裁剪、九宫格定位/平铺/透明度/旋转；目录通过飞牛开放平台文件授权选取（trim.file.*），也支持本地路径与直接上传
-changelog             = v0.4.3: 亮度自适应黑白（黑白 logo 对管理/单 logo 自动反色变体，按图片落点亮度自动换黑标白标）；修复 Win 壳打包后内置服务无法启动的路径错误；v0.4.2: CI 直出 macOS 包（dmg，Apple Silicon/Intel 双架构，未签名）；v0.4.1: Win 壳移除飞牛页签/保留元数据/原生选输出文件夹
+desc                  = 批量给图片加图片水印：AI/SVG/PNG/JPG 水印源白底黑底自动去底转透明 PNG，支持水印分组（每组独立九宫格定位/数量/横竖排/水平垂直间距/大小/logo 比例，单张实时预览）、亮度自适应黑白（按图片明暗自动换黑标白标）、多 logo 管理、框选裁剪；目录通过飞牛开放平台文件授权选取（trim.file.*），也支持本地路径与直接上传
+changelog             = v0.5.0: 水印分组（每组独立九宫格定位/数量/横竖排/水平垂直间距/大小/logo 比例，单张实时预览）；logo 管理重构为多 logo 列表；v0.4.3: 亮度自适应黑白（黑白 logo 对管理/单 logo 自动反色变体，按图片落点亮度自动换黑标白标）；修复 Win 壳打包后内置服务无法启动的路径错误
 platform              = x86
 source                = thirdparty
 maintainer            = techysy

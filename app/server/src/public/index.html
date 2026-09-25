@@ -19,26 +19,14 @@
   <section class="col">
     <!-- ① 水印文件 -->
     <div class="card">
-      <h2>① 水印文件 <small>AI / SVG / PNG / JPG，白底或黑底自动转透明</small></h2>
-      <div class="row-inline wrap" id="logo-pair-row" style="gap:12px">
-        <div class="pair-slot">
-          <label class="file-btn pair-btn">⬛ 黑色 logo<input type="file" id="pair-black-file" accept=".ai,.svg,.png,.jpg,.jpeg,.webp,.bmp,.gif,.tif,.tiff" hidden></label>
-          <img id="pair-black-thumb" class="pair-thumb hidden" alt="黑色 logo 预览">
-          <button id="pair-black-clear" class="btn tiny hidden">✕</button>
-        </div>
-        <div class="pair-slot">
-          <label class="file-btn pair-btn">⬜ 白色 logo<input type="file" id="pair-white-file" accept=".ai,.svg,.png,.jpg,.jpeg,.webp,.bmp,.gif,.tif,.tiff" hidden></label>
-          <img id="pair-white-thumb" class="pair-thumb hidden" alt="白色 logo 预览">
-          <button id="pair-white-clear" class="btn tiny hidden">✕</button>
-        </div>
-        <span class="muted">黑白成对上传 = logo 组，可按图片亮度自动切换</span>
-      </div>
-      <div class="row" id="wm-file-row">
-        <label class="file-btn" id="wm-file-btn">选择水印文件（可多选，并排合并）
+      <h2>① logo 管理 <small>AI / SVG / PNG / JPG，白底或黑底自动转透明，每个 logo 独立去底</small></h2>
+      <div class="row">
+        <label class="file-btn" id="wm-file-btn">添加 logo（可多选）
           <input type="file" id="wm-file" accept=".ai,.svg,.png,.jpg,.jpeg,.webp,.bmp,.gif,.tif,.tiff" multiple hidden>
         </label>
         <span id="wm-name" class="muted">未选择</span>
       </div>
+      <div id="logo-list" class="logo-list"></div>
       <div class="row wm-preview-row">
         <div class="preview-side">
           <div class="checker" id="wm-preview-wrap">
@@ -47,7 +35,6 @@
               <div id="crop-rect" class="crop-rect hidden"></div>
             </div>
           </div>
-          <div id="logo-chips" class="row-inline hidden" style="gap:6px"></div>
           <div id="crop-tools">
             <div class="row-inline" style="gap:6px;margin:0">
               <button id="crop-btn" class="btn tiny" disabled>✂ 框选裁剪</button>
@@ -72,10 +59,6 @@
           <div class="field check">
             <label><input type="checkbox" id="wm-trim" checked> 自动裁掉边缘空白（去边）</label>
           </div>
-          <div class="field row-inline hidden" id="arrange-row" style="gap:12px">
-            <label class="check"><input type="checkbox" id="wm-equal" checked> 等高对齐</label>
-            <span>间距 <input type="range" id="wm-gap" min="0" max="100" value="10"> <b id="gap-v">10</b>%</span>
-          </div>
           <div class="field check">
             <label><input type="checkbox" id="wm-force"> 已有透明通道时仍强制去底</label>
           </div>
@@ -84,39 +67,24 @@
       </div>
     </div>
 
-    <!-- ② 水印样式 -->
+    <!-- ② 水印分组 -->
     <div class="card">
-      <h2>② 水印样式</h2>
+      <h2>② 水印分组 <small>每组独立定位/大小/间距，可放 1 个或多个 logo，参数即改即预览</small></h2>
       <div class="row">
-        <div class="field">
-          <label>位置</label>
-          <div class="grid9" id="pos-grid"></div>
-        </div>
         <div class="grow">
-          <div class="field">
-            <label>大小（占宽 %）<b id="size-v">20</b></label>
-            <input type="range" id="opt-size" min="2" max="90" value="20">
-          </div>
-          <div class="field">
-            <label>不透明度 <b id="op-v">80</b></label>
-            <input type="range" id="opt-opacity" min="5" max="100" value="80">
-          </div>
-          <div class="field">
-            <label>边距 <b id="mg-v">3</b>%</label>
-            <input type="range" id="opt-margin" min="0" max="25" value="3">
-          </div>
-          <div class="field row-inline">
-            <label class="check"><input type="checkbox" id="opt-tile"> 平铺整图</label>
-            <span id="tile-gap-wrap" class="hidden">间距 <input type="number" id="opt-tile-gap" value="10" min="0" max="100" class="num"> %</span>
-            <span>旋转 <input type="number" id="opt-rotate" value="0" min="-180" max="180" class="num">°</span>
-          </div>
-          <div class="field check">
-            <label><input type="checkbox" id="opt-autocolor" disabled> 亮度自适应黑白（按图片明暗自动换黑/白 logo）</label>
-            <div id="autocolor-hint" class="notes"></div>
-          </div>
+          <div id="groups-box"></div>
+          <button id="group-add" class="btn" disabled>＋ 添加分组</button>
+        </div>
+        <div class="preview-box">
+          <img id="style-preview" alt="样式预览"><span class="preview-cap">样式预览（亮图示例）</span>
+          <img id="style-preview-auto" class="hidden" alt="暗图预览"><span class="preview-cap hidden" id="preview-cap-auto">暗图示例（自动换白标）</span>
         </div>
       </div>
       <div class="row">
+        <div class="field check">
+          <label><input type="checkbox" id="opt-autocolor" disabled> 亮度自适应黑白（按图片明暗自动换黑/白 logo）</label>
+          <div id="autocolor-hint" class="notes"></div>
+        </div>
         <div class="field">
           <label>输出格式</label>
           <select id="opt-format">
@@ -129,10 +97,6 @@
         <div class="field" id="quality-wrap">
           <label>质量 <b id="q-v">90</b></label>
           <input type="range" id="opt-quality" min="50" max="100" value="90">
-        </div>
-        <div class="preview-box">
-          <img id="style-preview" alt="样式预览"><span class="preview-cap">样式预览（亮图示例）</span>
-          <img id="style-preview-auto" class="hidden" alt="暗图预览"><span class="preview-cap hidden" id="preview-cap-auto">暗图示例（自动换白标）</span>
         </div>
       </div>
     </div>

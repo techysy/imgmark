@@ -5,7 +5,7 @@
  */
 const fs = require('fs');
 const path = require('path');
-const { composeWatermark, IMAGE_EXTS, extOf } = require('./watermark');
+const { composeWatermark, composeGroups, IMAGE_EXTS, extOf } = require('./watermark');
 
 async function listImages(dir, { recursive, skipDirs, out = [] }) {
   let entries;
@@ -60,7 +60,7 @@ function outPathFor(file, inputDir, outputDir, { suffix, overwrite, keepStructur
  */
 async function runBatch(p) {
   const {
-    inputDir, files = null, outputDir, watermark, watermarkAlt = null, options = {},
+    inputDir, files = null, outputDir, watermark, watermarkAlt = null, groups = null, options = {},
     recursive = false, overwrite = false, suffix = '_wm', concurrency = 3,
     onProgress = () => {},
   } = p;
@@ -88,7 +88,9 @@ async function runBatch(p) {
 
   const settled = await mapPool(list, concurrency, async (file) => {
     const buf = await fs.promises.readFile(file);
-    const { buffer, ext } = await composeWatermark(buf, watermark, composeOptions, watermarkAlt);
+    const { buffer, ext } = groups
+      ? await composeGroups(buf, groups, composeOptions)
+      : await composeWatermark(buf, watermark, composeOptions, watermarkAlt);
     const target = outPathFor(file, inputDir, outputDir, { suffix, overwrite, keepStructure, ext });
     await fs.promises.mkdir(path.dirname(target), { recursive: true });
     await fs.promises.writeFile(target, buffer);
