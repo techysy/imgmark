@@ -100,3 +100,12 @@ input[type="range"] { width: 180px; }
 .log .done { color: #86efac; }
 
 footer { text-align: center; color: var(--muted); font-size: 12px; padding: 18px; }
+
+/* 黑白 logo 对管理 */
+.pair-slot { display: flex; align-items: center; gap: 6px; }
+.pair-btn { padding: 6px 12px; font-size: 13px; }
+.pair-thumb {
+  height: 44px; width: 64px; object-fit: contain; padding: 2px;
+  border: 1px solid var(--line); border-radius: 6px;
+  background: repeating-conic-gradient(#dcdcdc 0% 25%, #ffffff 0% 50%) 0 0 / 12px 12px;
+}

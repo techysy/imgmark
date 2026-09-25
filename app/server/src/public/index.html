@@ -20,7 +20,20 @@
     <!-- ① 水印文件 -->
     <div class="card">
       <h2>① 水印文件 <small>AI / SVG / PNG / JPG，白底或黑底自动转透明</small></h2>
-      <div class="row">
+      <div class="row-inline wrap" id="logo-pair-row" style="gap:12px">
+        <div class="pair-slot">
+          <label class="file-btn pair-btn">⬛ 黑色 logo<input type="file" id="pair-black-file" accept=".ai,.svg,.png,.jpg,.jpeg,.webp,.bmp,.gif,.tif,.tiff" hidden></label>
+          <img id="pair-black-thumb" class="pair-thumb hidden" alt="黑色 logo 预览">
+          <button id="pair-black-clear" class="btn tiny hidden">✕</button>
+        </div>
+        <div class="pair-slot">
+          <label class="file-btn pair-btn">⬜ 白色 logo<input type="file" id="pair-white-file" accept=".ai,.svg,.png,.jpg,.jpeg,.webp,.bmp,.gif,.tif,.tiff" hidden></label>
+          <img id="pair-white-thumb" class="pair-thumb hidden" alt="白色 logo 预览">
+          <button id="pair-white-clear" class="btn tiny hidden">✕</button>
+        </div>
+        <span class="muted">黑白成对上传 = logo 组，可按图片亮度自动切换</span>
+      </div>
+      <div class="row" id="wm-file-row">
         <label class="file-btn" id="wm-file-btn">选择水印文件（可多选，并排合并）
           <input type="file" id="wm-file" accept=".ai,.svg,.png,.jpg,.jpeg,.webp,.bmp,.gif,.tif,.tiff" multiple hidden>
         </label>
@@ -97,6 +110,10 @@
             <span id="tile-gap-wrap" class="hidden">间距 <input type="number" id="opt-tile-gap" value="10" min="0" max="100" class="num"> %</span>
             <span>旋转 <input type="number" id="opt-rotate" value="0" min="-180" max="180" class="num">°</span>
           </div>
+          <div class="field check">
+            <label><input type="checkbox" id="opt-autocolor" disabled> 亮度自适应黑白（按图片明暗自动换黑/白 logo）</label>
+            <div id="autocolor-hint" class="notes"></div>
+          </div>
         </div>
       </div>
       <div class="row">
@@ -113,7 +130,10 @@
           <label>质量 <b id="q-v">90</b></label>
           <input type="range" id="opt-quality" min="50" max="100" value="90">
         </div>
-        <div class="preview-box"><img id="style-preview" alt="样式预览"><span class="preview-cap">样式预览（示例图）</span></div>
+        <div class="preview-box">
+          <img id="style-preview" alt="样式预览"><span class="preview-cap">样式预览（亮图示例）</span>
+          <img id="style-preview-auto" class="hidden" alt="暗图预览"><span class="preview-cap hidden" id="preview-cap-auto">暗图示例（自动换白标）</span>
+        </div>
       </div>
     </div>
   </section>

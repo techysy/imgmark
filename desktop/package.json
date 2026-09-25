@@ -1,7 +1,7 @@
 {
   "name": "imgmark-desktop",
   "productName": "ImgMark",
-  "version": "0.4.2",
+  "version": "0.4.3",
   "description": "ImgMark 批量图片水印 桌面壳（Windows / macOS）",
   "main": "main.js",
   "type": "commonjs",
@@ -17,18 +17,43 @@
   "build": {
     "appId": "cn.techysy.imgmark",
     "productName": "ImgMark",
-    "directories": { "output": "dist", "buildResources": "." },
+    "directories": {
+      "output": "dist",
+      "buildResources": "."
+    },
     "asar": false,
-    "files": ["main.js", "preload.js", "package.json", "icon.png"],
+    "files": [
+      "main.js",
+      "preload.js",
+      "package.json",
+      "icon.png"
+    ],
     "win": {
       "target": [
-        { "target": "nsis", "arch": ["x64"] },
-        { "target": "portable", "arch": ["x64"] }
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
       ],
       "icon": "icon.png"
     },
     "mac": {
-      "target": [{ "target": "dmg", "arch": ["x64"] }],
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64"
+          ]
+        }
+      ],
       "icon": "icon.png",
       "identity": null,
       "category": "public.app-category.graphics-design",
@@ -40,7 +65,17 @@
       "artifactName": "ImgMark-Setup-${version}.${ext}",
       "shortcutName": "ImgMark"
     },
-    "portable": { "artifactName": "ImgMark-Portable-${version}.${ext}" },
-    "extraResources": [{ "from": "server", "to": "imgmark" }]
+    "portable": {
+      "artifactName": "ImgMark-Portable-${version}.${ext}"
+    },
+    "extraResources": [
+      {
+        "from": "server",
+        "to": "imgmark/server"
+      }
+    ]
+  },
+  "allowScripts": {
+    "electron@37.10.3": true
   }
 }

@@ -12,7 +12,7 @@ const express = require('express');
 const multer = require('multer');
 const sharp = require('sharp');
 
-const { prepareWatermark, mergeWatermarks, composeWatermark, WM_INPUT_EXTS, extOf } = require('./core/watermark');
+const { prepareWatermark, mergeWatermarks, composeWatermark, analyzeInk, WM_INPUT_EXTS, extOf } = require('./core/watermark');
 const { runBatch } = require('./core/batch');
 const { TrimAppClient } = require('./fnos/trimapp');
 const { createFnosRouter } = require('./fnos/routes');
@@ -91,17 +91,25 @@ function parseCropArray(v, count) {
   return arr.map((c) => (c ? parseCropField(c) : null));
 }
 
-app.post('/api/prepare', upload.array('watermark', 20), async (req, res) => {
+app.post('/api/prepare', upload.fields([
+  { name: 'watermark', maxCount: 20 },
+  { name: 'pairBlack', maxCount: 1 },
+  { name: 'pairWhite', maxCount: 1 },
+]), async (req, res) => {
   try {
-    const files = req.files || [];
-    if (!files.length) return res.status(400).json({ error: '未收到水印文件' });
-    for (const f of files) {
+    const groups = req.files || {};
+    const wmFiles = groups.watermark || [];
+    const pairBlack = (groups.pairBlack || [])[0] || null;
+    const pairWhite = (groups.pairWhite || [])[0] || null;
+    const pairMode = !!(pairBlack && pairWhite);
+    const files = wmFiles.length ? wmFiles : [pairBlack, pairWhite].filter(Boolean);
+    if (!files.length && !pairMode) return res.status(400).json({ error: '未收到水印文件' });
+    for (const f of [...files, pairBlack, pairWhite].filter(Boolean)) {
       const fext = extOf(f.originalname);
       if (!WM_INPUT_EXTS.has(fext)) {
         return res.status(400).json({ error: `不支持的水印格式 ${fext || '(未知)'}：${f.originalname}，支持：AI / SVG / PNG / JPG / WebP / BMP / GIF / TIFF / AVIF` });
       }
     }
-    const cropList = files.length > 1 ? parseCropArray(req.body.crop, files.length) : null;
     const base = {
       bg: ['auto', 'white', 'black'].includes(req.body.bg) ? req.body.bg : 'auto',
       tolerance: Math.max(1, Math.min(200, numOr(req.body.tolerance, 40))),
@@ -111,18 +119,66 @@ app.post('/api/prepare', upload.array('watermark', 20), async (req, res) => {
       // 逐文件单独传
       crop: null,
     };
+
+    // ---- 黑白 logo 对模式：黑版为主变体、白版为反色变体 ----
+    // 不做彩色墨分析：autoColor 开启时 composeWatermark 直接按落点亮度二选一
+    if (pairMode) {
+      const pb = await prepareWatermark(pairBlack.buffer, pairBlack.originalname, { ...base });
+      const pw = await prepareWatermark(pairWhite.buffer, pairWhite.originalname, { ...base });
+      const notes = [
+        ...pb.notes.map((n) => `[黑] ${n}`),
+        ...pw.notes.map((n) => `[白] ${n}`),
+        '黑白 logo 对已就绪：开启「亮度自适应黑白」后亮图盖黑标、暗图自动换白标',
+      ];
+      const prepared = {
+        buffer: pb.buffer, width: pb.width, height: pb.height, notes,
+        sourcePreview: null, sourceWidth: null, sourceHeight: null,
+        sourcePreviews: null, sourceSizes: null, cropApplied: null,
+        bgColor: pb.bgColor,
+        monochrome: false, pairMode: true, inkDark: true,
+      };
+      const id = crypto.randomUUID();
+      savePrepared(id, prepared);
+      const altPath = path.join(WM_DIR, `${id}.alt.png`);
+      fs.writeFileSync(altPath, pw.buffer);
+      watermarks.set(id, {
+        path: path.join(WM_DIR, `${id}.png`), altPath,
+        width: prepared.width, height: prepared.height,
+        bgColor: prepared.bgColor, notes: prepared.notes,
+        monochrome: false, inkDark: true, pairMode: true,
+        preview: await smallPreview(prepared.buffer),
+        sourcePreview: null, sourceWidth: null, sourceHeight: null,
+        sourcePreviews: null, sourceSizes: null, cropApplied: null,
+        logoCount: 1,
+      });
+      const { path: _p, preview, ...meta } = watermarks.get(id);
+      return res.json({ id, preview, ...meta });
+    }
+
+    const cropList = files.length > 1 ? parseCropArray(req.body.crop, files.length) : null;
     const preparedList = [];
     for (let i = 0; i < files.length; i++) {
       const crop = files.length === 1 ? parseCropField(req.body.crop) : (cropList ? cropList[i] : null);
-      preparedList.push(await prepareWatermark(files[i].buffer, files[i].originalname, { ...base, crop }));
+      const p = await prepareWatermark(files[i].buffer, files[i].originalname, { ...base, crop });
+      p.ink = await analyzeInk(p.buffer); // 亮度自适应黑白：单色墨才生成反色变体
+      preparedList.push(p);
     }
-    const merged = await mergeWatermarks(preparedList, {
+    const mergeOpts = {
       gapPct: Math.max(0, Math.min(100, numOr(req.body.gap, 10))),
       equalHeight: req.body.equalHeight !== 'false' && req.body.equalHeight !== '0',
-    });
+    };
+    const merged = await mergeWatermarks(preparedList, mergeOpts);
+    // 全部 logo 都是纯黑白墨时，按同样参数合并出反色变体（供亮度自适应选用）
+    const allMonochrome = preparedList.every((p) => p.ink.monochrome);
+    let mergedAlt = null;
+    if (allMonochrome) {
+      const altList = preparedList.map((p) => ({ buffer: p.ink.altBuffer, width: p.width, height: p.height }));
+      mergedAlt = await mergeWatermarks(altList, mergeOpts);
+    }
     const notes = files.length > 1
       ? [...preparedList.flatMap((p, i) => p.notes.map((n) => `[${files[i].originalname}] ${n}`)), ...merged.notes]
       : preparedList[0].notes;
+    if (allMonochrome) notes.push('已生成反色变体，可开启「亮度自适应黑白」按图片明暗自动切换');
     const multi = files.length > 1;
     const prepared = {
       buffer: merged.buffer, width: merged.width, height: merged.height, notes,
@@ -134,13 +190,21 @@ app.post('/api/prepare', upload.array('watermark', 20), async (req, res) => {
       sourceSizes: multi ? preparedList.map((p) => [p.sourceWidth, p.sourceHeight]) : null,
       cropApplied: multi ? preparedList.map((p) => p.cropApplied) : preparedList[0].cropApplied,
       bgColor: preparedList[0].bgColor,
+      monochrome: allMonochrome,
+      inkDark: multi ? null : preparedList[0].ink.dark,
+      pairMode: false,
     };
     const id = crypto.randomUUID();
     savePrepared(id, prepared);
+    const altPath = allMonochrome ? path.join(WM_DIR, `${id}.alt.png`) : null;
+    if (altPath) fs.writeFileSync(altPath, mergedAlt.buffer);
     watermarks.set(id, {
       path: path.join(WM_DIR, `${id}.png`),
+      altPath,
       width: prepared.width, height: prepared.height,
       bgColor: prepared.bgColor, notes: prepared.notes,
+      monochrome: prepared.monochrome, inkDark: prepared.inkDark,
+      pairMode: prepared.pairMode,
       preview: await smallPreview(prepared.buffer),
       sourcePreview: prepared.sourcePreview,
       sourceWidth: prepared.sourceWidth, sourceHeight: prepared.sourceHeight,
@@ -157,30 +221,47 @@ app.post('/api/prepare', upload.array('watermark', 20), async (req, res) => {
   }
 });
 
-// ---- 样式预览：把水印合成到内置示例图 ----
-let sampleImage = null;
-async function getSampleImage() {
-  if (!sampleImage) {
-    const svg = `<svg width="960" height="640" xmlns="http://www.w3.org/2000/svg">
-      <defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
-        <stop offset="0" stop-color="#7f9bb3"/><stop offset="0.5" stop-color="#b8c9d9"/><stop offset="1" stop-color="#e8dfd0"/>
-      </linearGradient></defs>
-      <rect width="960" height="640" fill="url(#g)"/>
-      <circle cx="200" cy="180" r="90" fill="#ffffff" opacity="0.25"/>
-      <rect x="600" y="380" width="260" height="160" fill="#3d4f63" opacity="0.35" rx="12"/>
-    </svg>`;
-    sampleImage = await sharp(Buffer.from(svg)).jpeg({ quality: 92 }).toBuffer();
+// ---- 样式预览：把水印合成到内置示例图（亮/暗两张，验证亮度自适应）----
+const sampleImages = {};
+async function getSampleImage(kind = 'light') {
+  if (!sampleImages[kind]) {
+    const svg = kind === 'dark'
+      ? `<svg width="960" height="640" xmlns="http://www.w3.org/2000/svg">
+          <defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0" stop-color="#1c2530"/><stop offset="0.5" stop-color="#2c3a4a"/><stop offset="1" stop-color="#0f141a"/>
+          </linearGradient></defs>
+          <rect width="960" height="640" fill="url(#g)"/>
+          <circle cx="200" cy="180" r="90" fill="#ffffff" opacity="0.08"/>
+          <rect x="600" y="380" width="260" height="160" fill="#0a0e13" opacity="0.5" rx="12"/>
+        </svg>`
+      : `<svg width="960" height="640" xmlns="http://www.w3.org/2000/svg">
+          <defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0" stop-color="#7f9bb3"/><stop offset="0.5" stop-color="#b8c9d9"/><stop offset="1" stop-color="#e8dfd0"/>
+          </linearGradient></defs>
+          <rect width="960" height="640" fill="url(#g)"/>
+          <circle cx="200" cy="180" r="90" fill="#ffffff" opacity="0.25"/>
+          <rect x="600" y="380" width="260" height="160" fill="#3d4f63" opacity="0.35" rx="12"/>
+        </svg>`;
+    sampleImages[kind] = await sharp(Buffer.from(svg)).jpeg({ quality: 92 }).toBuffer();
   }
-  return sampleImage;
+  return sampleImages[kind];
 }
 
 app.post('/api/preview', express.json(), async (req, res) => {
   try {
     const wm = watermarks.get(req.body.watermarkId);
     if (!wm) return res.status(404).json({ error: '水印不存在或服务已重启，请重新上传' });
-    const { buffer } = await composeWatermark(await getSampleImage(), fs.readFileSync(wm.path), req.body.options || {});
-    const out = await sharp(buffer).resize({ width: 520 }).jpeg({ quality: 88 }).toBuffer();
-    res.json({ preview: `data:image/jpeg;base64,${out.toString('base64')}` });
+    const options = req.body.options || {};
+    const altBuf = options.autoColor && wm.altPath ? fs.readFileSync(wm.altPath) : null;
+    const toPreview = async (sample) => {
+      const { buffer } = await composeWatermark(await getSampleImage(sample), fs.readFileSync(wm.path), options, altBuf);
+      const out = await sharp(buffer).resize({ width: 520 }).jpeg({ quality: 88 }).toBuffer();
+      return `data:image/jpeg;base64,${out.toString('base64')}`;
+    };
+    const preview = await toPreview('light');
+    // 亮度自适应开启时附暗底预览，直观看到"暗图自动换白标"
+    const previewAuto = altBuf ? await toPreview('dark') : null;
+    res.json({ preview, previewAuto });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -199,6 +280,7 @@ function parseOptions(raw) {
     rotate: ((numOr(o.rotate, 0) % 360) + 360) % 360,
     tile: !!o.tile,
     tileGapPct: Math.max(0, Math.min(200, numOr(o.tileGapPct, 10))),
+    autoColor: !!o.autoColor, // 亮度自适应黑白（无反色变体时服务端自动忽略）
     format: ['auto', 'png', 'jpeg', 'webp'].includes(o.format) ? o.format : 'auto',
     quality: Math.max(50, Math.min(100, numOr(o.quality, 90))),
   };
@@ -269,6 +351,8 @@ app.post('/api/process', upload.array('files'), express.json(), async (req, res)
     res.json({ jobId, total: null });
 
     const watermark = fs.readFileSync(wm.path);
+    // 亮度自适应黑白：logo 有反色变体且开关开启时才读取
+    const watermarkAlt = options.autoColor && wm.altPath ? fs.readFileSync(wm.altPath) : null;
     const onProgress = (p) => {
       job.total = p.total; job.done = p.done; job.current = p.current || job.current;
       if (p.ok !== undefined) {
@@ -290,7 +374,7 @@ app.post('/api/process', upload.array('files'), express.json(), async (req, res)
     try {
       const result = await runBatch({
         inputDir, files: filesArg, outputDir,
-        watermark, options,
+        watermark, watermarkAlt, options,
         recursive: !!payload.recursive,
         overwrite,
         suffix: payload.suffix || '_wm',

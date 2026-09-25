@@ -1,7 +1,7 @@
 name: build-desktop
 
-# 桌面壳打包：Windows（Setup/Portable）+ macOS（dmg，x64/arm64 各自架构 runner 构建——
-# sharp/@napi-rs/canvas 原生二进制不能跨架构混用）。
+# 桌面壳打包：Windows（Setup/Portable）+ macOS（dmg，仅 Apple Silicon——
+# sharp/@napi-rs/canvas 原生二进制不能跨架构混用；mac x64 runner 排队严重，已停用）。
 # 推送 v* tag 或手动触发；产物合并到同一 Release。
 # macOS 包未做代码签名：首次打开需右键 → 打开，或执行 `xattr -cr /Applications/ImgMark.app`。
 
@@ -54,12 +54,7 @@ jobs:
           if-no-files-found: error
 
   build-mac:
-    strategy:
-      matrix:
-        include:
-          - { os: macos-14, arch: arm64, label: apple-silicon }
-          - { os: macos-13, arch: x64, label: intel }
-    runs-on: ${{ matrix.os }}
+    runs-on: macos-14
     env:
       CSC_IDENTITY_AUTO_DISCOVERY: "false"
     steps:
@@ -67,7 +62,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-      - name: Stage 服务端（${{ matrix.label }} 原生依赖）
+      - name: Stage 服务端（macOS arm64 原生依赖）
         run: |
           mkdir -p desktop/server
           cp -r app/server/bin app/server/src app/server/scripts app/server/package.json app/server/package-lock.json desktop/server/
@@ -76,17 +71,17 @@ jobs:
       - name: 安装 Electron 与打包工具
         working-directory: desktop
         run: npm install --no-audit --no-fund
-      - name: electron-builder 打包（${{ matrix.arch }}）
+      - name: electron-builder 打包（arm64）
         working-directory: desktop
-        run: npx electron-builder --mac --${{ matrix.arch }} --publish never
+        run: npx electron-builder --mac --arm64 --publish never
       - name: 收集产物
         run: |
           mkdir -p out
-          cp desktop/dist/ImgMark-mac-${{ matrix.arch }}-*.dmg out/ 2>/dev/null || cp desktop/dist/*.dmg out/
+          cp desktop/dist/ImgMark-mac-arm64-*.dmg out/ 2>/dev/null || cp desktop/dist/*.dmg out/
           ls -la out
       - uses: actions/upload-artifact@v4
         with:
-          name: desktop-mac-${{ matrix.arch }}
+          name: desktop-mac-arm64
           path: out/*.dmg
           if-no-files-found: error
 

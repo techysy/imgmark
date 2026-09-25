@@ -53,13 +53,14 @@ function outPathFor(file, inputDir, outputDir, { suffix, overwrite, keepStructur
  *   files    显式文件列表（给了就忽略 inputDir 扫描）
  *   outputDir 输出目录（overwrite 时可省）
  *   watermark 透明 PNG Buffer
+ *   watermarkAlt 反色变体 Buffer（可选；options.autoColor 开启时逐图按亮度选用）
  *   options  composeWatermark 选项
  *   recursive, overwrite, suffix='_wm', concurrency=3
  *   onProgress({done,total,current,ok,error})
  */
 async function runBatch(p) {
   const {
-    inputDir, files = null, outputDir, watermark, options = {},
+    inputDir, files = null, outputDir, watermark, watermarkAlt = null, options = {},
     recursive = false, overwrite = false, suffix = '_wm', concurrency = 3,
     onProgress = () => {},
   } = p;
@@ -87,7 +88,7 @@ async function runBatch(p) {
 
   const settled = await mapPool(list, concurrency, async (file) => {
     const buf = await fs.promises.readFile(file);
-    const { buffer, ext } = await composeWatermark(buf, watermark, composeOptions);
+    const { buffer, ext } = await composeWatermark(buf, watermark, composeOptions, watermarkAlt);
     const target = outPathFor(file, inputDir, outputDir, { suffix, overwrite, keepStructure, ext });
     await fs.promises.mkdir(path.dirname(target), { recursive: true });
     await fs.promises.writeFile(target, buffer);

@@ -138,6 +138,69 @@ function scaledAlphaOpacity(buffer, opacity) {
   return sharp(buffer).ensureAlpha().linear([1, 1, 1, opacity / 100], [0, 0, 0, 0]).png().toBuffer();
 }
 
+/** 亮度自适应的黑白分界：区域平均亮度高于它用深色墨，低于用浅色墨 */
+const LUM_THRESHOLD = 128;
+
+/**
+ * 分析水印墨色：是否纯黑白（单色）、墨色深浅，并为单色墨生成反色变体
+ * （彩色 logo 不生成变体——亮度自适应仅对黑白 logo 生效）。
+ */
+async function analyzeInk(buffer) {
+  const { data, info } = await sharp(buffer).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+  const { width, height } = info;
+  const px = width * height;
+  let opaque = 0, colored = 0, lumSum = 0, lumN = 0;
+  for (let i = 0; i < px; i++) {
+    const a = data[i * 4 + 3];
+    if (a <= 32) continue;
+    opaque++;
+    const r = data[i * 4], g = data[i * 4 + 1], b = data[i * 4 + 2];
+    if (Math.max(r, g, b) - Math.min(r, g, b) > 28) colored++;
+    if (a >= 200) { lumSum += 0.299 * r + 0.587 * g + 0.114 * b; lumN++; }
+  }
+  if (!opaque) return { monochrome: false, dark: false, inkLum: 0, altBuffer: null };
+  const monochrome = colored / opaque < 0.02;
+  const inkLum = lumN ? lumSum / lumN : LUM_THRESHOLD;
+  const dark = inkLum < LUM_THRESHOLD;
+  let altBuffer = null;
+  if (monochrome) {
+    const c = dark ? 255 : 0;
+    const out = Buffer.from(data);
+    for (let i = 0; i < px; i++) { out[i * 4] = c; out[i * 4 + 1] = c; out[i * 4 + 2] = c; }
+    altBuffer = await sharp(out, { raw: { width, height, channels: 4 } }).png({ compressionLevel: 9 }).toBuffer();
+  }
+  return { monochrome, dark, inkLum: Math.round(inkLum), altBuffer };
+}
+
+/** 墨迹平均亮度（只统计较实的不透明像素；缩放/透明度缩放不影响 RGB） */
+async function inkLuminance(buffer) {
+  const { data, info } = await sharp(buffer).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+  const { width, height } = info;
+  let lumSum = 0, n = 0;
+  for (let i = 0; i < width * height; i++) {
+    const a = data[i * 4 + 3];
+    if (a < 100) continue;
+    lumSum += 0.299 * data[i * 4] + 0.587 * data[i * 4 + 1] + 0.114 * data[i * 4 + 2];
+    n++;
+  }
+  return n ? lumSum / n : LUM_THRESHOLD;
+}
+
+/** 目标图（按 EXIF 摆正后）某区域或全图的平均亮度。
+ *  注意：sharp 的 stats() 会忽略管线操作（永远算原图），必须走 raw() 自己求均值 */
+async function regionLuminance(targetBuffer, region) {
+  let pipe = sharp(targetBuffer).rotate();
+  if (region && region.width > 4 && region.height > 4) {
+    pipe = pipe.extract(region);
+  } else {
+    region = null;
+  }
+  const { data } = await pipe.resize(48, 48, { fit: 'inside' }).greyscale().raw().toBuffer({ resolveWithObject: true });
+  let sum = 0;
+  for (let i = 0; i < data.length; i++) sum += data[i];
+  return sum / data.length;
+}
+
 /** 九宫格 → 左上角坐标 */
 function positionXY(position, W, H, wmW, wmH, margin) {
   const map = {
@@ -179,9 +242,11 @@ async function renderTileOverlay(wmBuffer, wmW, wmH, W, H, gapPx) {
  *   tile: 平铺；tileGapPct: 平铺间距 = 水印宽 × %（默认 10）
  *   format: auto|png|jpeg|webp（auto 保持原格式）
  *   quality: jpeg/webp 质量（默认 90）
+ *   autoColor: 亮度自适应黑白（需第 4 参提供反色变体，否则忽略）
+ * @param {Buffer} [wmAltBuffer] 反色变体（analyzeInk 生成）；autoColor 开启时按落点区域亮度二选一
  * @returns {{buffer, ext}}
  */
-async function composeWatermark(targetBuffer, wmBuffer, o = {}) {
+async function composeWatermark(targetBuffer, wmBuffer, o = {}, wmAltBuffer = null) {
   const {
     position = 'se', sizePct = 20, opacity = 80, marginPct = 3,
     offsetX = 0, offsetY = 0, rotate = 0, tile = false, tileGapPct = 10,
@@ -193,18 +258,40 @@ async function composeWatermark(targetBuffer, wmBuffer, o = {}) {
   const W = oriented ? meta.height : meta.width;
   const H = oriented ? meta.width : meta.height;
 
-  // 缩放水印
-  let wmW = Math.max(8, Math.round(W * sizePct / 100));
-  let wm = sharp(wmBuffer).resize({ width: wmW });
-  if (rotate) wm = wm.rotate(rotate, { background: { r: 0, g: 0, b: 0, alpha: 0 } });
-  let wmBuf = await wm.png().toBuffer();
+  // 缩放水印（反色变体与主变体走同一条缩放/旋转管线，保证尺寸一致）
+  const targetW = Math.max(8, Math.round(W * sizePct / 100));
+  const buildWm = async (src) => {
+    let p = sharp(src).resize({ width: targetW });
+    if (rotate) p = p.rotate(rotate, { background: { r: 0, g: 0, b: 0, alpha: 0 } });
+    return p.png().toBuffer();
+  };
+  let wmBuf = await buildWm(wmBuffer);
   const wmMeta = await sharp(wmBuf).metadata();
-  wmW = wmMeta.width; const wmH = wmMeta.height;
+  let wmW = wmMeta.width; const wmH = wmMeta.height;
+
+  const margin = Math.round(Math.min(W, H) * marginPct / 100);
+
+  // 亮度自适应黑白：平铺按全图亮度，单点按水印落点矩形亮度，
+  // 亮区域配深色墨、暗区域配浅色墨（分界 LUM_THRESHOLD）
+  if (o.autoColor && Buffer.isBuffer(wmAltBuffer)) {
+    let region = null;
+    if (!tile) {
+      const [x, y] = positionXY(position, W, H, wmW, wmH, margin);
+      const left = Math.max(0, Math.min(W - 2, x + offsetX));
+      const top = Math.max(0, Math.min(H - 2, y + offsetY));
+      region = { left, top, width: Math.max(2, Math.min(wmW, W - left)), height: Math.max(2, Math.min(wmH, H - top)) };
+    }
+    const lum = await regionLuminance(targetBuffer, region);
+    const [lumBase, lumAlt] = await Promise.all([inkLuminance(wmBuffer), inkLuminance(wmAltBuffer)]);
+    const altBuf = await buildWm(wmAltBuffer);
+    const wantDark = lum > LUM_THRESHOLD;
+    const baseIsDarker = lumBase <= lumAlt;
+    wmBuf = wantDark ? (baseIsDarker ? wmBuf : altBuf) : (baseIsDarker ? altBuf : wmBuf);
+  }
 
   // 透明度
   wmBuf = await scaledAlphaOpacity(wmBuf, Math.max(1, Math.min(100, opacity)));
 
-  const margin = Math.round(Math.min(W, H) * marginPct / 100);
   const base = sharp(targetBuffer).rotate().withMetadata(); // 自动按 EXIF 摆正 + 保留 EXIF/ICC 等元数据
 
   let overlay;
@@ -273,4 +360,4 @@ async function mergeWatermarks(preparedList, o = {}) {
   return { buffer, width: totalW, height: H, notes };
 }
 
-module.exports = { prepareWatermark, mergeWatermarks, composeWatermark, IMAGE_EXTS, WM_INPUT_EXTS, extOf };
+module.exports = { prepareWatermark, mergeWatermarks, composeWatermark, analyzeInk, IMAGE_EXTS, WM_INPUT_EXTS, extOf };

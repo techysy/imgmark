@@ -22,6 +22,12 @@ const state = {
   sourceSizes: [],
   crops: [],
   editingIdx: 0,
+  // 亮度自适应黑白：logo 墨色分析结果（服务端 prepare 返回）
+  monochrome: false,
+  inkDark: null,
+  // 黑白 logo 对（logo 管理）：成对上传后按图片亮度自动切换
+  logoPair: { black: null, white: null },
+  pairMode: false,
 };
 let cropMode = false, dragStart = null;
 
@@ -37,7 +43,17 @@ function esc(s) { return String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp
 
 // ---------- 水印准备 ----------
 async function prepareWatermark() {
-  if (!state.wmFiles.length) return;
+  // 黑白成对 → logo 组模式；否则走单文件/多选合并流程
+  if (state.logoPair.black && state.logoPair.white) return preparePair();
+  if (!state.wmFiles.length) {
+    // 两套来源都为空：失效当前水印，避免误用旧水印
+    state.watermarkId = null;
+    state.pairMode = false;
+    state.monochrome = false;
+    updateAutoColorUI();
+    updateRun();
+    return;
+  }
   const multi = state.wmFiles.length > 1;
   const fd = new FormData();
   for (const f of state.wmFiles) fd.append('watermark', f);
@@ -59,20 +75,86 @@ async function prepareWatermark() {
     state.sourcePreviews = r.sourcePreviews || (r.sourcePreview ? [r.sourcePreview] : []);
     state.sourceSizes = r.sourceSizes || (r.sourceWidth ? [[r.sourceWidth, r.sourceHeight]] : []);
     $('crop-btn').disabled = false;
+    state.pairMode = false;
+    state.monochrome = !!r.monochrome;
+    state.inkDark = r.inkDark === undefined ? null : r.inkDark;
     const editingSrc = state.sourcePreviews[state.editingIdx];
     $('wm-preview').src = cropMode && editingSrc ? editingSrc : r.preview;
     $('wm-notes').textContent = `${r.width}×${r.height}\n` + (r.notes || []).join('\n');
     renderChips();
     updateCropUI();
+    updateAutoColorUI();
     refreshPreview();
     updateRun();
   } catch (e) {
     $('wm-notes').textContent = '✗ ' + e.message;
     state.watermarkId = null;
+    state.monochrome = false;
+    updateAutoColorUI();
     updateRun();
   }
 }
 const prepareDebounced = debounce(prepareWatermark, 500);
+
+// ---------- 黑白 logo 对（logo 管理） ----------
+function updatePairUI() {
+  const pair = state.logoPair;
+  const pairs = [['black', pair.black], ['white', pair.white]];
+  for (const [slot, f] of pairs) {
+    const img = $(`pair-${slot}-thumb`);
+    const clear = $(`pair-${slot}-clear`);
+    if (img.dataset.objurl) URL.revokeObjectURL(img.dataset.objurl);
+    if (f) {
+      img.dataset.objurl = URL.createObjectURL(f);
+      img.src = img.dataset.objurl;
+      img.classList.remove('hidden');
+      clear.classList.remove('hidden');
+    } else {
+      img.removeAttribute('src');
+      img.classList.add('hidden');
+      clear.classList.add('hidden');
+    }
+  }
+  // 成对模式隐藏旧的单/多选合并行，互斥避免状态混乱
+  const pairMode = !!(pair.black && pair.white);
+  $('wm-file-row').classList.toggle('hidden', pairMode);
+  if (pairMode) { cropMode = false; hideRect(); }
+}
+
+async function preparePair() {
+  const fd = new FormData();
+  fd.append('pairBlack', state.logoPair.black, state.logoPair.black.name);
+  fd.append('pairWhite', state.logoPair.white, state.logoPair.white.name);
+  fd.append('bg', $('wm-bg').value);
+  fd.append('tolerance', $('wm-tol').value);
+  fd.append('force', $('wm-force').checked ? 'true' : 'false');
+  fd.append('trim', $('wm-trim').checked ? 'true' : 'false');
+  $('wm-notes').textContent = '处理中…';
+  try {
+    const r = await api('/api/prepare', { method: 'POST', body: fd });
+    state.watermarkId = r.id;
+    state.pairMode = true;
+    state.monochrome = false;
+    state.inkDark = r.inkDark;
+    state.crops = [null, null];
+    state.sourcePreviews = [];
+    state.sourceSizes = [];
+    $('crop-btn').disabled = true;
+    $('crop-reset').disabled = true;
+    $('wm-preview').src = r.preview;
+    $('wm-notes').textContent = `${r.width}×${r.height}\n` + (r.notes || []).join('\n');
+    renderChips();
+    updateCropUI();
+    updateAutoColorUI();
+    refreshPreview();
+    updateRun();
+  } catch (e) {
+    $('wm-notes').textContent = '✗ ' + e.message;
+    state.watermarkId = null;
+    updateAutoColorUI();
+    updateRun();
+  }
+}
 
 // ---------- 框选裁剪 ----------
 const previewWrap = $('wm-preview-wrap');
@@ -171,6 +253,26 @@ function selectLogo(i) {
   updateCropUI();
 }
 
+// ---------- 亮度自适应黑白 ----------
+// 仅纯黑白墨的 logo 支持（服务端 analyzeInk 判定）；彩色 logo 开关置灰并提示
+function updateAutoColorUI() {
+  const t = $('opt-autocolor');
+  if (state.pairMode) {
+    t.disabled = false;
+    $('autocolor-hint').textContent = '黑白 logo 对：亮图盖黑标，暗图自动换白标';
+    return;
+  }
+  t.disabled = !state.monochrome;
+  if (!state.monochrome) t.checked = false;
+  $('autocolor-hint').textContent = state.monochrome
+    ? (state.inkDark === true
+        ? '当前 logo 为深色墨：亮图盖黑标，暗图自动换白标'
+        : state.inkDark === false
+          ? '当前 logo 为浅色墨：暗图盖白标，亮图自动换黑标'
+          : '纯黑白 logo 已就绪：按每张图的亮度自动选黑/白')
+    : 'logo 含彩色墨，不支持自动黑白（不影响正常使用）';
+}
+
 // ---------- 样式预览 ----------
 const refreshPreview = debounce(async () => {
   if (!state.watermarkId) return;
@@ -180,6 +282,16 @@ const refreshPreview = debounce(async () => {
       body: JSON.stringify({ watermarkId: state.watermarkId, options: options() }),
     });
     $('style-preview').src = r.preview;
+    const auto = !!r.previewAuto;
+    $('style-preview-auto').classList.toggle('hidden', !auto);
+    $('preview-cap-auto').classList.toggle('hidden', !auto);
+    if (auto) {
+      $('preview-cap').textContent = '样式预览（亮图示例）';
+      const baseDark = state.inkDark !== false; // 深色墨/多 logo 组合：暗图展示换白；浅色墨：暗图保持白标
+      $('preview-cap-auto').textContent = baseDark ? '暗图示例（自动换白标）' : '暗图示例（白标保持）';
+    } else {
+      $('preview-cap').textContent = '样式预览（示例图）';
+    }
   } catch { /* 预览失败不打断 */ }
 }, 400);
 
@@ -193,6 +305,7 @@ function options() {
     rotate: +$('opt-rotate').value,
     tile: $('opt-tile').checked,
     tileGapPct: +$('opt-tile-gap').value,
+    autoColor: !$('opt-autocolor').disabled && $('opt-autocolor').checked,
     format: $('opt-format').value,
     quality: +$('opt-quality').value,
   };
@@ -423,11 +536,18 @@ function init() {
   $('wm-gap').addEventListener('input', prepareDebounced);
   bindPreviewOn('#opt-format', 'change');
   $('opt-tile').addEventListener('change', () => { $('tile-gap-wrap').classList.toggle('hidden', !$('opt-tile').checked); refreshPreview(); });
+  $('opt-autocolor').addEventListener('change', refreshPreview);
   $('opt-format').addEventListener('change', () => { $('quality-wrap').style.opacity = ['jpeg', 'webp'].includes($('opt-format').value) ? 1 : .4; refreshPreview(); });
 
   // 水印文件（可多选 → 并排合并，每个 logo 可独立裁剪；桌面壳用原生对话框）
   const onWmFiles = (files) => {
     state.wmFiles = files;
+    // 手动选择单/多文件时清空黑白 logo 对（两套模式互斥）
+    if (state.logoPair.black || state.logoPair.white) {
+      state.logoPair = { black: null, white: null };
+      $('pair-black-file').value = ''; $('pair-white-file').value = '';
+      updatePairUI();
+    }
     const names = files.map((f) => f.name);
     $('wm-name').textContent = files.length
       ? (files.length > 1 ? `${files.length} 个文件：` : '') + (names.join('、').length > 60 ? names.join('、').slice(0, 60) + '…' : names.join('、'))
@@ -455,6 +575,31 @@ function init() {
         if (list.length) onWmFiles(list);
       });
   }
+  // 黑白 logo 对（logo 管理）：成对上传走 pairMode；单边上传按普通单文件处理
+  const onPairFile = (slot) => (e) => {
+    const f = e.target.files[0];
+    if (!f) return;
+    state.logoPair[slot] = f;
+    // 选择 logo 对文件时清空旧的单/多选合并状态（互斥）
+    if (state.wmFiles.length) {
+      state.wmFiles = [];
+      $('wm-file').value = '';
+      $('wm-name').textContent = '未选择';
+    }
+    updatePairUI();
+    prepareWatermark();
+  };
+  $('pair-black-file').addEventListener('change', onPairFile('black'));
+  $('pair-white-file').addEventListener('change', onPairFile('white'));
+  const onPairClear = (slot) => () => {
+    state.logoPair[slot] = null;
+    $(`pair-${slot}-file`).value = '';
+    updatePairUI();
+    prepareWatermark();
+  };
+  $('pair-black-clear').addEventListener('click', onPairClear('black'));
+  $('pair-white-clear').addEventListener('click', onPairClear('white'));
+
   ['wm-bg'].forEach((id) => $(id).addEventListener('change', prepareDebounced));
   $('wm-tol').addEventListener('input', prepareDebounced);
   $('wm-force').addEventListener('change', prepareDebounced);
