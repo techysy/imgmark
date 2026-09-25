@@ -48,7 +48,7 @@ cd desktop && npm install && npm run dev    # 开发
 npm run dist                                # 打包 → dist/ImgMark-Setup-*.exe / ImgMark-Portable-*.exe
 ```
 
-CI 推 `v*` tag 时与 fpk 一同发布。前端检测到 `window.imgmarkDesktop` 后自动启用：水印文件选择走原生对话框、「上传图片」变为本地文件路径直处理、「本地路径」页签出现「选择文件夹」按钮；纯浏览器环境自动降级为原有行为。
+CI 推 `v*` tag 时自动产出 **Windows**（`ImgMark-Setup-*.exe` 安装版 / `ImgMark-Portable-*.exe` 便携版）与 **macOS**（`ImgMark-mac-arm64-*.dmg` Apple Silicon / `ImgMark-mac-x64-*.dmg` Intel）桌面安装包并附到 Release。macOS 包未做代码签名：首次打开需**右键 → 打开**，或执行 `xattr -cr /Applications/ImgMark.app`。前端检测到 `window.imgmarkDesktop` 后自动启用：水印文件选择走原生对话框、「上传图片」变为本地文件路径直处理、「本地路径」页签出现「选择文件夹」按钮；纯浏览器环境自动降级为原有行为。
 
 ### 打包为 fnOS 应用（fpk）
 
