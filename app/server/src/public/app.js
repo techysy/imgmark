@@ -37,11 +37,10 @@ function esc(s) { return String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp
 
 // ---------- 水印准备（split：每个 logo 独立去底；布局在 ② 分组里配置） ----------
 async function prepareWatermark() {
+  state.watermarkId = null;
+  state.logoSet = null;
   if (!state.wmFiles.length) {
-    if (state.logoSet) {
-      state.logoSet = null; state.watermarkId = null; state.groups = [];
-      renderLogoList(); renderGroups();
-    }
+    renderLogoList(); renderGroups();
     updateAutoColorUI();
     updateRun();
     return;
@@ -96,6 +95,122 @@ function defaultGroup(idxs) {
 }
 const logoOf = (i) => (state.logoSet ? state.logoSet.logos[i] : null);
 const logoSource = (i) => { const l = logoOf(i); return l && l.sourcePreview ? l.sourcePreview : null; };
+
+// ---------- 方案（保存/恢复：分组+选项存 localStorage，logo 文件存 IndexedDB） ----------
+const PRESET_KEY = 'imgmark_presets';
+function idbOpen() {
+  return new Promise((res, rej) => {
+    const req = indexedDB.open('imgmark-presets', 1);
+    req.onupgradeneeded = () => req.result.createObjectStore('files');
+    req.onsuccess = () => res(req.result);
+    req.onerror = () => rej(req.error);
+  });
+}
+async function idbPut(key, files) {
+  const db = await idbOpen();
+  return new Promise((res, rej) => {
+    const tx = db.transaction('files', 'readwrite');
+    tx.objectStore('files').put(files, key);
+    tx.oncomplete = () => res();
+    tx.onerror = () => rej(tx.error);
+  });
+}
+async function idbGet(key) {
+  const db = await idbOpen();
+  return new Promise((res, rej) => {
+    const req = db.transaction('files', 'readonly').objectStore('files').get(key);
+    req.onsuccess = () => res(req.result || []);
+    req.onerror = () => rej(req.error);
+  });
+}
+async function idbDel(key) {
+  const db = await idbOpen();
+  return new Promise((res, rej) => {
+    const tx = db.transaction('files', 'readwrite');
+    tx.objectStore('files').delete(key);
+    tx.oncomplete = () => res();
+    tx.onerror = () => rej(tx.error);
+  });
+}
+function getPresets() { try { return JSON.parse(localStorage.getItem(PRESET_KEY) || '[]'); } catch { return []; } }
+
+function renderPresetSelect() {
+  const sel = $('preset-select');
+  if (!sel) return;
+  sel.innerHTML = '<option value="">选择已保存方案…</option>' +
+    getPresets().map((p) => `<option value="${esc(p.name)}">${esc(p.name)}（${new Date(p.time).toLocaleString()}）</option>`).join('');
+}
+
+async function savePreset() {
+  const hint = $('preset-hint');
+  const name = $('preset-name').value.trim();
+  if (!name) { hint.textContent = '先填方案名称'; return; }
+  if (!state.logoSet || !state.groups.length) { hint.textContent = '当前没有可保存的配置（先加 logo 和分组）'; return; }
+  const list = getPresets().filter((p) => p.name !== name);
+  list.push({ name, time: Date.now(), data: {
+    groups: JSON.parse(JSON.stringify(state.groups)),
+    options: options(),
+  }});
+  localStorage.setItem(PRESET_KEY, JSON.stringify(list));
+  await idbPut(name, state.wmFiles);
+  renderPresetSelect();
+  $('preset-select').value = name;
+  hint.textContent = '已保存 ✓（含 logo 文件与全部分组参数）';
+}
+
+async function delPreset() {
+  const name = $('preset-select').value;
+  if (!name) { $('preset-hint').textContent = '先在左侧选择要删除的方案'; return; }
+  localStorage.setItem(PRESET_KEY, JSON.stringify(getPresets().filter((p) => p.name !== name)));
+  await idbDel(name);
+  renderPresetSelect();
+  $('preset-hint').textContent = '已删除';
+}
+
+async function applyPreset(name) {
+  const hint = $('preset-hint');
+  const meta = getPresets().find((p) => p.name === name);
+  if (!meta) return;
+  const files = await idbGet(name);
+  if (!files.length) { hint.textContent = '方案缺少 logo 文件（可能被浏览器清理）'; return; }
+  hint.textContent = '恢复中…';
+  onWmFiles(files); // 走真实准备流程，prepare 完成后再套用分组与选项
+  const timer = setInterval(() => {
+    if (!state.watermarkId || !state.logoSet) return;
+    clearInterval(timer);
+    state.groups = JSON.parse(JSON.stringify(meta.data.groups))
+      .map((g) => ({ ...g, logos: (g.logos || []).filter((i) => i < state.logoSet.logos.length) }))
+      .filter((g) => g.logos.length);
+    if (!state.groups.length) state.groups = [defaultGroup(state.logoSet.logos.map((_, i) => i))];
+    state.groups.forEach((g) => { g.ratios = g.logos.map((_, k) => (g.ratios && g.ratios[k]) || 1); });
+    const o = meta.data.options || {};
+    if (o.format) $('opt-format').value = o.format;
+    if (o.quality) $('opt-quality').value = o.quality;
+    if (o.sizeBase) $('opt-sizebase').value = o.sizeBase;
+    if (o.autoColor && !$('opt-autocolor').disabled) $('opt-autocolor').checked = true;
+    renderLogoList(); renderGroups();
+    updateAutoColorUI(); refreshPreview(); updateRun();
+    hint.textContent = '已恢复 ✓';
+  }, 250);
+}
+
+// logo 文件入口（网页 input / 桌面壳原生对话框 / 方案恢复共用）
+function onWmFiles(files) {
+  state.wmFiles = files;
+  const names = files.map((f) => f.name);
+  $('wm-name').textContent = files.length
+    ? (files.length > 1 ? `${files.length} 个文件：` : '') + (names.join('、').length > 60 ? names.join('、').slice(0, 60) + '…' : names.join('、'))
+    : '未选择';
+  // 换文件：清空裁剪状态
+  state.crops = files.map(() => null);
+  state.editingIdx = 0;
+  cropMode = false; dragStart = null;
+  hideRect();
+  renderLogoList();
+  renderGroups();
+  updateCropUI();
+  prepareWatermark();
+}
 
 // ---------- logo 列表（点击选中某个 logo 进行框选裁剪） ----------
 function renderLogoList() {
@@ -557,24 +672,11 @@ function init() {
   $('opt-autocolor').addEventListener('change', refreshPreview);
   $('opt-format').addEventListener('change', () => { $('quality-wrap').style.opacity = ['jpeg', 'webp'].includes($('opt-format').value) ? 1 : .4; refreshPreview(); });
   $('group-add').addEventListener('click', addGroup);
+  $('preset-save').addEventListener('click', savePreset);
+  $('preset-del').addEventListener('click', delPreset);
+  $('preset-select').addEventListener('change', (e) => { if (e.target.value) applyPreset(e.target.value); });
+  renderPresetSelect();
 
-  // logo 文件（可多选，每个独立去底；分组布局在 ② 配置；桌面壳用原生对话框）
-  const onWmFiles = (files) => {
-    state.wmFiles = files;
-    const names = files.map((f) => f.name);
-    $('wm-name').textContent = files.length
-      ? (files.length > 1 ? `${files.length} 个文件：` : '') + (names.join('、').length > 60 ? names.join('、').slice(0, 60) + '…' : names.join('、'))
-      : '未选择';
-    // 换文件：清空裁剪状态
-    state.crops = files.map(() => null);
-    state.editingIdx = 0;
-    cropMode = false; dragStart = null;
-    hideRect();
-    renderLogoList();
-    renderGroups();
-    updateCropUI();
-    prepareWatermark();
-  };
   $('wm-file').addEventListener('change', (e) => onWmFiles(Array.from(e.target.files || [])));
   if (native) {
     // 直接用 id 定位按钮：卡片区 DOM 顺序变化会让"取首元素"类选择器拿到错误目标

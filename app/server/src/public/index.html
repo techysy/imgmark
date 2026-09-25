@@ -17,6 +17,18 @@
 
 <main>
   <section class="col">
+    <!-- ⓪ 方案 -->
+    <div class="card">
+      <div class="row-inline wrap" style="gap:8px">
+        <b>方案</b>
+        <select id="preset-select" style="max-width:220px"><option value="">选择已保存方案…</option></select>
+        <input type="text" id="preset-name" placeholder="方案名称" class="path-input" style="width:110px">
+        <button id="preset-save" class="btn tiny">保存当前</button>
+        <button id="preset-del" class="btn tiny ghost">删除</button>
+        <span id="preset-hint" class="muted">保存 logo 文件 + 全部分组参数，换页/重启后一键恢复</span>
+      </div>
+    </div>
+
     <!-- ① 水印文件 -->
     <div class="card">
       <h2>① logo 管理 <small>AI / SVG / PNG / JPG，白底或黑底自动转透明，每个 logo 独立去底</small></h2>

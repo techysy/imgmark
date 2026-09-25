@@ -86,22 +86,30 @@ async function runBatch(p) {
   let done = 0, okCount = 0, failCount = 0;
   onProgress({ done: 0, total: list.length, current: null });
 
+  // 逐文件实时回调进度（此前在全部完成后才统一触发，进度条会停在 0% 直到瞬间跳完）
   const settled = await mapPool(list, concurrency, async (file) => {
-    const buf = await fs.promises.readFile(file);
-    const { buffer, ext } = groups
-      ? await composeGroups(buf, groups, composeOptions)
-      : await composeWatermark(buf, watermark, composeOptions, watermarkAlt);
-    const target = outPathFor(file, inputDir, outputDir, { suffix, overwrite, keepStructure, ext });
-    await fs.promises.mkdir(path.dirname(target), { recursive: true });
-    await fs.promises.writeFile(target, buffer);
-    return { file, target };
+    try {
+      const buf = await fs.promises.readFile(file);
+      const { buffer, ext } = groups
+        ? await composeGroups(buf, groups, composeOptions)
+        : await composeWatermark(buf, watermark, composeOptions, watermarkAlt);
+      const target = outPathFor(file, inputDir, outputDir, { suffix, overwrite, keepStructure, ext });
+      await fs.promises.mkdir(path.dirname(target), { recursive: true });
+      await fs.promises.writeFile(target, buffer);
+      done++;
+      onProgress({ done, total: list.length, current: file, ok: true, error: null });
+      return { file, target };
+    } catch (e) {
+      done++;
+      onProgress({ done, total: list.length, current: file, ok: false, error: e.message });
+      throw e; // mapPool 统一记为失败，避免双重包装
+    }
   });
 
   for (let i = 0; i < list.length; i++) {
     const s = settled[i];
     if (s.ok) { okCount++; results.push({ input: list[i], output: s.value.target, ok: true }); }
     else { failCount++; results.push({ input: list[i], ok: false, error: s.error.message }); }
-    onProgress({ done: i + 1, total: list.length, current: list[i], ok: s.ok, error: s.ok ? null : s.error.message });
   }
 
   return { total: list.length, ok: okCount, failed: failCount, results };
