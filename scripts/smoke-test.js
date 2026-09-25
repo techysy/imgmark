@@ -202,6 +202,16 @@ async function main() {
     assert.strictEqual(ext, '.png');
     assert.strictEqual((await sharp(buffer).metadata()).format, 'png');
   });
+  await t('元数据保留（EXIF 透传到输出）', async () => {
+    const withExif = await sharp({ create: { width: 900, height: 600, channels: 3, background: '#8899aa' } })
+      .withExif({ IFD0: { ImageDescription: 'imgmark-meta-test' } })
+      .jpeg({ quality: 90 })
+      .toBuffer();
+    const { buffer } = await composeWatermark(withExif, wmWhite.buffer, { position: 'c', sizePct: 20 });
+    const meta = await sharp(buffer).metadata();
+    assert(meta.exif, '输出应带 EXIF');
+    assert(meta.exif.toString('binary').includes('imgmark-meta-test'), 'EXIF ImageDescription 应透传');
+  });
 
   console.log('\n[3] 批量目录');
   await t('递归批量 + 跳过非图片 + 输出子目录结构', async () => {

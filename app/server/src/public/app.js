@@ -520,7 +520,17 @@ function init() {
   $('opt-overwrite').addEventListener('change', () => {
     $('outdir-wrap').style.opacity = $('opt-overwrite').checked ? .4 : 1;
     $('opt-outdir').disabled = $('opt-overwrite').checked;
+    if (native) $('outdir-pick').disabled = $('opt-overwrite').checked;
   });
+  if (native) {
+    // 桌面壳：原生选择输出文件夹（绝对路径），并移除 fnOS 页签（壳内无 fnOS 开放 API）
+    $('outdir-pick').classList.remove('hidden');
+    $('outdir-pick').addEventListener('click', async () => {
+      const dir = await native.pickFolder();
+      if (dir) $('opt-outdir').value = dir;
+    });
+    document.querySelector('.tab[data-mode="fnos"]').classList.add('hidden');
+  }
   $('run').addEventListener('click', run);
   $('run').disabled = true;
 

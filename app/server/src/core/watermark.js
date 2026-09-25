@@ -205,7 +205,7 @@ async function composeWatermark(targetBuffer, wmBuffer, o = {}) {
   wmBuf = await scaledAlphaOpacity(wmBuf, Math.max(1, Math.min(100, opacity)));
 
   const margin = Math.round(Math.min(W, H) * marginPct / 100);
-  const base = sharp(targetBuffer).rotate(); // 自动按 EXIF 摆正
+  const base = sharp(targetBuffer).rotate().withMetadata(); // 自动按 EXIF 摆正 + 保留 EXIF/ICC 等元数据
 
   let overlay;
   if (tile) {
