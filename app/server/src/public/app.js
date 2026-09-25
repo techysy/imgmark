@@ -662,7 +662,18 @@ async function pollJob(jobId) {
 }
 
 // ---------- 初始化 ----------
+function applyTheme(t) {
+  document.documentElement.dataset.theme = t;
+  localStorage.setItem('imgmark_theme', t);
+  const b = $('btn-theme');
+  if (b) b.textContent = t === 'dark' ? '☀️' : '🌙';
+}
+
 function init() {
+  applyTheme(document.documentElement.dataset.theme || 'light');
+  $('btn-theme').addEventListener('click', () =>
+    applyTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'));
+
   // 全局滑杆联动（布局滑杆在各分组卡片内自绑定）
   const slider = (bar, label) => { const b = $(bar); if (b) b.addEventListener('input', () => { $(label).textContent = b.value; }); };
   slider('wm-tol', 'tol-v'); slider('opt-quality', 'q-v');
