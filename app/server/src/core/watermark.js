@@ -250,7 +250,7 @@ async function composeWatermark(targetBuffer, wmBuffer, o = {}, wmAltBuffer = nu
   const {
     position = 'se', sizePct = 20, opacity = 80, marginPct = 3,
     offsetX = 0, offsetY = 0, rotate = 0, tile = false, tileGapPct = 10,
-    format = 'auto', quality = 90,
+    format = 'auto', quality = 90, sizeBase = 'width',
   } = o;
 
   const meta = await sharp(targetBuffer).metadata();
@@ -259,7 +259,7 @@ async function composeWatermark(targetBuffer, wmBuffer, o = {}, wmAltBuffer = nu
   const H = oriented ? meta.width : meta.height;
 
   // 缩放水印（反色变体与主变体走同一条缩放/旋转管线，保证尺寸一致）
-  const targetW = Math.max(8, Math.round(W * sizePct / 100));
+  const targetW = Math.max(8, Math.round(sizeBaseDim(W, H, sizeBase) * sizePct / 100));
   const buildWm = async (src) => {
     let p = sharp(src).resize({ width: targetW });
     if (rotate) p = p.rotate(rotate, { background: { r: 0, g: 0, b: 0, alpha: 0 } });
@@ -376,24 +376,32 @@ async function buildGroupWatermark(logoList, o = {}) {
   return { buffer, width: W, height: H };
 }
 
+/** 大小基准尺寸：long=长边（横竖构图同实际大小）/ short=短边 / width=图宽（旧行为） */
+function sizeBaseDim(W, H, sizeBase) {
+  if (sizeBase === 'long') return Math.max(W, H);
+  if (sizeBase === 'short') return Math.min(W, H);
+  return W;
+}
+
 /**
  * 多分组合成：一次叠加所有分组的水印并编码输出（相比多次 composeWatermark 少几次编解码）。
  * @param {Buffer} targetBuffer
  * @param {Array<{wmBuffer:Buffer, wmAltBuffer?:Buffer, options:object}>} groupDefs
  *   options: position/sizePct/marginPct/offsetX/offsetY/opacity/autoColor
- * @param {object} o format/quality（输出编码，全局）
+ * @param {object} o format/quality（输出编码，全局）+ sizeBase: 'long'|'short'|'width'（大小基准，默认 width）
  */
 async function composeGroups(targetBuffer, groupDefs, o = {}) {
-  const { format = 'auto', quality = 90 } = o;
+  const { format = 'auto', quality = 90, sizeBase = 'width' } = o;
   if (!groupDefs.length) throw new Error('没有可合成的分组');
   const meta = await sharp(targetBuffer).metadata();
   const oriented = meta.orientation && meta.orientation >= 5;
   const W = oriented ? meta.height : meta.width;
   const H = oriented ? meta.width : meta.height;
+  const baseDim = sizeBaseDim(W, H, sizeBase);
   const entries = [];
   for (const g of groupDefs) {
     const go = g.options || {};
-    const targetW = Math.max(8, Math.round(W * clampNum(go.sizePct ?? 20, 2, 100) / 100));
+    const targetW = Math.max(8, Math.round(baseDim * clampNum(go.sizePct ?? 20, 2, 100) / 100));
     const buildWm = (src) => sharp(src).resize({ width: targetW }).png().toBuffer();
     let wmBuf = await buildWm(g.wmBuffer);
     const wmMeta = await sharp(wmBuf).metadata();

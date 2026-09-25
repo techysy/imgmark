@@ -329,11 +329,12 @@ const refreshPreview = debounce(async () => {
   } catch { /* 预览失败不打断 */ }
 }, 350);
 
-// ---------- 选项（全局：输出格式/质量 + 亮度自适应开关；布局参数在各分组里） ----------
+// ---------- 选项（全局：大小基准/输出格式/质量 + 亮度自适应开关；布局参数在各分组里） ----------
 function options() {
   return {
     format: $('opt-format').value,
     quality: +$('opt-quality').value,
+    sizeBase: $('opt-sizebase') ? $('opt-sizebase').value : 'long',
     autoColor: !$('opt-autocolor').disabled && $('opt-autocolor').checked,
   };
 }
@@ -552,6 +553,7 @@ function init() {
   slider('wm-tol', 'tol-v'); slider('opt-quality', 'q-v');
   ['wm-tol', 'opt-quality'].forEach((id) => $(id).addEventListener('input', refreshPreview));
   bindPreviewOn('#opt-format', 'change');
+  bindPreviewOn('#opt-sizebase', 'change');
   $('opt-autocolor').addEventListener('change', refreshPreview);
   $('opt-format').addEventListener('change', () => { $('quality-wrap').style.opacity = ['jpeg', 'webp'].includes($('opt-format').value) ? 1 : .4; refreshPreview(); });
   $('group-add').addEventListener('click', addGroup);

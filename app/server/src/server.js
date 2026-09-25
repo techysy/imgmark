@@ -336,7 +336,7 @@ app.post('/api/preview', express.json(), async (req, res) => {
       const auto = !!options.autoColor;
       const groupDefs = await resolveGroups(set, groups, auto);
       const toPreviewG = async (kind) => {
-        const { buffer } = await composeGroups(await getSampleImage(kind), groupDefs);
+        const { buffer } = await composeGroups(await getSampleImage(kind), groupDefs, { sizeBase: options.sizeBase });
         const out = await sharp(buffer).resize({ width: 520 }).jpeg({ quality: 88 }).toBuffer();
         return `data:image/jpeg;base64,${out.toString('base64')}`;
       };
@@ -375,6 +375,7 @@ function parseOptions(raw) {
     tile: !!o.tile,
     tileGapPct: Math.max(0, Math.min(200, numOr(o.tileGapPct, 10))),
     autoColor: !!o.autoColor, // 亮度自适应黑白（无反色变体时服务端自动忽略）
+    sizeBase: ['long', 'short', 'width'].includes(o.sizeBase) ? o.sizeBase : 'long',
     format: ['auto', 'png', 'jpeg', 'webp'].includes(o.format) ? o.format : 'auto',
     quality: Math.max(50, Math.min(100, numOr(o.quality, 90))),
   };
