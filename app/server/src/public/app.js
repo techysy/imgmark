@@ -479,6 +479,7 @@ function currentSource() {
 function updateRun() {
   const ok = !!state.watermarkId && !!state.groups.length && !!currentSource();
   $('run').disabled = !ok;
+  $('group-add').disabled = !state.logoSet; // 有 logo 才能建分组
   $('run-hint').textContent = ok ? '准备就绪' : '先选水印文件和图片来源';
 }
 
