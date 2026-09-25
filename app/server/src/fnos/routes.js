@@ -5,7 +5,15 @@ const path = require('path');
 /**
  * fnOS 开放能力路由（仅在 fnOS 应用环境内可用；否则返回 501 + 说明）。
  * 目录访问不做 HTTP 代理下载/上传——授权后应用用户具备 ACL，直接读写真实路径。
+ * uid 来源优先级：请求参数 > 统一网关身份头 x-trim-userid（网关模式下可信）。
  */
+function resolveUid(req) {
+  const q = Number(req.query.uid || (req.body && req.body.uid) || 0);
+  if (Number.isInteger(q) && q > 0) return q;
+  const h = Number(req.headers['x-trim-userid'] || 0);
+  return Number.isInteger(h) && h > 0 ? h : 0;
+}
+
 function createFnosRouter({ client, listImages }) {
   const router = express.Router();
 
@@ -40,8 +48,8 @@ function createFnosRouter({ client, listImages }) {
   // 授权目录列表（用户个人 + 管理员共享），附语义化展示路径
   router.get('/folders', async (req, res) => {
     try {
-      const uid = Number(req.query.uid || 0);
-      if (!Number.isInteger(uid) || uid <= 0) return res.status(400).json({ error: 'uid 无效' });
+      const uid = resolveUid(req);
+      if (uid <= 0) return res.status(400).json({ error: 'uid 无效' });
       const language = req.query.lang || 'zh-CN';
       const [user, shared] = await Promise.all([
         client.getUserAccessibleFolders(uid).catch(() => []),
@@ -61,8 +69,9 @@ function createFnosRouter({ client, listImages }) {
   // 列目录：只允许已授权根目录及其子路径；返回前用当前 uid 检查 ACL
   router.post('/list', async (req, res) => {
     try {
-      const { uid, path: dir, lang } = req.body || {};
-      if (!Number.isInteger(uid) || uid <= 0) return res.status(400).json({ error: 'uid 无效' });
+      const uid = resolveUid(req);
+      if (uid <= 0) return res.status(400).json({ error: 'uid 无效' });
+      const { path: dir, lang } = req.body || {};
       if (typeof dir !== 'string' || !dir.startsWith('/')) return res.status(400).json({ error: '路径无效' });
 
       const [user, shared] = await Promise.all([
@@ -110,11 +119,12 @@ function createFnosRouter({ client, listImages }) {
   // 删除授权目录（用户个人 / 管理员共享）
   router.post('/delete-authorization', async (req, res) => {
     try {
-      const { uid, path: dir, shared } = req.body || {};
+      const { path: dir, shared } = req.body || {};
+      const uid = resolveUid(req);
       if (shared) {
         await client.delSharedAccessibleFolder(dir);
       } else {
-        if (!Number.isInteger(uid) || uid <= 0) return res.status(400).json({ error: 'uid 无效' });
+        if (uid <= 0) return res.status(400).json({ error: 'uid 无效' });
         await client.delUserAccessibleFolder(uid, dir);
       }
       res.json({ ok: true });

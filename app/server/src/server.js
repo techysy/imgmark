@@ -240,7 +240,7 @@ app.post('/api/process', upload.array('files'), express.json(), async (req, res)
       if (!path.isAbsolute(inputDir)) return res.status(400).json({ error: '请输入绝对路径' });
       if (mode === 'fnos') {
         if (!fnos.isAvailable()) return res.status(501).json({ error: 'fnOS 开放 API 不可用：请在 fnOS 应用环境内使用，或改用本地路径/上传模式' });
-        const uid = Number(payload.uid || 0);
+        const uid = Number(payload.uid || req.headers['x-trim-userid'] || 0);
         if (!Number.isInteger(uid) || uid <= 0) return res.status(400).json({ error: 'uid 无效' });
         const acl = await fnos.checkUserACL(uid, inputDir);
         const entry = Array.isArray(acl) ? acl[0] : acl;
@@ -341,12 +341,17 @@ app.post('/api/browse', express.json(), async (req, res) => {
   }
 });
 
-/** 启动 HTTP 服务（Electron 桌面壳复用：require('./server').start({port})） */
-function start({ port = PORT, host = HOST } = {}) {
+/** 启动 HTTP 服务（Electron 桌面壳复用：require('./server').start({port})）
+ *  SOCKET_PATH 环境变量非空时额外监听 Unix Socket（fnOS 统一网关模式，见官方 Native 示例） */
+function start({ port = PORT, host = HOST, socketPath = process.env.SOCKET_PATH || '' } = {}) {
   return new Promise((resolve, reject) => {
     const srv = app.listen(port, host, () => {
       console.log(`[imgmark] 监听 http://${host}:${port}  (数据目录 ${DATA_DIR})`);
       console.log(`[imgmark] fnOS 开放 API: ${fnos.isAvailable() ? '可用' : '不可用（本地模式：本地路径 / 上传图片）'}`);
+      if (socketPath) {
+        try { fs.rmSync(socketPath, { force: true }); } catch {}
+        app.listen(socketPath, () => console.log(`[imgmark] 网关 socket: ${socketPath}`));
+      }
       resolve(srv);
     });
     srv.on('error', reject);

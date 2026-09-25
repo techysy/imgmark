@@ -1,8 +1,8 @@
 appname               = imgmark
-version               = 0.3.5
+version               = 0.4.0
 display_name          = ImgMark 批量图片水印
 desc                  = 批量给图片加图片水印：AI/SVG/PNG/JPG 水印源白底黑底自动去底转透明 PNG，支持多 logo 并排、框选裁剪、九宫格定位/平铺/透明度/旋转；目录通过飞牛开放平台文件授权选取（trim.file.*），也支持本地路径与直接上传
-changelog             = v0.3.5: 声明 service_port（端口服务应用启动流程必需，修复应用中心启动报错）；v0.3.4: 修复 symlink 安装失败；v0.3.3: 桌面壳输出目录锚定
+changelog             = v0.4.0: 接入统一网关(/app/imgmark + Unix Socket，官方 Native 模式)——桌面图标走网关同域访问，用户身份自动识别，无需手填 uid；v0.3.x: 安装修复/桌面壳/多 logo/裁剪
 platform              = x86
 source                = thirdparty
 maintainer            = techysy
