@@ -25,6 +25,10 @@ const state = {
 };
 let cropMode = false, dragStart = null;
 
+// 空状态占位图（与 index.html 中的初始 src 保持一致）
+const PLACEHOLDER_WM = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='190' height='150'%3E%3Ctext x='95' y='70' text-anchor='middle' font-family='sans-serif' font-size='12' fill='%239aa0a6'%3E添加 logo 后预览%3C/text%3E%3Ctext x='95' y='92' text-anchor='middle' font-family='sans-serif' font-size='11' fill='%23b9bec5'%3E支持 AI / SVG / PNG / JPG%3C/text%3E%3C/svg%3E";
+const PLACEHOLDER_STYLE = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='420' height='280'%3E%3Crect x='0' y='0' width='420' height='280' fill='%23dde3ea'/%3E%3Ccircle cx='90' cy='70' r='42' fill='%23ffffff' opacity='.35'/%3E%3Crect x='280' y='180' width='110' height='66' fill='%233d4f63' opacity='.3' rx='8'/%3E%3Ctext x='210' y='145' text-anchor='middle' font-family='sans-serif' font-size='13' fill='%237a8494'%3E添加 logo 并配置分组后预览%3C/text%3E%3C/svg%3E";
+
 // ---------- 工具 ----------
 async function api(path, opts) {
   const res = await fetch(path, opts);
@@ -40,6 +44,10 @@ async function prepareWatermark() {
   state.watermarkId = null;
   state.logoSet = null;
   if (!state.wmFiles.length) {
+    $('wm-preview').src = PLACEHOLDER_WM;
+    $('style-preview').src = PLACEHOLDER_STYLE;
+    $('style-preview-auto').classList.add('hidden');
+    $('preview-cap-auto').classList.add('hidden');
     renderLogoList(); renderGroups();
     updateAutoColorUI();
     updateRun();
