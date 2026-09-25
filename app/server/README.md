@@ -10,6 +10,8 @@ Node.js 批量图片水印工具：**AI / SVG / PNG / JPG 水印源，白底或�
 - **多 logo 并排**：水印文件可多选，各 logo 独立去底/去边后水平拼排成一个组合水印（默认等高对齐、间距滑杆 0-100% 可调，0=紧贴排列），后续定位/平铺/批量照常使用；CLI 用 `-w` 重复传参或 `prepare --merge`
 - **水印样式**：九宫格定位（nw…se）、大小（占宽 %）、不透明度、边距、平铺 + 间距、旋转、EXIF 自动摆正
 - **方案保存**：一键保存当前 logo 文件 + 全部分组布局 + 全局参数（分组/选项存 localStorage、logo 文件存 IndexedDB），换页面/重启浏览器后下拉选择即可一键恢复
+- **文件夹监听**：监听目录新图片落盘自动加水印（fs.watch + 周期扫描双保险、防半写/防回环），配置持久化、服务重启自动恢复
+- **本地数据库去重**：按「路径+mtime+大小」记录已输出映射，批量与监听均可跳过已输出过水印的图片（输出被删则视为未处理）
 - **水印分组**：可建多个分组，每组独立九宫格定位、logo 组合（1 个或多个）、横排/竖排、水平/垂直间距（占基准高/宽 %）、大小、边距、不透明度，以及多 logo 时逐个的高度/宽度比例；任一参数改动即时重新合成单张预览（亮/暗双示例）。批量时每张图按全部分组一次合成
 - **大小基准**：长边（默认，同一相机的横构图/竖构图水印实际像素大小一致）/ 短边 / 图宽，全局可选
 - **亮度自适应黑白**：纯黑/白墨的 logo 可开启独立开关，按每组水印落点区域的平均亮度自动选黑标或白标（整组一起切换），服务端自动生成反色变体，彩色 logo 不受影响；样式预览同时给出亮图/暗图两种效果
@@ -93,6 +95,8 @@ CI 推 `v*` tag 时自动产出 **Windows**（`ImgMark-Setup-*.exe` 安装版 / 
 
 ## CLI 用法
 
+> 🤖 **Agent / AI 编程工具？** 见 [AGENTS.md](AGENTS.md) —— 面向 Agent 的 HTTP API 操作手册（启动、批量、分组、监听、去重全流程示例）。
+
 ```bash
 cd app/server
 
@@ -122,9 +126,14 @@ node bin/wm.js apply -w brand.png -w partner.png -i /vol1/1000/photos \
 | --- | --- | --- |
 | POST | `/api/prepare` | multipart `watermark`（可多个）。**合并模式**（默认）：`bg/tolerance/force/maxSize/trim/crop("x,y,w,h"百分比，多文件传 JSON 数组)/gap/equalHeight` → 多 logo 并排合并为一个透明 PNG（返回 id、预览、`logoCount`）。**分组模式**（`split=true`）：每个 logo 独立去底，返回 `{id, logos:[{key,name,width,height,monochrome,inkDark,hasAlt,preview,sourcePreview,sourceWidth,sourceHeight,cropApplied}]}`，供 preview/process 的 `groups` 引用 |
 | POST | `/api/preview` | `{watermarkId, options}` → 内置示例图的合成预览。带 `groups:[{logos:[序号], position, sizePct, marginPct, direction(h/v), gapX, gapY, ratios[], opacity, offsetX, offsetY}]` 时按分组合成，`options.autoColor=true` 且组内 logo 均有反色变体时额外返回暗图预览 `previewAuto` |
-| POST | `/api/process` | multipart：`payload`(JSON) + 可选 `files[]`；`mode=local/fnos/upload/local-files` → `{jobId}`。payload 可带 `groups`（同 preview，配合 split 模式）实现多分组合成 |
+| POST | `/api/process` | multipart：`payload`(JSON) + 可选 `files[]`；`mode=local/fnos/upload/local-files` → `{jobId}`。payload 可带 `groups`（同 preview，配合 split 模式）实现多分组合成；`skipProcessed:true` 跳过已输出文件 |
 | GET | `/api/jobs/:id` | 任务进度（处理中逐文件实时更新）与逐文件结果 |
 | GET | `/api/jobs/:id/file/:idx` | 上传模式的单文件下载 |
+| GET | `/api/watchers` | 文件夹监听列表（status/stats/lastError） |
+| POST | `/api/watchers` | 建立监听：`{inputDir, outputDir?, recursive?, watermarkId, groups, options}`（用当前水印配置，新图落盘自动处理） |
+| DELETE | `/api/watchers/:id` | 删除监听 |
+| POST | `/api/watchers/:id/rescan` | 立即全量扫描 |
+| GET | `/api/db/stats` | 本地处理数据库记录数 |
 | POST | `/api/browse` | 本地模式目录浏览 |
 | GET | `/api/fnos/status` | fnOS 开放 API 可用性 + 平台配置 |
 | GET | `/api/fnos/folders?uid=` | 已授权目录（个人+共享，含语义化路径） |

@@ -604,7 +604,51 @@ function updateRun() {
   const ok = !!state.watermarkId && !!state.groups.length && !!currentSource();
   $('run').disabled = !ok;
   $('group-add').disabled = !state.logoSet; // 有 logo 才能建分组
+  $('watch-create').disabled = !state.watermarkId; // 监听复用当前 logo/分组
   $('run-hint').textContent = ok ? '准备就绪' : '先选水印文件和图片来源';
+}
+
+// ---------- 文件夹监听 ----------
+async function refreshWatchers() {
+  try {
+    const r = await api('/api/watchers');
+    const box = $('watch-list');
+    box.innerHTML = r.watchers.length ? r.watchers.map((w) => `
+      <div class="watch-item ${w.status}">
+        <div class="row-inline" style="gap:8px;justify-content:space-between;margin:0">
+          <span>📁 ${esc(w.inputDir)}${w.recursive ? '（含子目录）' : ''}</span>
+          <span class="tag">${w.status === 'watching' ? '● 监听中' : w.status === 'paused' ? '⏸ 已暂停' : w.status}</span>
+        </div>
+        <div class="muted">→ ${esc(w.outputDir)} · 已处理 ${w.stats.processed} · 跳过 ${w.stats.skipped} · 失败 ${w.stats.failed}${w.lastError ? ' · ' + esc(w.lastError) : ''}${w.note ? ' · ' + esc(w.note) : ''}</div>
+        <div class="row-inline" style="gap:6px;margin:0">
+          <button class="btn tiny" data-rescan="${w.id}">立即扫描</button>
+          <button class="btn tiny ghost" data-del="${w.id}">删除</button>
+        </div>
+      </div>`).join('') : '<div class="muted">暂无监听：选好 logo 与分组后，填监听目录点「建立监听」</div>';
+    box.querySelectorAll('[data-rescan]').forEach((b) => b.addEventListener('click', async () => {
+      await api(`/api/watchers/${b.dataset.rescan}/rescan`, { method: 'POST' });
+      refreshWatchers();
+    }));
+    box.querySelectorAll('[data-del]').forEach((b) => b.addEventListener('click', async () => {
+      await api(`/api/watchers/${b.dataset.del}`, { method: 'DELETE' });
+      refreshWatchers();
+    }));
+  } catch (e) { $('watch-hint').textContent = '✗ ' + e.message; }
+}
+
+async function createWatcher() {
+  if (!state.watermarkId) return;
+  const dir = $('watch-dir').value.trim();
+  if (!dir) { $('watch-hint').textContent = '填监听目录绝对路径'; return; }
+  $('watch-hint').textContent = '建立中…';
+  try {
+    await api('/api/watchers', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ inputDir: dir, outputDir: $('watch-outdir').value.trim(),
+        recursive: $('watch-recursive').checked,
+        watermarkId: state.watermarkId, groups: state.groups, options: options() }) });
+    $('watch-hint').textContent = '监听已建立 ✓ 新图片落盘将自动加水印';
+    refreshWatchers();
+  } catch (e) { $('watch-hint').textContent = '✗ ' + e.message; }
 }
 
 async function run() {
@@ -620,6 +664,7 @@ async function run() {
     uid: src.uid,
     options: options(),
     groups: state.groups,
+    skipProcessed: $('opt-skipdone').checked && !$('opt-overwrite').checked,
     recursive: $('opt-recursive').checked && src.mode !== 'local-files',
     overwrite,
     outputDir: overwrite ? null : $('opt-outdir').value.trim() || null,
@@ -650,7 +695,7 @@ async function pollJob(jobId) {
     $('job-summary').textContent = j.status === 'running'
       ? `处理中 ${j.done}/${j.total || '…'}（成功 ${j.ok}，失败 ${j.failed}）`
       : j.status === 'done'
-        ? `完成：成功 ${j.ok}，失败 ${j.failed}，共 ${j.total}`
+        ? `完成：成功 ${j.ok}，失败 ${j.failed}${j.skipped ? `，跳过 ${j.skipped}` : ''}，共 ${j.total + (j.skipped || 0)}`
         : `✗ ${j.error}`;
     const lines = (j.results || []).slice(-200).map((r) =>
       `<div class="${r.ok ? 'done' : 'fail'}">${r.ok ? '✓' : '✗'} ${esc(r.name)}${r.ok ? '' : '  ' + esc(r.error)}</div>`);
@@ -695,6 +740,9 @@ function init() {
   $('preset-del').addEventListener('click', delPreset);
   $('preset-select').addEventListener('change', (e) => { if (e.target.value) applyPreset(e.target.value); });
   renderPresetSelect();
+  $('watch-create').addEventListener('click', createWatcher);
+  $('watch-refresh').addEventListener('click', refreshWatchers);
+  refreshWatchers();
 
   $('wm-file').addEventListener('change', (e) => onWmFiles(Array.from(e.target.files || [])));
   if (native) {

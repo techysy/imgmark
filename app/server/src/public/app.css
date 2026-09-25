@@ -176,3 +176,10 @@ footer { text-align: center; color: var(--text-3); font-size: 12px; padding: 18p
 .gc-ctrl .grid9 { min-width: 150px; }
 .gc-ctrl .grid9 button { padding: 3px 4px; font-size: 11px; }
 .field.dim { opacity: .45; }
+
+/* 文件夹监听 */
+.watch-item { border: 1px solid var(--border-subtle); border-radius: 10px; padding: 8px 10px; margin-top: 8px;
+  background: var(--surface-2); display: flex; flex-direction: column; gap: 4px; font-size: 12px; }
+.watch-item .tag { font-size: 11px; padding: 1px 8px; border-radius: 10px;
+  background: color-mix(in srgb, var(--ok) 12%, transparent); color: var(--ok); flex-shrink: 0; }
+.watch-item.paused .tag { background: var(--warn-soft, rgba(245,158,11,.12)); color: #d97706; }

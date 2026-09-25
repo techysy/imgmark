@@ -195,6 +195,9 @@
         <button id="outdir-pick" class="btn hidden">选择文件夹</button>
         <label class="check danger"><input type="checkbox" id="opt-overwrite"> 覆盖原图（危险）</label>
       </div>
+      <div class="row-inline wrap">
+        <label class="check"><input type="checkbox" id="opt-skipdone"> 跳过已处理（本地数据库校验，避免重复输出水印图）</label>
+      </div>
       <div class="row-inline">
         <button id="run" class="btn primary big" disabled>开始处理</button>
         <span id="run-hint" class="muted">先选水印文件和图片来源</span>
@@ -207,6 +210,22 @@
       <div class="progress"><div id="bar"></div></div>
       <div id="job-summary" class="muted">空闲</div>
       <div id="job-log" class="log"></div>
+    </div>
+
+    <!-- ⑥ 文件夹监听 -->
+    <div class="card">
+      <h2>⑥ 文件夹监听 <small>新图片落盘自动加水印 · 本地数据库校验不重复处理</small></h2>
+      <div class="row-inline">
+        <input type="text" id="watch-dir" placeholder="监听目录（绝对路径），如 C:\photos\inbox" class="path-input" style="flex:1;min-width:240px">
+      </div>
+      <div class="row-inline wrap">
+        <label class="check"><input type="checkbox" id="watch-recursive"> 包含子目录</label>
+        <span>输出到 <input type="text" id="watch-outdir" class="path-input short" value="_watched"></span>
+        <button id="watch-create" class="btn" disabled>建立监听</button>
+        <button id="watch-refresh" class="btn ghost">刷新状态</button>
+      </div>
+      <div id="watch-hint" class="notes">以当前 logo 与分组配置为准建立监听；输出目录内的文件不会再次处理；服务重启后监听自动恢复，水印失效时需重建</div>
+      <div id="watch-list"></div>
     </div>
   </section>
 </main>

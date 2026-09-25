@@ -14,6 +14,8 @@ const sharp = require('sharp');
 
 const { prepareWatermark, mergeWatermarks, composeWatermark, composeGroups, buildGroupWatermark, analyzeInk, WM_INPUT_EXTS, extOf } = require('./core/watermark');
 const { runBatch } = require('./core/batch');
+const { ProcessDB } = require('./core/db');
+const { WatcherManager } = require('./core/watcher');
 const { TrimAppClient } = require('./fnos/trimapp');
 const { createFnosRouter } = require('./fnos/routes');
 
@@ -36,6 +38,25 @@ function loadConfig() {
 
 const fnos = new TrimAppClient();
 const app = express();
+
+// 本地处理数据库 + 文件夹监听（DATA_DIR 下持久化）
+const db = new ProcessDB(path.join(DATA_DIR, 'process-db.json'));
+const watchers = new WatcherManager({
+  db,
+  stateFile: path.join(DATA_DIR, 'watchers.json'),
+  resolveTarget: async (w) => {
+    const options = { ...(w.cfg.options || {}) };
+    if (Array.isArray(w.cfg.groups) && w.cfg.groups.length) {
+      const set = logoSets.get(w.cfg.watermarkId);
+      if (!set) return null;
+      return { groups: await resolveGroups(set, w.cfg.groups, !!options.autoColor), options };
+    }
+    const wm = watermarks.get(w.cfg.watermarkId);
+    if (!wm) return null;
+    const watermarkAlt = options.autoColor && wm.altPath ? fs.readFileSync(wm.altPath) : null;
+    return { watermark: fs.readFileSync(wm.path), watermarkAlt, options };
+  },
+});
 const numOr = (v, def) => { const n = Number(v); return Number.isFinite(n) ? n : def; };
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -480,12 +501,14 @@ app.post('/api/process', upload.array('files'), express.json(), async (req, res)
       const result = await runBatch({
         inputDir, files: filesArg, outputDir,
         watermark, watermarkAlt, groups: groupDefs, options,
+        db, skipProcessed: !!payload.skipProcessed && !overwrite, watermarkId: payload.watermarkId,
         recursive: !!payload.recursive,
         overwrite,
         suffix: payload.suffix || '_wm',
         concurrency: Math.max(1, Math.min(8, Number(payload.concurrency) || cfg.concurrency)),
         onProgress,
       });
+      job.skipped = result.skipped.length;
       Object.assign(job, { status: 'done', total: result.total, ok: result.ok, failed: result.failed, results: result.results.map((r) => ({ name: path.basename(r.input), ok: r.ok, error: r.error || null, output: r.output })), finishedAt: Date.now() });
     } catch (e) {
       job.status = 'error'; job.error = e.message; job.finishedAt = Date.now();
@@ -509,6 +532,38 @@ app.get('/api/jobs/:id/file/:idx', (req, res) => {
   if (!job || !r || !r.output || job.dirKind !== 'upload') return res.status(404).json({ error: '文件不存在' });
   res.download(r.output, r.name);
 });
+
+// ---- 文件夹监听（新图落盘自动加水印，本地数据库去重） ----
+app.get('/api/watchers', (req, res) => res.json({ watchers: watchers.list() }));
+app.post('/api/watchers', express.json(), async (req, res) => {
+  try {
+    const { inputDir, outputDir, recursive, suffix, watermarkId, groups, options } = req.body || {};
+    if (!inputDir || !path.isAbsolute(String(inputDir))) return res.status(400).json({ error: '监听目录需为绝对路径' });
+    if (!fs.existsSync(inputDir) || !fs.statSync(inputDir).isDirectory()) return res.status(400).json({ error: `目录不存在：${inputDir}` });
+    const inDir = path.resolve(inputDir);
+    // 相对输出名锚定到监听目录（同 process 端点约定，避免落到服务进程 CWD）
+    let outDir = outputDir && String(outputDir).trim() ? String(outputDir).trim() : loadConfig().outputDirName;
+    if (!path.isAbsolute(outDir)) outDir = path.join(inDir, outDir);
+    outDir = path.resolve(outDir);
+    if (outDir === inDir) return res.status(400).json({ error: '输出目录不能与监听目录相同（防止水印图再次被处理）' });
+    const hasTarget = (Array.isArray(groups) && groups.length && logoSets.get(watermarkId)) || watermarks.get(watermarkId);
+    if (!hasTarget) return res.status(404).json({ error: '水印不存在或服务已重启，请先在页面重新准备' });
+    const cfg = {
+      inputDir: inDir, outputDir: outDir,
+      recursive: !!recursive, overwrite: false,
+      suffix: suffix || '_wm', watermarkId,
+      groups: Array.isArray(groups) ? groups : null,
+      options: { autoColor: !!(options && options.autoColor), sizeBase: (options && options.sizeBase) || 'long' },
+    };
+    res.json(watchers.create(cfg));
+  } catch (e) {
+    console.error('[watchers]', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+app.delete('/api/watchers/:id', (req, res) => res.json({ ok: watchers.remove(req.params.id) }));
+app.post('/api/watchers/:id/rescan', (req, res) => res.json({ ok: watchers.rescan(req.params.id) }));
+app.get('/api/db/stats', (req, res) => res.json({ records: db.size }));
 
 // 本地模式目录浏览（辅助选路径）
 app.post('/api/browse', express.json(), async (req, res) => {
