@@ -566,8 +566,9 @@ function init() {
   };
   $('wm-file').addEventListener('change', (e) => onWmFiles(Array.from(e.target.files || [])));
   if (native) {
-    document.querySelector('label[for="wm-file"], .file-btn').closest('.row').querySelector('.file-btn')
-      .addEventListener('click', async (e) => {
+    // 直接用 id 定位按钮：新增黑白 logo 槽位后 .file-btn 首元素已变成 pair 槽，
+    // 旧的选择器会拿到 null 引发 init 中断（桌面壳内所有按钮失联）
+    $('wm-file-btn').addEventListener('click', async (e) => {
         e.preventDefault();
         const picked = await native.pickWatermark();
         const list = (Array.isArray(picked) ? picked : picked ? [picked] : [])
