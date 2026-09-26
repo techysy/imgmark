@@ -59,6 +59,10 @@ flowchart LR
     C --> D["逐张合成<br/>亮度自适应黑白<br/>EXIF 摆正<br/>保留元数据"]
     D --> E["输出<br/>保持原格式或转换<br/>重名自动加序号"]
     D -. 记录 .-> F[("本地数据库<br/>已处理跳过")]
+    PAD["&nbsp;<br/>&nbsp;"]
+    F ~~~ PAD
+
+    style PAD fill:transparent,stroke:none,color:transparent
 ```
 
 ## 功能
