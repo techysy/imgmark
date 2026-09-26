@@ -22,6 +22,7 @@ const { createFnosRouter } = require('./fnos/routes');
 const PORT = Number(process.env.PORT || 28110);
 const HOST = process.env.HOST || '0.0.0.0';
 const APPNAME = process.env.TRIM_APPNAME || 'imgmark';
+const APP_VERSION = require('../package.json').version;
 
 // 数据目录：fpk 环境 TRIM_PKGVAR，本地开发用项目内 data/
 const DATA_DIR = process.env.IMGMARK_DATA_DIR || process.env.TRIM_PKGVAR || path.join(__dirname, '..', '..', '..', 'data');
@@ -84,7 +85,7 @@ async function smallPreview(buffer, width = 320) {
 
 // ---- 基础路由 ----
 app.get('/api/health', (req, res) => res.json({ ok: true, app: APPNAME, dataDir: DATA_DIR }));
-app.get('/api/config', (req, res) => res.json(loadConfig()));
+app.get('/api/config', (req, res) => res.json({ ...loadConfig(), version: APP_VERSION }));
 app.use('/vendor', express.static(path.join(__dirname, '..', 'node_modules', '@trimjs', 'web-app', 'dist')));
 app.use(express.static(path.join(__dirname, 'public')));
 app.use('/api/fnos', createFnosRouter({ client: fnos, listImages: null }));

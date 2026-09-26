@@ -25,6 +25,14 @@ const state = {
 };
 let cropMode = false, dragStart = null;
 
+// ---------- 图标（Lucide 风格线性图标，与 CreditDaddy 同款，currentColor） ----------
+const svg = (d) => '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' + d + '</svg>';
+const I = {
+  github: svg('<path d="M15 22v-4a4.8 4.8 0 0 0-1-3.5c3 0 6-2 6-5.5.08-1.25-.27-2.48-1-3.5.28-1.15.28-2.35 0-3.5 0 0-1 0-3 1.5-2.64-.5-5.36-.5-8 0C6 2 5 2 5 2c-.3 1.15-.3 2.35 0 3.5A5.4 5.4 0 0 0 4 9c0 3.5 3 5.5 6 5.5-.39.49-.68 1.05-.85 1.65S8.93 17.38 9 18v4"/><path d="M9 18c-4.51 2-5-2-7-2"/>'),
+  sun: svg('<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>'),
+  moon: svg('<path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/>'),
+};
+
 // 空状态占位图（与 index.html 中的初始 src 保持一致）
 const PLACEHOLDER_WM = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='190' height='150'%3E%3Ctext x='95' y='70' text-anchor='middle' font-family='sans-serif' font-size='12' fill='%239aa0a6'%3E添加 logo 后预览%3C/text%3E%3Ctext x='95' y='92' text-anchor='middle' font-family='sans-serif' font-size='11' fill='%23b9bec5'%3E支持 AI / SVG / PNG / JPG%3C/text%3E%3C/svg%3E";
 const PLACEHOLDER_STYLE = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='420' height='280'%3E%3Crect x='0' y='0' width='420' height='280' fill='%23dde3ea'/%3E%3Ccircle cx='90' cy='70' r='42' fill='%23ffffff' opacity='.35'/%3E%3Crect x='280' y='180' width='110' height='66' fill='%233d4f63' opacity='.3' rx='8'/%3E%3Ctext x='210' y='145' text-anchor='middle' font-family='sans-serif' font-size='13' fill='%237a8494'%3E添加 logo 并配置分组后预览%3C/text%3E%3C/svg%3E";
@@ -719,13 +727,19 @@ function applyTheme(t) {
   document.documentElement.dataset.theme = t;
   localStorage.setItem('imgmark_theme', t);
   const b = $('btn-theme');
-  if (b) b.textContent = t === 'dark' ? '☀️' : '🌙';
+  if (b) b.innerHTML = t === 'dark' ? I.sun : I.moon;
 }
 
 function init() {
   applyTheme(document.documentElement.dataset.theme || 'light');
   $('btn-theme').addEventListener('click', () =>
     applyTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'));
+  $('btn-home').innerHTML = I.github;
+  // 桌面壳：fnOS 状态无意义，隐藏；页脚换桌面版文案
+  if (native) {
+    document.querySelector('header .status').classList.add('hidden');
+    document.getElementById('page-footer').textContent = '桌面版 · 图片与水印数据均在本机处理 · 关闭窗口即缩到托盘，监听持续运行';
+  }
 
   // 全局滑杆联动（布局滑杆在各分组卡片内自绑定）
   const slider = (bar, label) => { const b = $(bar); if (b) b.addEventListener('input', () => { $(label).textContent = b.value; }); };
@@ -834,7 +848,10 @@ function init() {
   $('run').addEventListener('click', run);
   $('run').disabled = true;
 
-  api('/api/config').then((c) => { $('opt-outdir').value = c.outputDirName || '_watermarked'; }).catch(() => {});
+  api('/api/config').then((c) => {
+    $('opt-outdir').value = c.outputDirName || '_watermarked';
+    $('app-ver').textContent = `v${c.version} · ${native ? '桌面版' : '批量图片水印'}`;
+  }).catch(() => {});
   loadFnosStatus();
 }
 
