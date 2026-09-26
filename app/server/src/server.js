@@ -12,7 +12,7 @@ const express = require('express');
 const multer = require('multer');
 const sharp = require('sharp');
 
-const { prepareWatermark, mergeWatermarks, composeWatermark, composeGroups, buildGroupWatermark, analyzeInk, WM_INPUT_EXTS, extOf } = require('./core/watermark');
+const { prepareWatermark, mergeWatermarks, composeWatermark, composeGroups, buildGroupWatermark, analyzeInk, IMAGE_EXTS, WM_INPUT_EXTS, extOf } = require('./core/watermark');
 const { runBatch } = require('./core/batch');
 const { ProcessDB } = require('./core/db');
 const { WatcherManager } = require('./core/watcher');
@@ -28,7 +28,21 @@ const APP_VERSION = require('../package.json').version;
 const DATA_DIR = process.env.IMGMARK_DATA_DIR || process.env.TRIM_PKGVAR || path.join(__dirname, '..', '..', '..', 'data');
 fs.mkdirSync(DATA_DIR, { recursive: true });
 const WM_DIR = path.join(os.tmpdir(), 'imgmark-wm');
-fs.mkdirSync(WM_DIR, { recursive: true });
+const JOBS_DIR = path.join(os.tmpdir(), 'imgmark-jobs');
+const UPLOAD_DIR = path.join(os.tmpdir(), 'imgmark-uploads');
+for (const d of [WM_DIR, JOBS_DIR, UPLOAD_DIR]) fs.mkdirSync(d, { recursive: true });
+
+// 水印映射只在内存里，重启后旧的临时产物全是孤儿；清理 24h 前的（留余量给同机其它实例）
+function sweepStale(dir, maxAgeMs) {
+  const cutoff = Date.now() - maxAgeMs;
+  let ents = [];
+  try { ents = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+  for (const ent of ents) {
+    const full = path.join(dir, ent.name);
+    try { if (fs.statSync(full).mtimeMs < cutoff) fs.rmSync(full, { recursive: true, force: true }); } catch { /* 忽略 */ }
+  }
+}
+for (const d of [WM_DIR, JOBS_DIR, UPLOAD_DIR]) sweepStale(d, 24 * 3600 * 1000);
 
 // ---- 配置（fpk 设置页可写 TRIM_PKGVAR/config.json）----
 const DEFAULT_CFG = { outputDirName: '_watermarked', concurrency: 3, maxWatermarkSize: 1600 };
@@ -40,8 +54,20 @@ function loadConfig() {
 const fnos = new TrimAppClient();
 const app = express();
 
+// ---- 水印与任务状态 ----
+const watermarks = new Map(); // id -> {path,width,height,bgColor,notes,preview}
+const logoSets = new Map();   // setId -> { logos: [{key,path,altPath,name,width,height,monochrome,inkDark}] }（分组模式）
+const jobs = new Map();       // id -> {status,total,done,ok,failed,current,results,error,outputDir,dirKind}
+const JOB_TTL_MS = 6 * 3600 * 1000; // 结束超过该时长的任务从内存移除，上传模式的临时结果一并删除
+
 // 本地处理数据库 + 文件夹监听（DATA_DIR 下持久化）
 const db = new ProcessDB(path.join(DATA_DIR, 'process-db.json'));
+// 后台清理失效记录：启动时一次 + 每天一次（不阻塞启动）
+const compactDb = () => db.compact()
+  .then((n) => { if (n) console.log(`[db] 清理失效记录 ${n} 条，剩余 ${db.size}`); })
+  .catch((e) => console.error('[db] 清理失败:', e.message));
+setTimeout(compactDb, 5000).unref();
+setInterval(compactDb, 24 * 3600 * 1000).unref();
 const watchers = new WatcherManager({
   db,
   stateFile: path.join(DATA_DIR, 'watchers.json'),
@@ -59,15 +85,27 @@ const watchers = new WatcherManager({
   },
 });
 const numOr = (v, def) => { const n = Number(v); return Number.isFinite(n) ? n : def; };
+// 水印源小而少，放内存；批量图片走磁盘（最多 500×100MB，放内存会撑爆进程）
 const upload = multer({
   storage: multer.memoryStorage(),
+  limits: { fileSize: 100 * 1024 * 1024, files: 40 },
+  defParamCharset: 'utf8', // 浏览器按 UTF-8 发文件名，multer 默认按 latin1 解码会让中文名乱码
+});
+const uploadImages = multer({
+  dest: UPLOAD_DIR,
   limits: { fileSize: 100 * 1024 * 1024, files: 500 },
+  defParamCharset: 'utf8',
 });
 
-// ---- 水印与任务状态 ----
-const watermarks = new Map(); // id -> {path,width,height,bgColor,notes,preview}
-const logoSets = new Map();   // setId -> { logos: [{key,path,altPath,name,width,height,monochrome,inkDark}] }（分组模式）
-const jobs = new Map();       // id -> {status,total,done,ok,failed,current,results,error,outputDir,dirKind}
+function sweepJobs() {
+  const cutoff = Date.now() - JOB_TTL_MS;
+  for (const [id, job] of jobs) {
+    if (job.status === 'running' || !job.finishedAt || job.finishedAt > cutoff) continue;
+    jobs.delete(id);
+    if (job.dirKind === 'upload') fs.rm(path.join(JOBS_DIR, id), { recursive: true, force: true }, () => {});
+  }
+}
+setInterval(sweepJobs, 10 * 60 * 1000).unref();
 
 const POSITIONS = new Set(['nw', 'n', 'ne', 'w', 'c', 'e', 'sw', 's', 'se']);
 const clampNum = (v, min, max) => Math.max(min, Math.min(max, v));
@@ -400,10 +438,13 @@ function parseOptions(raw) {
     sizeBase: ['long', 'short', 'width'].includes(o.sizeBase) ? o.sizeBase : 'long',
     format: ['auto', 'png', 'jpeg', 'webp'].includes(o.format) ? o.format : 'auto',
     quality: Math.max(50, Math.min(100, numOr(o.quality, 90))),
+    mozjpeg: !!o.mozjpeg, // JPEG 体积优先（小 10-15%，编码慢约 5 倍）
   };
 }
 
-app.post('/api/process', upload.array('files'), express.json(), async (req, res) => {
+app.post('/api/process', uploadImages.array('files'), express.json(), async (req, res) => {
+  // 请求结束后清掉 multer 的落盘文件（上传模式已 rename 走的不受影响）
+  res.on('finish', () => { for (const f of req.files || []) fs.rm(f.path, { force: true }, () => {}); });
   try {
     const payload = req.body.payload ? JSON.parse(req.body.payload) : req.body;
     const options = parseOptions(payload.options);
@@ -428,7 +469,7 @@ app.post('/api/process', upload.array('files'), express.json(), async (req, res)
     let filesArgExplicit = null; // local-files：显式文件列表（桌面壳原生对话框）
     if (mode === 'upload') {
       if (!req.files || !req.files.length) return res.status(400).json({ error: '未收到图片文件' });
-      const jobTmp = path.join(os.tmpdir(), 'imgmark-jobs', jobId, 'out');
+      const jobTmp = path.join(JOBS_DIR, jobId, 'out');
       fs.mkdirSync(jobTmp, { recursive: true });
       dirKind = 'upload';
       inputDir = null;
@@ -449,7 +490,8 @@ app.post('/api/process', upload.array('files'), express.json(), async (req, res)
       if (!path.isAbsolute(inputDir)) return res.status(400).json({ error: '请输入绝对路径' });
       if (mode === 'fnos') {
         if (!fnos.isAvailable()) return res.status(501).json({ error: 'fnOS 开放 API 不可用：请在 fnOS 应用环境内使用，或改用本地路径/上传模式' });
-        const uid = Number(payload.uid || req.headers['x-trim-userid'] || 0);
+        // 网关身份头可信、payload.uid 由客户端填写不可信：有头时以头为准，防止冒用他人 uid 越权读写
+        const uid = Number(req.headers['x-trim-userid'] || payload.uid || 0);
         if (!Number.isInteger(uid) || uid <= 0) return res.status(400).json({ error: 'uid 无效' });
         const acl = await fnos.checkUserACL(uid, inputDir);
         const entry = Array.isArray(acl) ? acl[0] : acl;
@@ -469,12 +511,38 @@ app.post('/api/process', upload.array('files'), express.json(), async (req, res)
       outputDir = path.join(inputDir, outputDir);
     }
 
+    let filesArg = filesArgExplicit;
+    if (mode === 'upload') {
+      // multer 已落盘到 UPLOAD_DIR，按原文件名移进任务目录，统一走 fs 管线；同名文件自动加序号防互相覆盖
+      const inDir = path.join(JOBS_DIR, jobId, 'in');
+      fs.mkdirSync(inDir, { recursive: true });
+      const used = new Set();
+      filesArg = [];
+      for (const f of req.files) {
+        const ext = extOf(f.originalname);
+        if (!IMAGE_EXTS.has(ext)) continue;
+        const stem = path.basename(f.originalname, path.extname(f.originalname)).replace(/[\\/:*?"<>|]/g, '_') || 'image';
+        let name = stem + ext;
+        for (let n = 2; used.has(name.toLowerCase()); n++) name = `${stem}(${n})${ext}`;
+        used.add(name.toLowerCase());
+        const tmpFile = path.join(inDir, name);
+        fs.renameSync(f.path, tmpFile);
+        filesArg.push(tmpFile);
+      }
+    }
+
+    if (filesArg && !filesArg.length) {
+      fs.rm(path.join(JOBS_DIR, jobId), { recursive: true, force: true }, () => {});
+      return res.status(400).json({ error: '没有可处理的图片文件' });
+    }
+
     const job = {
       id: jobId, status: 'running', mode, dirKind, inputDir, outputDir, overwrite,
       total: 0, done: 0, ok: 0, failed: 0, current: null, results: [], error: null,
       startedAt: Date.now(),
     };
     jobs.set(jobId, job);
+    res.locals.jobId = jobId;
     res.json({ jobId, total: null });
 
     const watermark = groupDefs ? null : fs.readFileSync(wm.path);
@@ -487,16 +555,6 @@ app.post('/api/process', upload.array('files'), express.json(), async (req, res)
         if (p.current) job.results.push({ name: path.basename(p.current), ok: p.ok, error: p.error || null });
       }
     };
-
-    const filesArg = mode === 'upload'
-      ? req.files.filter((f) => ['.jpg', '.jpeg', '.png', '.webp', '.bmp', '.gif', '.tif', '.tiff', '.avif'].includes(extOf(f.originalname)))
-          .map((f) => { // 上传的文件落盘成临时文件，统一走 fs 管线
-            const tmpFile = path.join(os.tmpdir(), 'imgmark-jobs', jobId, 'in', f.originalname.replace(/[\\/]/g, '_'));
-            fs.mkdirSync(path.dirname(tmpFile), { recursive: true });
-            fs.writeFileSync(tmpFile, f.buffer);
-            return tmpFile;
-          })
-      : filesArgExplicit;
 
     try {
       const result = await runBatch({
@@ -513,10 +571,15 @@ app.post('/api/process', upload.array('files'), express.json(), async (req, res)
       Object.assign(job, { status: 'done', total: result.total, ok: result.ok, failed: result.failed, results: result.results.map((r) => ({ name: path.basename(r.input), ok: r.ok, error: r.error || null, output: r.output })), finishedAt: Date.now() });
     } catch (e) {
       job.status = 'error'; job.error = e.message; job.finishedAt = Date.now();
+    } finally {
+      if (mode === 'upload') fs.rm(path.join(JOBS_DIR, jobId, 'in'), { recursive: true, force: true }, () => {});
     }
   } catch (e) {
     console.error('[process]', e);
-    res.status(500).json({ error: e.message });
+    // 已回过 jobId 后再出错：记到任务上（再写响应会抛 ERR_HTTP_HEADERS_SENT，未处理的 rejection 会让进程退出）
+    const job = res.headersSent && jobs.get(res.locals.jobId);
+    if (job) Object.assign(job, { status: 'error', error: e.message, finishedAt: Date.now() });
+    else if (!res.headersSent) res.status(500).json({ error: e.message });
   }
 });
 
@@ -554,7 +617,7 @@ app.post('/api/watchers', express.json(), async (req, res) => {
       recursive: !!recursive, overwrite: false,
       suffix: suffix || '_wm', watermarkId,
       groups: Array.isArray(groups) ? groups : null,
-      options: { autoColor: !!(options && options.autoColor), sizeBase: (options && options.sizeBase) || 'long' },
+      options: parseOptions(options), // 完整保留输出格式/质量/位置等（此前只存了 autoColor+sizeBase）
     };
     res.json(watchers.create(cfg));
   } catch (e) {
@@ -578,7 +641,7 @@ app.post('/api/browse', express.json(), async (req, res) => {
       if (d.isDirectory()) dirs.push(d.name);
       else if (WM_INPUT_EXTS.has(extOf(d.name)) && extOf(d.name) !== '.ai' && extOf(d.name) !== '.svg') images.push(d.name);
     }
-    dirs.sort((a, b) => a.name && a.localeCompare(b, 'zh-CN'));
+    dirs.sort((a, b) => a.localeCompare(b, 'zh-CN'));
     images.sort((a, b) => a.localeCompare(b, 'zh-CN'));
     res.json({ path: dir, parent: path.dirname(dir), dirs: dirs.slice(0, 300), imageCount: images.length, images: images.slice(0, 50) });
   } catch (e) {
@@ -605,6 +668,8 @@ function start({ port = PORT, host = HOST, socketPath = process.env.SOCKET_PATH 
 
 if (require.main === module) {
   start().catch((e) => { console.error('[imgmark] 启动失败:', e.message); process.exit(1); });
+  // fnOS stop / Ctrl+C：默认信号处理不触发 'exit'，显式 exit 让数据库在退出前刷盘
+  for (const sig of ['SIGTERM', 'SIGINT']) process.on(sig, () => process.exit(0));
 }
 
 module.exports = { app, start, loadConfig };

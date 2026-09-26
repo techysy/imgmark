@@ -9,6 +9,7 @@ const path = require('path');
 const sharp = require('sharp');
 const { removeBackground } = require('./transparency');
 const { renderAiToPng } = require('../formats/ai');
+const { isBmp, bmpToPng, encodeBmp } = require('../formats/bmp');
 
 const IMAGE_EXTS = new Set(['.jpg', '.jpeg', '.png', '.webp', '.bmp', '.gif', '.tif', '.tiff', '.avif']);
 const WM_INPUT_EXTS = new Set(['.ai', '.svg', '.png', '.jpg', '.jpeg', '.webp', '.bmp', '.gif', '.tif', '.tiff', '.avif']);
@@ -77,7 +78,7 @@ async function prepareWatermark(inputBuffer, filename, opts = {}) {
     png = await sharp(inputBuffer, { density: Math.round(density) }).png().toBuffer();
     notes.push(`SVG 已栅格化（density ${Math.round(density)}）`);
   } else {
-    png = inputBuffer;
+    png = isBmp(inputBuffer) ? await bmpToPng(inputBuffer) : inputBuffer;
   }
 
   // 裁剪参考系 = 栅格化后的原始画布（不受裁剪/去边/缩放影响）
@@ -172,8 +173,15 @@ async function analyzeInk(buffer) {
   return { monochrome, dark, inkLum: Math.round(inkLum), altBuffer };
 }
 
-/** 墨迹平均亮度（只统计较实的不透明像素；缩放/透明度缩放不影响 RGB） */
-async function inkLuminance(buffer) {
+/** 墨迹平均亮度（只统计较实的不透明像素；缩放/透明度缩放不影响 RGB）。
+ *  批量任务里同一个水印 Buffer 会被每张图反复传入，按 Buffer 身份缓存，避免每张图重复解码水印 */
+const inkLumCache = new WeakMap();
+function inkLuminance(buffer) {
+  let p = inkLumCache.get(buffer);
+  if (!p) { p = computeInkLuminance(buffer); inkLumCache.set(buffer, p); }
+  return p;
+}
+async function computeInkLuminance(buffer) {
   const { data, info } = await sharp(buffer).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
   const { width, height } = info;
   let lumSum = 0, n = 0;
@@ -224,8 +232,18 @@ async function renderTileOverlay(wmBuffer, wmW, wmH, W, H, gapPx) {
       entries.push({ input: wmBuffer, left: Math.round(x0 + c * stepX), top: Math.round(y0 + r * stepY) });
     }
   }
-  return sharp({ create: { width: W, height: H, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } } })
-    .composite(entries).png().toBuffer();
+  // 输出 raw 而非 PNG：整图大小的叠加层做 PNG 压缩/解压非常耗时
+  const data = await sharp({ create: { width: W, height: H, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } } })
+    .composite(entries).raw().toBuffer();
+  return { input: data, raw: { width: W, height: H, channels: 4 }, left: 0, top: 0 };
+}
+
+/** 水印不能超出目标图（sharp composite 要求叠加层 ≤ 底图），超出时等比缩进 W×H */
+async function fitInside(buf, W, H) {
+  const m = await sharp(buf).metadata();
+  if (m.width <= W && m.height <= H) return { buf, width: m.width, height: m.height };
+  const out = await sharp(buf).resize(W, H, { fit: 'inside' }).png().toBuffer({ resolveWithObject: true });
+  return { buf: out.data, width: out.info.width, height: out.info.height };
 }
 
 /**
@@ -250,10 +268,12 @@ async function composeWatermark(targetBuffer, wmBuffer, o = {}, wmAltBuffer = nu
   const {
     position = 'se', sizePct = 20, opacity = 80, marginPct = 3,
     offsetX = 0, offsetY = 0, rotate = 0, tile = false, tileGapPct = 10,
-    format = 'auto', quality = 90, sizeBase = 'width',
+    format = 'auto', quality = 90, sizeBase = 'width', mozjpeg = false,
   } = o;
 
-  const meta = await sharp(targetBuffer).metadata();
+  const src = await loadTarget(targetBuffer);
+  targetBuffer = src.buffer;
+  const meta = src.meta;
   const oriented = meta.orientation && meta.orientation >= 5; // 5-8 需交换宽高
   const W = oriented ? meta.height : meta.width;
   const H = oriented ? meta.width : meta.height;
@@ -265,9 +285,9 @@ async function composeWatermark(targetBuffer, wmBuffer, o = {}, wmAltBuffer = nu
     if (rotate) p = p.rotate(rotate, { background: { r: 0, g: 0, b: 0, alpha: 0 } });
     return p.png().toBuffer();
   };
-  let wmBuf = await buildWm(wmBuffer);
-  const wmMeta = await sharp(wmBuf).metadata();
-  let wmW = wmMeta.width; const wmH = wmMeta.height;
+  const built = await fitInside(await buildWm(wmBuffer), W, H);
+  let wmBuf = built.buf;
+  const wmW = built.width, wmH = built.height;
 
   const margin = Math.round(Math.min(W, H) * marginPct / 100);
 
@@ -277,16 +297,15 @@ async function composeWatermark(targetBuffer, wmBuffer, o = {}, wmAltBuffer = nu
     let region = null;
     if (!tile) {
       const [x, y] = positionXY(position, W, H, wmW, wmH, margin);
-      const left = Math.max(0, Math.min(W - 2, x + offsetX));
-      const top = Math.max(0, Math.min(H - 2, y + offsetY));
+      const left = clampNum(Math.round(x + offsetX), 0, W - 2);
+      const top = clampNum(Math.round(y + offsetY), 0, H - 2);
       region = { left, top, width: Math.max(2, Math.min(wmW, W - left)), height: Math.max(2, Math.min(wmH, H - top)) };
     }
     const lum = await regionLuminance(targetBuffer, region);
     const [lumBase, lumAlt] = await Promise.all([inkLuminance(wmBuffer), inkLuminance(wmAltBuffer)]);
-    const altBuf = await buildWm(wmAltBuffer);
     const wantDark = lum > LUM_THRESHOLD;
     const baseIsDarker = lumBase <= lumAlt;
-    wmBuf = wantDark ? (baseIsDarker ? wmBuf : altBuf) : (baseIsDarker ? altBuf : wmBuf);
+    if (wantDark !== baseIsDarker) wmBuf = (await fitInside(await buildWm(wmAltBuffer), W, H)).buf; // 只在需要时才缩放反色变体
   }
 
   // 透明度
@@ -294,33 +313,41 @@ async function composeWatermark(targetBuffer, wmBuffer, o = {}, wmAltBuffer = nu
 
   const base = sharp(targetBuffer).rotate().withMetadata(); // 自动按 EXIF 摆正 + 保留 EXIF/ICC 等元数据
 
-  let overlay;
   if (tile) {
     const gap = Math.max(0, Math.round(wmW * tileGapPct / 100));
-    overlay = await renderTileOverlay(wmBuf, wmW, wmH, W, H, gap);
+    base.composite([await renderTileOverlay(wmBuf, wmW, wmH, W, H, gap)]);
   } else {
+    // 直接把水印叠到底图上（不再先生成一张与原图等大的透明 PNG，大图上省掉一次整图编解码）
     const [x, y] = positionXY(position, W, H, wmW, wmH, margin);
-    overlay = await sharp({ create: { width: W, height: H, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } } })
-      .composite([{ input: wmBuf, left: Math.max(0, x + offsetX), top: Math.max(0, y + offsetY) }])
-      .png().toBuffer();
+    base.composite([{ input: wmBuf, left: clampNum(Math.round(x + offsetX), 0, W - wmW), top: clampNum(Math.round(y + offsetY), 0, H - wmH) }]);
   }
 
-  base.composite([{ input: overlay, left: 0, top: 0 }]);
-
-  return encodeCompose(base, meta, { format, quality });
+  return encodeCompose(base, meta, { format, quality, mozjpeg });
 }
 
 /** 合成结果编码（保持原格式/指定格式 + 质量）。composeWatermark / composeGroups 共用 */
-async function encodeCompose(base, meta, { format = 'auto', quality = 90 }) {
+/** 读目标图元数据；BMP 先转 PNG 进 sharp 管线，但 meta.format 仍记为 bmp（auto 格式时按 BMP 写回） */
+async function loadTarget(buffer) {
+  if (!isBmp(buffer)) return { buffer, meta: await sharp(buffer).metadata() };
+  const png = await bmpToPng(buffer);
+  return { buffer: png, meta: { ...(await sharp(png).metadata()), format: 'bmp' } };
+}
+
+async function encodeCompose(base, meta, { format = 'auto', quality = 90, mozjpeg = false }) {
   const fmt = format === 'auto' ? (meta.format || 'png') : format;
   let out, ext;
   switch (fmt) {
-    case 'jpeg': case 'jpg': out = base.jpeg({ quality, mozjpeg: true }); ext = '.jpg'; break;
+    // mozjpeg 体积小约 10-15%，但编码慢约 5 倍（24MP 约 570ms vs 90ms），默认用 libjpeg-turbo
+    case 'jpeg': case 'jpg': out = base.jpeg({ quality, mozjpeg: !!mozjpeg }); ext = '.jpg'; break;
     case 'webp': out = base.webp({ quality }); ext = '.webp'; break;
-    case 'avif': out = base.avif({ quality }); ext = '.avif'; break;
+    case 'avif': case 'heif': out = base.avif({ quality }); ext = '.avif'; break; // sharp 把 AVIF 输入报告为 heif
     case 'tiff': out = base.tiff(); ext = '.tiff'; break;
     case 'gif': out = base.gif(); ext = '.gif'; break;
-    default: out = base.png({ compressionLevel: 9 }); ext = '.png';
+    case 'bmp': { // sharp 不能写 BMP，取 raw 自行编码
+      const { data, info } = await base.raw().toBuffer({ resolveWithObject: true });
+      return { buffer: encodeBmp(data, info.width, info.height, info.channels), ext: '.bmp' };
+    }
+    default: out = base.png({ compressionLevel: 6 }); ext = '.png'; // 照片类内容上 6 比 9 快约 2 倍且不更大
   }
   return { buffer: await out.toBuffer(), ext };
 }
@@ -391,9 +418,11 @@ function sizeBaseDim(W, H, sizeBase) {
  * @param {object} o format/quality（输出编码，全局）+ sizeBase: 'long'|'short'|'width'（大小基准，默认 width）
  */
 async function composeGroups(targetBuffer, groupDefs, o = {}) {
-  const { format = 'auto', quality = 90, sizeBase = 'width' } = o;
+  const { format = 'auto', quality = 90, sizeBase = 'width', mozjpeg = false } = o;
   if (!groupDefs.length) throw new Error('没有可合成的分组');
-  const meta = await sharp(targetBuffer).metadata();
+  const src = await loadTarget(targetBuffer);
+  targetBuffer = src.buffer;
+  const meta = src.meta;
   const oriented = meta.orientation && meta.orientation >= 5;
   const W = oriented ? meta.height : meta.width;
   const H = oriented ? meta.width : meta.height;
@@ -402,10 +431,10 @@ async function composeGroups(targetBuffer, groupDefs, o = {}) {
   for (const g of groupDefs) {
     const go = g.options || {};
     const targetW = Math.max(8, Math.round(baseDim * clampNum(go.sizePct ?? 20, 2, 100) / 100));
-    const buildWm = (src) => sharp(src).resize({ width: targetW }).png().toBuffer();
-    let wmBuf = await buildWm(g.wmBuffer);
-    const wmMeta = await sharp(wmBuf).metadata();
-    const wmW = wmMeta.width, wmH = wmMeta.height;
+    const buildWm = async (src) => fitInside(await sharp(src).resize({ width: targetW }).png().toBuffer(), W, H);
+    const built = await buildWm(g.wmBuffer);
+    let wmBuf = built.buf;
+    const wmW = built.width, wmH = built.height;
     // 亮度自适应黑白：分组内所有 logo 都有反色变体时，整组按落点亮度二选一
     if (go.autoColor && Buffer.isBuffer(g.wmAltBuffer)) {
       const margin = Math.round(Math.min(W, H) * clampNum(go.marginPct ?? 3, 0, 30) / 100);
@@ -415,23 +444,22 @@ async function composeGroups(targetBuffer, groupDefs, o = {}) {
       const region = { left, top, width: Math.max(2, Math.min(wmW, W - left)), height: Math.max(2, Math.min(wmH, H - top)) };
       const lum = await regionLuminance(targetBuffer, region);
       const [lumBase, lumAlt] = await Promise.all([inkLuminance(g.wmBuffer), inkLuminance(g.wmAltBuffer)]);
-      const altBuf = await buildWm(g.wmAltBuffer);
       const wantDark = lum > LUM_THRESHOLD;
       const baseIsDarker = lumBase <= lumAlt;
-      wmBuf = wantDark ? (baseIsDarker ? wmBuf : altBuf) : (baseIsDarker ? altBuf : wmBuf);
+      if (wantDark !== baseIsDarker) wmBuf = (await buildWm(g.wmAltBuffer)).buf;
     }
     wmBuf = await scaledAlphaOpacity(wmBuf, Math.max(1, Math.min(100, go.opacity ?? 80)));
     const margin = Math.round(Math.min(W, H) * clampNum(go.marginPct ?? 3, 0, 30) / 100);
     const [x, y] = positionXY(go.position || 'se', W, H, wmW, wmH, margin);
     entries.push({
       input: wmBuf,
-      left: Math.max(0, Math.round(x + (go.offsetX || 0))),
-      top: Math.max(0, Math.round(y + (go.offsetY || 0))),
+      left: clampNum(Math.round(x + (go.offsetX || 0)), 0, W - wmW),
+      top: clampNum(Math.round(y + (go.offsetY || 0)), 0, H - wmH),
     });
   }
   const base = sharp(targetBuffer).rotate().withMetadata();
   base.composite(entries);
-  return encodeCompose(base, meta, { format, quality });
+  return encodeCompose(base, meta, { format, quality, mozjpeg });
 }
 
 /**

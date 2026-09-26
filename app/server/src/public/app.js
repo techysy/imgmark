@@ -202,6 +202,7 @@ async function applyPreset(name) {
     const o = meta.data.options || {};
     if (o.format) $('opt-format').value = o.format;
     if (o.quality) $('opt-quality').value = o.quality;
+    if ($('opt-mozjpeg')) $('opt-mozjpeg').checked = !!o.mozjpeg;
     if (o.sizeBase) $('opt-sizebase').value = o.sizeBase;
     if (o.autoColor && !$('opt-autocolor').disabled) $('opt-autocolor').checked = true;
     renderLogoList(); renderGroups();
@@ -465,6 +466,7 @@ function options() {
   return {
     format: $('opt-format').value,
     quality: +$('opt-quality').value,
+    mozjpeg: !!($('opt-mozjpeg') && $('opt-mozjpeg').checked),
     sizeBase: $('opt-sizebase') ? $('opt-sizebase').value : 'long',
     autoColor: !$('opt-autocolor').disabled && $('opt-autocolor').checked,
   };

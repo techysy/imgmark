@@ -100,6 +100,7 @@ async function removeBackground(buffer, opts = {}) {
 
   // 羽化 + 去色染：非背景但与背景相邻的像素按距离算软 alpha
   const tLow = tol * 0.35, tHigh = Math.max(tol * 1.35, tLow + 1);
+  const bgRGB = [bgColor.r, bgColor.g, bgColor.b];
   const applyRamp = (p) => {
     const i = p * channels;
     const d = Math.sqrt(dist2(data, i, bgColor));
@@ -108,7 +109,7 @@ async function removeBackground(buffer, opts = {}) {
     if (a > 0.02 && a < 1) {
       // decontaminate: C' = (C - bg·(1-a)) / a
       for (let c = 0; c < 3; c++) {
-        const v = (data[i + c] - bgColor[['r', 'g', 'b'][c]] * (1 - a)) / a;
+        const v = (data[i + c] - bgRGB[c] * (1 - a)) / a;
         data[i + c] = Math.max(0, Math.min(255, Math.round(v)));
       }
     }

@@ -45,7 +45,8 @@ async function startServer() {
   const { start } = require(path.join(serverRoot, 'src', 'server.js'));
   for (let p = BASE_PORT; p < BASE_PORT + 20; p++) {
     if (await probeImgmark(p)) { boundPort = p; return 'reused-mid'; }
-    try { await start({ port: p }); boundPort = p; return 'started'; }
+    // 只绑回环地址：桌面版无鉴权，绑 0.0.0.0 等于把本机文件浏览/改写接口暴露给整个局域网
+    try { await start({ port: p, host: '127.0.0.1' }); boundPort = p; return 'started'; }
     catch { /* 端口被其它程序占用，换下一个 */ }
   }
   throw new Error('28110 起连续 20 个端口均不可用');

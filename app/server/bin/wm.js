@@ -6,7 +6,7 @@
  *                   [--trim] [--crop x,y,w,h] [--merge] [--gap 10] [--unequal]
  *   imgmark apply   -w <水印文件>... -i <图片目录> [-o <输出目录>] [--pos se] [--size 20] [--opacity 80]
  *                   [--margin 3] [--tile] [--tile-gap 10] [--rotate 0] [--format auto|png|jpeg|webp]
- *                   [--quality 90] [--recursive] [--overwrite] [--suffix _wm] [--concurrency 3]
+ *                   [--quality 90] [--mozjpeg] [--recursive] [--overwrite] [--suffix _wm] [--concurrency 3]
  *                   [--bg auto|white|black] [--tolerance 40] [--force] [--trim] [--crop x,y,w,h]
  *                   [--gap 10] [--unequal]
  *
@@ -28,7 +28,7 @@ function usage() {
                   [--max-size 1600] [--force] [--trim] [--crop "x,y,w,h[;...]"] [--merge] [--gap 10] [--unequal]
   imgmark apply   -w <水印文件>... -i <图片目录> [-o <输出目录>] [--pos se] [--size 20] [--opacity 80]
                   [--margin 3] [--tile] [--tile-gap 10] [--rotate 0] [--format auto|png|jpeg|webp]
-                  [--quality 90] [--recursive] [--overwrite] [--suffix _wm] [--concurrency 3]
+                  [--quality 90] [--mozjpeg] [--recursive] [--overwrite] [--suffix _wm] [--concurrency 3]
                   [--bg auto|white|black] [--tolerance 40] [--force] [--trim] [--crop "..."] [--gap 10] [--unequal]
   imgmark serve   启动 Web 界面（浏览器批量操作 + fnOS 授权目录；PORT/HOST 环境变量可覆盖）
 
@@ -172,6 +172,7 @@ async function main() {
         tileGapPct: numOr(args['tile-gap'], 10),
         format: ['auto', 'png', 'jpeg', 'webp'].includes(args.format) ? args.format : 'auto',
         quality: Number(args.quality) || 90,
+        mozjpeg: !!args.mozjpeg,
       },
     });
     console.log(`\n完成：成功 ${result.ok}，失败 ${result.failed}，共 ${result.total}`);

@@ -1,6 +1,6 @@
 {
   "name": "imgmark",
-  "version": "0.7.2",
+  "version": "0.7.3",
   "description": "ImgMark 批量图片水印 — AI/SVG/PNG/JPG 水印源白底黑底自动去底转透明 PNG，多 logo 并排/逐个裁剪，飞牛 fnOS 授权目录支持",
   "main": "src/core/watermark.js",
   "exports": {
@@ -52,7 +52,7 @@
     "@napi-rs/canvas": "^0.1.80",
     "@trimjs/web-app": "^0.4.2",
     "express": "^4.21.2",
-    "multer": "^1.4.5-lts.1",
+    "multer": "^2.4.0",
     "pdfjs-dist": "^4.10.38",
     "sharp": "^0.33.5"
   }

@@ -23,7 +23,10 @@ cd app/server && npm install && npm start
 - 所有响应均为 JSON；出错 → 非 2xx + `{"error":"中文原因"}`（HTTP 400/404/500）
 - prepare 产物缓存在服务进程内存 + 临时目录：**服务重启后 watermarkId 失效**，需重新 POST `/api/prepare`
 - 图片格式：jpg/jpeg/png/webp/bmp/gif/tif/tiff/avif；水印源额外支持 ai（PDF 兼容模式）/ svg
-- 处理默认**不覆盖原图**，输出到输出目录下 `原文件名_wm.原扩展名`（`suffix` 可改）
+  （BMP 由内置编解码器处理：RLE 压缩 BMP 不支持；`.tif` 在 format=auto 时输出为 `.tiff`）
+- 处理默认**不覆盖原图**，输出到输出目录下 `原文件名_wm.原扩展名`（`suffix` 可改）；
+  同批/同一监听内输出重名（如 a.jpg、a.png 都强制输出 JPEG）时后者为 `原文件名(2)_wm.扩展名`
+- `options.mozjpeg=true`：JPEG 体积小约 10-15%，但编码慢约 5 倍；默认 false（libjpeg-turbo）
 
 ## 2. 任务 A：给文件夹批量加水印（最常用）
 
@@ -87,7 +90,8 @@ curl -s -X POST http://127.0.0.1:28110/api/watchers \
   -d '{"inputDir":"/abs/inbox","outputDir":"/abs/inbox/_watched","watermarkId":"<logoSetId>","groups":[{"logos":[0],"position":"se","sizePct":25,"marginPct":3}],"options":{"autoColor":true}}'
 ```
 
-- 触发：fs.watch 事件 + 周期扫描（30s）双保险；新图片写入稳定 2s 后处理
+- `options` 与 process 端点同构（format/quality/sizeBase/autoColor 等全部生效）
+- 触发：fs.watch 事件 + 周期扫描（30s）双保险；新图片写入稳定 2s 后处理；`recursive:true` 时子目录同样扫描
 - **去重**：本地数据库（路径+mtime+size 身份命中且输出仍在）或非覆盖模式下输出文件已存在 → 跳过；
   输出目录内的文件永不处理（防回环）
 - `GET /api/watchers` → 列表（status: watching/paused + stats{processed,skipped,failed} + lastError）

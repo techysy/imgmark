@@ -8,14 +8,23 @@ const path = require('path');
 const { composeWatermark, composeGroups, IMAGE_EXTS, extOf } = require('./watermark');
 const { ProcessDB } = require('./db');
 
-/** skipProcessed 的输出存在性预判（format=auto 时按源扩展名，jpeg 归一为 .jpg） */
+/** 源扩展名 → encodeCompose 在 format=auto 时实际写出的扩展名 */
+const AUTO_EXT = { '.jpeg': '.jpg', '.tif': '.tiff' };
+
+/** 输出扩展名预判（skipProcessed / 监听查重用，须与 encodeCompose 的实际输出一致） */
 function expectedExt(file, options) {
   const fmt = (options && options.format) || 'auto';
   if (fmt === 'auto') {
     const e = extOf(file);
-    return e === '.jpeg' ? '.jpg' : (e || '.png');
+    return AUTO_EXT[e] || e || '.png';
   }
   return '.' + (fmt === 'jpeg' ? 'jpg' : fmt);
+}
+
+/** child 是否位于 dir 内（含 dir 本身）；按路径段判断，避免 /a/out 误匹配 /a/out2 */
+function isInside(child, dir) {
+  const rel = path.relative(path.resolve(dir), path.resolve(child)); // win32 下大小写不敏感
+  return rel === '' || (rel !== '..' && !rel.startsWith('..' + path.sep) && !path.isAbsolute(rel));
 }
 
 async function listImages(dir, { recursive, skipDirs, out = [] }) {
@@ -50,13 +59,17 @@ async function mapPool(items, limit, worker) {
   return results;
 }
 
-function outPathFor(file, inputDir, outputDir, { suffix, overwrite, keepStructure, ext }) {
+/** tag：重名时插在原名与后缀之间的序号，如 "(2)" → a(2)_wm.jpg */
+function outPathFor(file, inputDir, outputDir, { suffix, overwrite, keepStructure, ext, tag = '' }) {
   if (overwrite) return file;
   const rel = keepStructure ? path.relative(inputDir, file) : path.basename(file);
   const dir = path.dirname(path.join(outputDir, rel));
   const base = path.basename(path.join(outputDir, rel), extOf(path.join(outputDir, rel)));
-  return path.join(dir, `${base}${suffix}${ext}`);
+  return path.join(dir, `${base}${tag}${suffix}${ext}`);
 }
+
+/** 路径比较键：Windows / macOS 文件系统默认大小写不敏感 */
+const pathKey = (p) => (process.platform === 'win32' || process.platform === 'darwin' ? path.resolve(p).toLowerCase() : path.resolve(p));
 
 /**
  * @param {object} p
@@ -120,10 +133,24 @@ async function runBatch(p) {
     ? { ...options, format: 'auto' } : options;
   const results = [];
   let done = 0, okCount = 0, failCount = 0;
+
+  // 同批输出重名（a.jpg 与 a.png 强制输出 JPEG 都会落到 a_wm.jpg）时后者加序号，不再互相覆盖。
+  // 按排序后的列表顺序预先分配，谁带序号是确定的，与并发完成顺序无关
+  const claimed = new Set();
+  const claim = (file, ext) => {
+    for (let n = 1; ; n++) {
+      const t = outPathFor(file, inputDir, outputDir, { suffix, overwrite, keepStructure, ext, tag: n === 1 ? '' : `(${n})` });
+      if (!claimed.has(pathKey(t))) { claimed.add(pathKey(t)); return t; }
+    }
+  };
+  const planned = overwrite ? null : list.map((f) => {
+    const ext = expectedExt(f, composeOptions);
+    return { ext, target: claim(f, ext) };
+  });
   onProgress({ done: 0, total: list.length, current: null });
 
   // 逐文件实时回调进度（此前在全部完成后才统一触发，进度条会停在 0% 直到瞬间跳完）
-  const settled = await mapPool(list, concurrency, async (file) => {
+  const settled = await mapPool(list, concurrency, async (file, i) => {
     let inputStat = null;
     try {
       inputStat = await fs.promises.stat(file);
@@ -131,8 +158,8 @@ async function runBatch(p) {
       const { buffer, ext } = groups
         ? await composeGroups(buf, groups, composeOptions)
         : await composeWatermark(buf, watermark, composeOptions, watermarkAlt);
-      const target = outPathFor(file, inputDir, outputDir,
-        { suffix, overwrite, keepStructure: recursive && !!inputDir, ext });
+      // 实际格式与预判不符（如扩展名是 .png 的 JPEG 文件）时现场再分配一个不冲突的名字
+      const target = overwrite ? file : (planned[i].ext === ext ? planned[i].target : claim(file, ext));
       await fs.promises.mkdir(path.dirname(target), { recursive: true });
       await fs.promises.writeFile(target, buffer);
       if (db) db.put(ProcessDB.keyFor(file, inputStat), { output: target, watermarkId: watermarkId || null });
@@ -155,4 +182,4 @@ async function runBatch(p) {
   return { total: list.length, ok: okCount, failed: failCount, skipped, results };
 }
 
-module.exports = { runBatch, listImages, outPathFor };
+module.exports = { runBatch, listImages, outPathFor, expectedExt, isInside, pathKey };

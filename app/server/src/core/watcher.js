@@ -13,7 +13,10 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { IMAGE_EXTS, extOf, composeWatermark, composeGroups } = require('./watermark');
-const { outPathFor } = require('./batch');
+const { outPathFor, expectedExt, isInside, pathKey } = require('./batch');
+const { writeFileAtomic } = require('./db');
+
+const exists = (p) => fs.promises.access(p).then(() => true, () => false);
 
 class WatcherManager {
   /**
@@ -40,8 +43,7 @@ class WatcherManager {
 
   _save() {
     try {
-      fs.mkdirSync(path.dirname(this.stateFile), { recursive: true });
-      fs.writeFileSync(this.stateFile, JSON.stringify([...this.watchers.values()].map((w) => w.cfg)));
+      writeFileAtomic(this.stateFile, JSON.stringify([...this.watchers.values()].map((w) => w.cfg)));
     } catch (e) { console.error('[watcher] 持久化失败:', e.message); }
   }
 
@@ -59,6 +61,7 @@ class WatcherManager {
   remove(id) {
     const w = this.watchers.get(id);
     if (!w) return false;
+    w.stopped = true; // 已排队的防抖/重试定时器到点后直接放弃
     if (w.dirWatch) { try { w.dirWatch.close(); } catch {} }
     clearInterval(w.scanTimer);
     this.watchers.delete(id);
@@ -76,13 +79,17 @@ class WatcherManager {
   list() { return [...this.watchers.values()].map((w) => this._view(w)); }
   status(id) { const w = this.watchers.get(id); return w ? this._view(w) : null; }
   _view(w) {
-    const { dirWatch, scanTimer, pending, cfg, ...rest } = w;
+    const { dirWatch, scanTimer, pending, inflight, target, scanning, stopped, cfg, ...rest } = w;
     return { ...cfg, ...rest, pending: pending ? pending.size : 0 };
   }
 
   _spawn(cfg, fromRestore) {
     const w = { cfg, status: 'watching', lastError: null, note: null,
-      stats: { processed: 0, skipped: 0, failed: 0 }, pending: new Set() };
+      stats: { processed: 0, skipped: 0, failed: 0 },
+      pending: new Set(),  // 防抖队列中的路径
+      inflight: new Set(), // 正在处理的路径（事件/扫描/重试三路并发时防重复处理）
+      target: null,        // 解析好的水印（配置不可变，首次解析后缓存，避免每张图重建分组水印）
+      scanning: false, stopped: false };
     try {
       const recursive = !!cfg.recursive && process.platform !== 'linux';
       w.dirWatch = fs.watch(cfg.inputDir, { recursive }, (ev, fname) => {
@@ -115,50 +122,61 @@ class WatcherManager {
     }, 1500);
   }
 
-  /** 周期扫描兜底 */
+  /** 周期扫描兜底（上一轮没扫完时跳过本轮，避免大目录扫描叠加） */
   async _scan(w) {
-    if (w.status === 'paused') return;
-    let names;
-    try { names = await fs.promises.readdir(w.cfg.inputDir, { withFileTypes: true }); }
-    catch (e) { w.lastError = `读取目录失败: ${e.message}`; return; }
-    for (const ent of names) {
-      const full = path.join(w.cfg.inputDir, ent.name);
-      if (ent.isDirectory()) {
-        if (w.cfg.recursive) await this._walk(w, full);
-        continue;
-      }
-      await this._process(w, full);
+    if (w.status === 'paused' || w.stopped || w.scanning) return;
+    w.scanning = true;
+    try {
+      await fs.promises.access(w.cfg.inputDir);
+      await this._walk(w, w.cfg.inputDir, !!w.cfg.recursive);
+    } catch (e) {
+      w.lastError = `读取目录失败: ${e.message}`;
+    } finally {
+      w.scanning = false;
     }
   }
 
-  async *_walk(w, dir) {
+  async _walk(w, dir, recursive) {
     let ents;
     try { ents = await fs.promises.readdir(dir, { withFileTypes: true }); } catch { return; }
     for (const ent of ents) {
+      if (w.stopped) return;
+      if (ent.name.startsWith('.')) continue;
       const full = path.join(dir, ent.name);
-      if (ent.isDirectory()) yield* this._walk(w, full);
-      else await this._process(w, full);
+      if (ent.isDirectory()) {
+        if (recursive && !this._inOutputTree(w, full)) await this._walk(w, full, true);
+      } else {
+        await this._process(w, full);
+      }
     }
   }
 
   _inOutputTree(w, full) {
-    return !!w.cfg.outputDir && path.resolve(full).startsWith(path.resolve(w.cfg.outputDir));
+    return !!w.cfg.outputDir && isInside(full, w.cfg.outputDir);
   }
 
   async _process(w, full) {
-    if (w.status === 'paused') return;
+    if (w.status === 'paused' || w.stopped) return;
     if (!IMAGE_EXTS.has(extOf(full))) return;
     if (this._inOutputTree(w, full)) return;
-    if (path.resolve(full) === path.resolve(w.cfg.outputDir || '')) return;
+    if (w.inflight.has(full)) return;
+    w.inflight.add(full);
+    try { await this._processOne(w, full); }
+    finally { w.inflight.delete(full); }
+  }
 
+  async _processOne(w, full) {
     // 查重 1：本地数据库（身份命中且输出仍在磁盘）
     const chk = await this.db.alreadyDone(full);
     if (chk.done) { w.stats.skipped++; return; }
     // 查重 2：非覆盖模式下同名输出已存在
-    const targetGuess = outPathFor(full, w.cfg.inputDir, w.cfg.outputDir,
-      { suffix: w.cfg.suffix, overwrite: w.cfg.overwrite, keepStructure: !!w.cfg.recursive, ext: extOf(full) });
+    //   已存在的输出若是别的源文件生成的（a.jpg / a.png 强制同格式时重名），不算已处理，后面换带序号的名字
     if (!w.cfg.overwrite) {
-      try { await fs.promises.access(targetGuess); w.stats.skipped++; return; } catch { /* 不存在，继续 */ }
+      const guess = this._outPath(w, full, expectedExt(full, w.cfg.options));
+      if (await exists(guess)) {
+        const owner = this.db.ownerOf(guess);
+        if (!owner || pathKey(owner) === pathKey(full)) { w.stats.skipped++; return; }
+      }
     }
     // 防半写：mtime 距今 <2s 说明可能还在写，稍后重查
     let stat;
@@ -176,8 +194,7 @@ class WatcherManager {
       const composed = t.groups
         ? await composeGroups(buf, t.groups, t.options)
         : await composeWatermark(buf, t.watermark, t.options, t.watermarkAlt);
-      target = outPathFor(full, w.cfg.inputDir, w.cfg.outputDir,
-        { suffix: w.cfg.suffix, overwrite: w.cfg.overwrite, keepStructure: !!w.cfg.recursive, ext: composed.ext });
+      target = w.cfg.overwrite ? full : await this._freeTarget(w, full, composed.ext);
       await fs.promises.mkdir(path.dirname(target), { recursive: true });
       await fs.promises.writeFile(target, composed.buffer);
       this.db.put(chk.key, { output: target, watermarkId: w.cfg.watermarkId, watcher: w.cfg.id });
@@ -188,8 +205,26 @@ class WatcherManager {
     }
   }
 
+  _outPath(w, full, ext, tag = '') {
+    return outPathFor(full, w.cfg.inputDir, w.cfg.outputDir,
+      { suffix: w.cfg.suffix, overwrite: w.cfg.overwrite, keepStructure: !!w.cfg.recursive, ext, tag });
+  }
+
+  /** 第一个"不存在或本来就属于该源文件"的输出路径：a_wm.jpg → a(2)_wm.jpg → a(3)_wm.jpg … */
+  async _freeTarget(w, full, ext) {
+    for (let n = 1; n < 1000; n++) {
+      const t = this._outPath(w, full, ext, n === 1 ? '' : `(${n})`);
+      if (!(await exists(t))) return t;
+      const owner = this.db.ownerOf(t);
+      if (owner && pathKey(owner) === pathKey(full)) return t;
+    }
+    throw new Error('同名输出过多，无法分配文件名');
+  }
+
   async _resolve(w) {
-    try { return await this.resolveTarget(w); } catch { return null; }
+    if (w.target) return w.target;
+    try { w.target = (await this.resolveTarget(w)) || null; } catch { w.target = null; }
+    return w.target;
   }
 }
 

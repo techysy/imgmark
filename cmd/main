@@ -36,7 +36,7 @@ start() {
     (cd "${APPDEST}/app/server" && "${NODE_BIN}" "$(command -v npm || echo npm)" install --omit=dev --no-audit --no-fund >> "${LOG_FILE}" 2>&1) || true
   fi
   echo "$(date '+%F %T') starting imgmark on :${SERVICE_PORT}" >> "${LOG_FILE}"
-  cd "${APPDEST}/target/server"
+  cd "${APPDEST}/app/server" || true
   # TRIM_API_TOKEN / TRIM_APPNAME / TRIM_PKGVAR 由系统注入本脚本环境，原样传给子进程
   # SOCKET_PATH：统一网关 Unix Socket（app/ui/config 的 gatewaySocket=app.sock，
   #              放 target 目录，应用用户可写，参考官方 Native 示例）

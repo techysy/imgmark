@@ -11,7 +11,7 @@ const { spawn, spawnSync } = require('child_process');
 const sharp = require(path.join(__dirname, '..', 'app', 'server', 'node_modules', 'sharp'));
 
 const { prepareWatermark, mergeWatermarks, composeWatermark } = require('../app/server/src/core/watermark');
-const { runBatch } = require('../app/server/src/core/batch');
+const { runBatch, expectedExt, isInside } = require('../app/server/src/core/batch');
 
 const ROOT = path.join(__dirname, '..');
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'imgmark-test-'));
@@ -368,6 +368,223 @@ async function main() {
     } finally {
       srv.kill();
     }
+  });
+
+  console.log('\n[6] 回归：边界尺寸 / 格式 / 路径判断');
+  await t('超大水印（竖图 + long 基准 + 100%）不再报 composite 尺寸错误', async () => {
+    const portrait = await sharp({ create: { width: 400, height: 900, channels: 3, background: '#888' } }).jpeg().toBuffer();
+    const { buffer } = await composeWatermark(portrait, wmWhite.buffer, { sizePct: 100, sizeBase: 'long', rotate: 30 });
+    const m = await sharp(buffer).metadata();
+    assert.strictEqual(m.width, 400); assert.strictEqual(m.height, 900);
+  });
+  await t('AVIF 输入 format=auto 仍输出 AVIF（此前 heif 被当成 PNG）', async () => {
+    const avif = await sharp({ create: { width: 320, height: 200, channels: 3, background: '#468' } }).avif().toBuffer();
+    const { ext } = await composeWatermark(avif, wmWhite.buffer, {});
+    assert.strictEqual(ext, '.avif');
+    assert.strictEqual(expectedExt('x.avif', {}), '.avif');
+    assert.strictEqual(expectedExt('x.tif', {}), '.tiff');
+    assert.strictEqual(expectedExt('x.JPEG', {}), '.jpg');
+  });
+  await t('isInside 按路径段判断（/out 不误伤 /out2）', async () => {
+    assert(isInside(path.join(TMP, 'out', 'a.jpg'), path.join(TMP, 'out')));
+    assert(isInside(path.join(TMP, 'out'), path.join(TMP, 'out')));
+    assert(!isInside(path.join(TMP, 'out2', 'a.jpg'), path.join(TMP, 'out')));
+    assert(!isInside(path.join(TMP, 'a.jpg'), path.join(TMP, 'out')));
+  });
+
+  console.log('\n[7] 回归：分组 / 去重 / 上传文件名 / 目录浏览 / 递归监听');
+  await t('HTTP 分组 + skipProcessed + 中文上传名 + browse 排序 + 递归监听', async () => {
+    const port = 28118;
+    const dataDir = path.join(TMP, 'data7');
+    const srv = spawn(process.execPath, [path.join(ROOT, 'app', 'server', 'src', 'server.js')], {
+      env: { ...process.env, PORT: String(port), IMGMARK_DATA_DIR: dataDir },
+    });
+    const base = `http://127.0.0.1:${port}`;
+    const waitJob = async (jobId) => {
+      for (let i = 0; i < 100; i++) {
+        const j = await (await fetch(`${base}/api/jobs/${jobId}`)).json();
+        if (j.status !== 'running') return j;
+        await new Promise((r) => setTimeout(r, 300));
+      }
+      throw new Error('任务超时');
+    };
+    try {
+      for (let i = 0; i < 50; i++) {
+        try { await (await fetch(`${base}/api/health`)).json(); break; } catch { await new Promise((r) => setTimeout(r, 300)); }
+      }
+      // 分组模式 prepare
+      const fd = new FormData();
+      fd.append('watermark', new Blob([fs.readFileSync(F.logoWhiteJpg)], { type: 'image/jpeg' }), '标志.jpg');
+      fd.append('watermark', new Blob([fs.readFileSync(F.wmSvg)], { type: 'image/svg+xml' }), 'b.svg');
+      fd.append('split', 'true');
+      const set = await (await fetch(`${base}/api/prepare`, { method: 'POST', body: fd })).json();
+      assert.strictEqual(set.logos.length, 2);
+      assert.strictEqual(set.logos[0].name, '标志.jpg', `水印源中文名应正确解码，实际 ${set.logos[0].name}`);
+      const groups = [{ logos: [0, 1], position: 'se', sizePct: 30 }, { logos: [1], position: 'nw', sizePct: 10 }];
+
+      // 分组批量 + skipProcessed：第二次全部跳过
+      const dir = path.join(TMP, 'batch7');
+      fs.mkdirSync(dir, { recursive: true });
+      fs.copyFileSync(F.photoJpg, path.join(dir, 'p1.jpeg'));
+      fs.copyFileSync(F.photoPng, path.join(dir, 'p2.png'));
+      const body = { watermarkId: set.id, mode: 'local', inputDir: dir, groups, skipProcessed: true, options: { format: 'auto' } };
+      const run = async () => {
+        const pfd = new FormData();
+        pfd.append('payload', JSON.stringify(body));
+        const { jobId } = await (await fetch(`${base}/api/process`, { method: 'POST', body: pfd })).json();
+        return waitJob(jobId);
+      };
+      const j1 = await run();
+      assert.strictEqual(j1.ok, 2, `分组批量应成功 2 张: ${JSON.stringify(j1)}`);
+      const j2 = await run();
+      assert.strictEqual(j2.total, 0, '第二次应无待处理文件');
+      assert.strictEqual(j2.skipped, 2, `第二次应跳过 2 张: ${JSON.stringify(j2)}`);
+
+      // 上传：中文文件名 + 同名文件不互相覆盖
+      const ufd = new FormData();
+      ufd.append('payload', JSON.stringify({ watermarkId: set.id, mode: 'upload', groups }));
+      ufd.append('files', new Blob([fs.readFileSync(F.photoJpg)], { type: 'image/jpeg' }), '风景.jpg');
+      ufd.append('files', new Blob([fs.readFileSync(F.photoJpg)], { type: 'image/jpeg' }), '风景.jpg');
+      const { jobId: uId } = await (await fetch(`${base}/api/process`, { method: 'POST', body: ufd })).json();
+      const uj = await waitJob(uId);
+      const names = uj.results.map((r) => r.name).sort();
+      assert(names.includes('风景.jpg') && names.includes('风景(2).jpg'), `上传名应为 UTF-8 且去重: ${names}`);
+      const dl = await fetch(`${base}/api/jobs/${uId}/file/1`);
+      assert.strictEqual(dl.status, 200, '上传结果应可下载');
+
+      // 目录浏览：子目录按名称排序
+      for (const n of ['c', 'a', 'b']) fs.mkdirSync(path.join(TMP, 'browse7', n), { recursive: true });
+      const br = await (await fetch(`${base}/api/browse`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path: path.join(TMP, 'browse7') }),
+      })).json();
+      assert.deepStrictEqual(br.dirs, ['a', 'b', 'c']);
+
+      // 递归监听：子目录里的图也要处理，且保留 format 选项
+      const wdir = path.join(TMP, 'watch7');
+      fs.mkdirSync(path.join(wdir, 'sub'), { recursive: true });
+      const old = new Date(Date.now() - 60000);
+      for (const f of [path.join(wdir, 'top.jpg'), path.join(wdir, 'sub', 'deep.jpg')]) {
+        fs.copyFileSync(F.photoJpg, f);
+        fs.utimesSync(f, old, old); // 规避"写入未稳定"的 2s 等待
+      }
+      const w = await (await fetch(`${base}/api/watchers`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ inputDir: wdir, outputDir: '_out', recursive: true, watermarkId: set.id, groups, options: { format: 'png' } }),
+      })).json();
+      assert.strictEqual(w.options.format, 'png', `监听应保留 format 选项: ${JSON.stringify(w.options)}`);
+      let st;
+      for (let i = 0; i < 60; i++) {
+        st = (await (await fetch(`${base}/api/watchers`)).json()).watchers[0];
+        if (st.stats.processed + st.stats.failed >= 2) break;
+        await new Promise((r) => setTimeout(r, 300));
+      }
+      assert.strictEqual(st.stats.processed, 2, `递归监听应处理 2 张: ${JSON.stringify(st)}`);
+      assert(fs.existsSync(path.join(wdir, '_out', 'sub', 'deep_wm.png')), '子目录输出缺失（递归扫描未生效）');
+      assert(fs.existsSync(path.join(wdir, '_out', 'top_wm.png')), '顶层输出缺失');
+      // 立即重扫：已处理的应命中去重，不重复输出
+      await fetch(`${base}/api/watchers/${w.id}/rescan`, { method: 'POST' });
+      await new Promise((r) => setTimeout(r, 800));
+      st = (await (await fetch(`${base}/api/watchers`)).json()).watchers[0];
+      assert.strictEqual(st.stats.processed, 2, `重扫不应重复处理: ${JSON.stringify(st.stats)}`);
+      await fetch(`${base}/api/watchers/${w.id}`, { method: 'DELETE' });
+    } finally {
+      srv.kill();
+    }
+  });
+
+  console.log('\n[8] BMP 编解码 / JPEG 编码器 / 批内重名 / 数据库清理 / 监听重名');
+  const { isBmp, decodeBmp, encodeBmp } = require('../app/server/src/formats/bmp');
+  await t('BMP：24 位 / 32 位带透明 / 8 位调色板 / 自上而下 均可解码', async () => {
+    // 编码器往返（不透明 → 24 位，带透明 → 32 位 V4 位域）
+    const rgba = Buffer.alloc(3 * 2 * 4);
+    for (let i = 0; i < 6; i++) rgba.set([i * 40, 255 - i * 40, 100, 255], i * 4);
+    const b24 = encodeBmp(rgba, 3, 2, 4);
+    assert.strictEqual(b24.readUInt16LE(28), 24);
+    assert.deepStrictEqual(decodeBmp(b24).data, rgba);
+    rgba[3] = 128;
+    const b32 = encodeBmp(rgba, 3, 2, 4);
+    assert.strictEqual(b32.readUInt16LE(28), 32);
+    assert.deepStrictEqual(decodeBmp(b32).data, rgba);
+    // 手工构造 8 位调色板、自上而下（height 为负）的 2×2 BMP
+    const row = 4, off = 14 + 40 + 2 * 4, pal = Buffer.alloc(off + row * 2);
+    pal.write('BM'); pal.writeUInt32LE(pal.length, 2); pal.writeUInt32LE(off, 10); pal.writeUInt32LE(40, 14);
+    pal.writeInt32LE(2, 18); pal.writeInt32LE(-2, 22); pal.writeUInt16LE(1, 26); pal.writeUInt16LE(8, 28); pal.writeUInt32LE(2, 46);
+    pal.set([0, 0, 255, 0, 255, 0, 0, 0], 54); // 调色板 BGRx：0=红 1=蓝
+    pal.set([0, 1, 0, 0, 1, 0, 0, 0], off);    // 第一行 红 蓝，第二行 蓝 红
+    const d = decodeBmp(pal);
+    assert.deepStrictEqual([...d.data.slice(0, 8)], [255, 0, 0, 255, 0, 0, 255, 255], '第一行应为 红 蓝（自上而下）');
+    assert.deepStrictEqual([...d.data.slice(8, 16)], [0, 0, 255, 255, 255, 0, 0, 255]);
+  });
+  await t('BMP 作为目标图：format=auto 写回 BMP；作为水印源可去底', async () => {
+    const { data, info } = await sharp(F.photoJpg).resize(300).raw().toBuffer({ resolveWithObject: true });
+    const bmp = encodeBmp(data, info.width, info.height, info.channels);
+    const { buffer, ext } = await composeWatermark(bmp, wmWhite.buffer, {});
+    assert.strictEqual(ext, '.bmp');
+    assert(isBmp(buffer));
+    assert.strictEqual(decodeBmp(buffer).width, 300);
+    assert.strictEqual(expectedExt('x.bmp', {}), '.bmp');
+    const logo = await sharp(F.logoWhiteJpg).raw().toBuffer({ resolveWithObject: true });
+    const wm = await prepareWatermark(encodeBmp(logo.data, logo.info.width, logo.info.height, logo.info.channels), 'logo.bmp', {});
+    assert.strictEqual(wm.bgColor.kind, 'white');
+  });
+  await t('JPEG 默认 libjpeg-turbo，mozjpeg:true 可切换', async () => {
+    const a = await composeWatermark(fs.readFileSync(F.photoJpg), wmWhite.buffer, {});
+    const b = await composeWatermark(fs.readFileSync(F.photoJpg), wmWhite.buffer, { mozjpeg: true });
+    assert.strictEqual(a.ext, '.jpg'); assert.strictEqual(b.ext, '.jpg');
+    assert.notDeepStrictEqual(a.buffer, b.buffer, '两种编码器输出应不同');
+  });
+  await t('批内输出重名自动加序号（a.jpg / a.png 强制 JPEG）', async () => {
+    const dir = path.join(TMP, 'dup8'), out = path.join(TMP, 'dup8', 'out');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.copyFileSync(F.photoJpg, path.join(dir, 'a.jpg'));
+    fs.copyFileSync(F.photoPng, path.join(dir, 'a.png'));
+    const r = await runBatch({ inputDir: dir, outputDir: out, watermark: wmWhite.buffer, options: { format: 'jpeg' }, concurrency: 4 });
+    assert.strictEqual(r.ok, 2);
+    const byInput = Object.fromEntries(r.results.map((x) => [path.basename(x.input), path.basename(x.output)]));
+    assert.deepStrictEqual(byInput, { 'a.jpg': 'a_wm.jpg', 'a.png': 'a(2)_wm.jpg' });
+  });
+  await t('数据库 compact：清理输入已改动 / 输出已删除的记录', async () => {
+    const { ProcessDB } = require('../app/server/src/core/db');
+    const dir = path.join(TMP, 'db8');
+    fs.mkdirSync(dir, { recursive: true });
+    const inp = path.join(dir, 'in.jpg'), outp = path.join(dir, 'out.jpg');
+    fs.copyFileSync(F.photoJpg, inp); fs.copyFileSync(F.photoJpg, outp);
+    const db = new ProcessDB(path.join(dir, 'db.json'));
+    const st = fs.statSync(inp);
+    db.put(ProcessDB.keyFor(inp, st), { output: outp });                              // 有效
+    db.put(ProcessDB.keyFor(inp, { mtimeMs: 1, size: st.size }), { output: outp });   // 旧版本身份
+    db.put(ProcessDB.keyFor(path.join(dir, 'gone.jpg'), st), { output: outp });       // 输入已删
+    const inp2 = path.join(dir, 'in2.jpg'); fs.copyFileSync(F.photoJpg, inp2);
+    db.put(ProcessDB.keyFor(inp2, fs.statSync(inp2)), { output: path.join(dir, 'nope.jpg') }); // 输出已删
+    assert.strictEqual(await db.compact(), 3);
+    assert.strictEqual(db.size, 1);
+    assert.strictEqual(path.resolve(db.ownerOf(outp)), path.resolve(inp));
+    db.flushNow();
+  });
+  await t('监听：别的源文件占用同名输出时换序号，不再误判为已处理', async () => {
+    const { ProcessDB } = require('../app/server/src/core/db');
+    const { WatcherManager } = require('../app/server/src/core/watcher');
+    const dir = path.join(TMP, 'watch8'), out = path.join(dir, 'out');
+    fs.mkdirSync(dir, { recursive: true });
+    const old = new Date(Date.now() - 60000);
+    for (const [src, name] of [[F.photoJpg, 'a.jpg'], [F.photoPng, 'a.png']]) {
+      fs.copyFileSync(src, path.join(dir, name)); fs.utimesSync(path.join(dir, name), old, old);
+    }
+    const db = new ProcessDB(path.join(dir, 'db.json'));
+    const mgr = new WatcherManager({
+      db, stateFile: path.join(dir, 'watchers.json'),
+      resolveTarget: async () => ({ watermark: wmWhite.buffer, options: { format: 'jpeg' } }),
+    });
+    const w = mgr.create({ inputDir: dir, outputDir: out, watermarkId: 'x', options: { format: 'jpeg' } });
+    let st;
+    for (let i = 0; i < 60; i++) {
+      st = mgr.status(w.id);
+      if (st.stats.processed + st.stats.failed >= 2) break;
+      await new Promise((r) => setTimeout(r, 200));
+    }
+    mgr.remove(w.id);
+    assert.strictEqual(st.stats.processed, 2, `应处理 2 张: ${JSON.stringify(st.stats)} ${st.lastError}`);
+    assert(fs.existsSync(path.join(out, 'a_wm.jpg')) && fs.existsSync(path.join(out, 'a(2)_wm.jpg')), `输出: ${fs.readdirSync(out)}`);
   });
 
   console.log(`\n结果：${pass} 通过，${fail} 失败  （fixtures 保留在 ${TMP}）`);

@@ -5,13 +5,14 @@ const path = require('path');
 /**
  * fnOS 开放能力路由（仅在 fnOS 应用环境内可用；否则返回 501 + 说明）。
  * 目录访问不做 HTTP 代理下载/上传——授权后应用用户具备 ACL，直接读写真实路径。
- * uid 来源优先级：请求参数 > 统一网关身份头 x-trim-userid（网关模式下可信）。
+ * uid 来源优先级：统一网关身份头 x-trim-userid（网关模式下可信）> 请求参数。
  */
 function resolveUid(req) {
-  const q = Number(req.query.uid || (req.body && req.body.uid) || 0);
-  if (Number.isInteger(q) && q > 0) return q;
+  // 网关身份头由平台注入、客户端无法伪造，存在时必须优先；参数 uid 仅作无网关时的兜底
   const h = Number(req.headers['x-trim-userid'] || 0);
-  return Number.isInteger(h) && h > 0 ? h : 0;
+  if (Number.isInteger(h) && h > 0) return h;
+  const q = Number(req.query.uid || (req.body && req.body.uid) || 0);
+  return Number.isInteger(q) && q > 0 ? q : 0;
 }
 
 function createFnosRouter({ client, listImages }) {
@@ -71,8 +72,9 @@ function createFnosRouter({ client, listImages }) {
     try {
       const uid = resolveUid(req);
       if (uid <= 0) return res.status(400).json({ error: 'uid 无效' });
-      const { path: dir, lang } = req.body || {};
-      if (typeof dir !== 'string' || !dir.startsWith('/')) return res.status(400).json({ error: '路径无效' });
+      const { path: rawDir, lang } = req.body || {};
+      if (typeof rawDir !== 'string' || !rawDir.startsWith('/')) return res.status(400).json({ error: '路径无效' });
+      const dir = path.posix.normalize(rawDir); // 先规范化，防 /授权根/../别处 绕过下面的前缀校验
 
       const [user, shared] = await Promise.all([
         client.getUserAccessibleFolders(uid).catch(() => []),
