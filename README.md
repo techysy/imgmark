@@ -51,19 +51,14 @@
 
 ## 工作流程
 
-```mermaid
-flowchart LR
-    A["水印源<br/>AI · SVG · PNG<br/>JPG · BMP …"] --> B["去底转透明<br/>白底·黑底自动识别<br/>裁剪 · 去边"]
-    B --> C["分组布局<br/>九宫格定位<br/>横竖排 · 间距<br/>大小 · 比例"]
-    S["图片来源<br/>本地文件夹 · 上传<br/>飞牛授权目录<br/>文件夹监听"] --> D
-    C --> D["逐张合成<br/>亮度自适应黑白<br/>EXIF 摆正<br/>保留元数据"]
-    D --> E["输出<br/>保持原格式或转换<br/>重名自动加序号"]
-    D -. 记录 .-> F[("本地数据库<br/>已处理跳过")]
-    PAD["&nbsp;<br/>&nbsp;"]
-    F ~~~ PAD
+<div align="center">
 
-    style PAD fill:transparent,stroke:none,color:transparent
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/workflow.svg">
+  <img src="docs/workflow-light.svg" width="860" alt="ImgMark 工作流程">
+</picture>
+
+</div>
 
 ## 功能
 
