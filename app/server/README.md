@@ -161,7 +161,7 @@ CLI 暂不支持分组布局、文件夹监听和数据库去重，这三项请�
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
 | POST | `/api/prepare` | multipart `watermark`（可多个）。**分组模式**（`split=true`）：每个 logo 独立去底，返回 `{id, logos:[…]}` 供 `groups` 引用；**合并模式**（默认）：多 logo 并排合成一个透明 PNG。参数：`bg / tolerance / force / maxSize / trim / crop / gap / equalHeight` |
-| POST | `/api/preview` | `{watermarkId, options, groups}` → 内置示例图的合成预览；开启亮度自适应时额外返回暗图预览 `previewAuto` |
+| POST | `/api/preview` | `{watermarkId, options, groups, orient}` → 内置示例图的合成预览（`orient` 可选 `landscape`/`portrait`，默认横图）；开启亮度自适应时额外返回暗图预览 `previewAuto` |
 | POST | `/api/process` | multipart：`payload`（JSON）+ 可选 `files[]`；`mode=local / upload / local-files / fnos` → `{jobId}`；`skipProcessed:true` 跳过已处理文件 |
 | GET | `/api/jobs/:id` | 任务进度（逐文件实时更新）与逐文件结果 |
 | GET | `/api/jobs/:id/file/:idx` | 上传模式下载单个结果 |
@@ -169,6 +169,9 @@ CLI 暂不支持分组布局、文件夹监听和数据库去重，这三项请�
 | DELETE | `/api/watchers/:id` | 删除监听 |
 | POST | `/api/watchers/:id/rescan` | 立即全量扫描 |
 | GET | `/api/db/stats` | 本地数据库记录数 |
+| GET / POST | `/api/presets` | 方案列表 / 保存方案（multipart：`logos` 原文件 + `payload` JSON `{name, groups, options}`；同名覆盖） |
+| GET | `/api/presets/:id/file/:idx` | 下载方案中第 idx 个 logo 原文件 |
+| DELETE | `/api/presets/:id` | 删除方案（连同拷贝的 logo 文件） |
 | POST | `/api/browse` | 本地目录浏览 |
 | GET | `/api/fnos/status` · `/api/fnos/folders` | fnOS 开放 API 可用性 / 已授权目录 |
 | POST | `/api/fnos/list` · `/api/fnos/delete-authorization` | 列授权目录内容（先做 ACL 校验）/ 删除授权 |
@@ -243,7 +246,7 @@ npm run dist                                # 打包 → dist/
 - `.ai` 需以「创建 PDF 兼容文件」方式保存；纯 PostScript 的旧版 AI 需要系统安装 Ghostscript
 - BMP 不支持 RLE 压缩格式
 - 服务重启后需重新选择 logo 或恢复方案（处理后的水印缓存在临时目录，映射关系在内存中）；文件夹监听会转为暂停，需重新建立
-- 「方案」保存在浏览器存储（localStorage / IndexedDB）中，换浏览器或清除站点数据后不可用，logo 原文件请自行留存
+- 「方案」保存在服务端数据目录（`dataDir/presets`，logo 原文件会拷贝一份进去），换浏览器、清缓存、重启后仍可用；恢复方案时会自动重新准备水印
 - 飞牛目录授权为单选（平台限制）
 - 大小基准按比例计算：混用不同分辨率的图片时，水印像素尺寸会随分辨率缩放
 

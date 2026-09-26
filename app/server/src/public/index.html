@@ -41,7 +41,7 @@
         <input type="text" id="preset-name" placeholder="方案名称" class="path-input" style="width:110px">
         <button id="preset-save" class="btn tiny">保存当前</button>
         <button id="preset-del" class="btn tiny ghost">删除</button>
-        <span id="preset-hint" class="muted">保存 logo 文件 + 全部分组参数，换页/重启后一键恢复</span>
+        <span id="preset-hint" class="muted">logo 原文件与全部分组参数保存在程序数据目录，换浏览器/清缓存/重启后一键恢复</span>
       </div>
     </div>
 
@@ -104,7 +104,11 @@
           <button id="group-add" class="btn" disabled>＋ 添加分组</button>
         </div>
         <div class="preview-box">
-          <img id="style-preview" alt="样式预览" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='420' height='280'%3E%3Crect x='0' y='0' width='420' height='280' fill='%23dde3ea'/%3E%3Ccircle cx='90' cy='70' r='42' fill='%23ffffff' opacity='.35'/%3E%3Crect x='280' y='180' width='110' height='66' fill='%233d4f63' opacity='.3' rx='8'/%3E%3Ctext x='210' y='145' text-anchor='middle' font-family='sans-serif' font-size='13' fill='%237a8494'%3E添加 logo 并配置分组后预览%3C/text%3E%3C/svg%3E"><span class="preview-cap">样式预览（亮图示例）</span>
+          <div class="tabs" id="preview-orient">
+            <button type="button" class="tab on" data-orient="landscape">横图示例</button>
+            <button type="button" class="tab" data-orient="portrait">竖图示例</button>
+          </div>
+          <img id="style-preview" alt="样式预览" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='420' height='280'%3E%3Crect x='0' y='0' width='420' height='280' fill='%23dde3ea'/%3E%3Ccircle cx='90' cy='70' r='42' fill='%23ffffff' opacity='.35'/%3E%3Crect x='280' y='180' width='110' height='66' fill='%233d4f63' opacity='.3' rx='8'/%3E%3Ctext x='210' y='145' text-anchor='middle' font-family='sans-serif' font-size='13' fill='%237a8494'%3E添加 logo 并配置分组后预览%3C/text%3E%3C/svg%3E"><span class="preview-cap" id="preview-cap">样式预览（亮图示例）</span>
           <img id="style-preview-auto" class="hidden" alt="暗图预览"><span class="preview-cap hidden" id="preview-cap-auto">暗图示例（自动换白标）</span>
         </div>
       </div>
@@ -230,6 +234,12 @@
 </main>
 
 <footer id="page-footer">ImgMark · AI/SVG/PNG/JPG 白底黑底自动转透明 · fnOS 开放平台文件授权 · 局域网工具，无鉴权，请勿暴露公网</footer>
+
+<!-- 预览放大：点击亮/暗示例图看原尺寸，点击任意处或 Esc 关闭 -->
+<div id="lightbox" class="hidden" role="dialog" aria-modal="true">
+  <img id="lightbox-img" alt="预览大图">
+  <div id="lightbox-cap"></div>
+</div>
 <script type="module" src="/app.js"></script>
 </body>
 </html>

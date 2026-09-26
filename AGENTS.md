@@ -104,8 +104,9 @@ curl -s -X POST http://127.0.0.1:28110/api/watchers \
 ```bash
 curl -s -X POST http://127.0.0.1:28110/api/preview \
   -H "Content-Type: application/json" \
-  -d '{"watermarkId":"<id>","options":{"autoColor":true,"sizeBase":"long"},"groups":[{"logos":[0],"position":"se","sizePct":30}]}'
+  -d '{"watermarkId":"<id>","orient":"portrait","options":{"autoColor":true,"sizeBase":"long"},"groups":[{"logos":[0],"position":"se","sizePct":30}]}'
 # → {"preview":"data:image/jpeg;base64,...","previewAuto":"..."}（autoColor 命中时附暗底预览）
+# orient 可选 landscape|portrait（默认 landscape），仅影响示例图方向；预览保持示例图原生分辨率（长边 960），前端点击可放大
 ```
 
 ## 6. CLI 等价命令

@@ -105,8 +105,16 @@ input[type="checkbox"] { accent-color: var(--pri); }
 .notes { font-size: 12px; color: var(--muted); margin-top: 6px; white-space: pre-line; }
 
 .preview-box { flex: 1; min-width: 260px; text-align: center; }
-.preview-box img { width: 100%; max-width: 420px; border-radius: 10px; border: 1px solid var(--border-subtle); }
+.preview-box img { width: 100%; max-width: 420px; border-radius: 10px; border: 1px solid var(--border-subtle); cursor: zoom-in; }
 .preview-cap { font-size: 11px; color: var(--text-3); display: block; margin-top: 3px; }
+#preview-orient { justify-content: center; margin-bottom: 8px; }
+#preview-orient .tab { padding: 3px 12px; font-size: 12px; }
+
+/* ---- 预览放大（lightBox：点击示例图看原尺寸） ---- */
+#lightbox { position: fixed; inset: 0; z-index: 80; background: rgba(8, 10, 14, .78);
+  display: flex; flex-direction: column; align-items: center; justify-content: center; cursor: zoom-out; }
+#lightbox img { max-width: 92vw; max-height: 86vh; border-radius: 10px; box-shadow: 0 10px 44px rgba(0, 0, 0, .5); }
+#lightbox-cap { margin-top: 10px; font-size: 12px; color: #e6e6e9; }
 
 /* ---- 九宫格 ---- */
 .grid9 { display: grid; grid-template-columns: repeat(3, 34px); gap: 4px; }

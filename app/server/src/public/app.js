@@ -24,6 +24,7 @@ const state = {
   editingIdx: 0,
 };
 let cropMode = false, dragStart = null;
+let previewOrient = 'landscape'; // 样式预览示例图方向：landscape|portrait（仅预览用）
 
 // ---------- 图标（Lucide 风格线性图标，与 CreditDaddy 同款，currentColor） ----------
 const svg = (d) => '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' + d + '</svg>';
@@ -112,49 +113,18 @@ function defaultGroup(idxs) {
 const logoOf = (i) => (state.logoSet ? state.logoSet.logos[i] : null);
 const logoSource = (i) => { const l = logoOf(i); return l && l.sourcePreview ? l.sourcePreview : null; };
 
-// ---------- 方案（保存/恢复：分组+选项存 localStorage，logo 文件存 IndexedDB） ----------
-const PRESET_KEY = 'imgmark_presets';
-function idbOpen() {
-  return new Promise((res, rej) => {
-    const req = indexedDB.open('imgmark-presets', 1);
-    req.onupgradeneeded = () => req.result.createObjectStore('files');
-    req.onsuccess = () => res(req.result);
-    req.onerror = () => rej(req.error);
-  });
+// ---------- 方案（服务端持久化：参数与 logo 文件都存到程序数据目录，换浏览器/清缓存不丢） ----------
+let presets = []; // [{id,name,time,files:[...]}]，由 /api/presets 拉取
+async function loadPresets() {
+  try { presets = await api('/api/presets'); } catch { presets = []; }
+  renderPresetSelect();
 }
-async function idbPut(key, files) {
-  const db = await idbOpen();
-  return new Promise((res, rej) => {
-    const tx = db.transaction('files', 'readwrite');
-    tx.objectStore('files').put(files, key);
-    tx.oncomplete = () => res();
-    tx.onerror = () => rej(tx.error);
-  });
-}
-async function idbGet(key) {
-  const db = await idbOpen();
-  return new Promise((res, rej) => {
-    const req = db.transaction('files', 'readonly').objectStore('files').get(key);
-    req.onsuccess = () => res(req.result || []);
-    req.onerror = () => rej(req.error);
-  });
-}
-async function idbDel(key) {
-  const db = await idbOpen();
-  return new Promise((res, rej) => {
-    const tx = db.transaction('files', 'readwrite');
-    tx.objectStore('files').delete(key);
-    tx.oncomplete = () => res();
-    tx.onerror = () => rej(tx.error);
-  });
-}
-function getPresets() { try { return JSON.parse(localStorage.getItem(PRESET_KEY) || '[]'); } catch { return []; } }
 
 function renderPresetSelect() {
   const sel = $('preset-select');
   if (!sel) return;
   sel.innerHTML = '<option value="">选择已保存方案…</option>' +
-    getPresets().map((p) => `<option value="${esc(p.name)}">${esc(p.name)}（${new Date(p.time).toLocaleString()}）</option>`).join('');
+    presets.map((p) => `<option value="${esc(p.id)}">${esc(p.name)}（${new Date(p.time).toLocaleString()}）</option>`).join('');
 }
 
 async function savePreset() {
@@ -162,34 +132,52 @@ async function savePreset() {
   const name = $('preset-name').value.trim();
   if (!name) { hint.textContent = '先填方案名称'; return; }
   if (!state.logoSet || !state.groups.length) { hint.textContent = '当前没有可保存的配置（先加 logo 和分组）'; return; }
-  const list = getPresets().filter((p) => p.name !== name);
-  list.push({ name, time: Date.now(), data: {
-    groups: JSON.parse(JSON.stringify(state.groups)),
-    options: options(),
-  }});
-  localStorage.setItem(PRESET_KEY, JSON.stringify(list));
-  await idbPut(name, state.wmFiles);
-  renderPresetSelect();
-  $('preset-select').value = name;
-  hint.textContent = '已保存 ✓（含 logo 文件与全部分组参数）';
+  if (!state.wmFiles.length) { hint.textContent = '缺少 logo 原文件，无法保存'; return; }
+  hint.textContent = '保存中…';
+  try {
+    const fd = new FormData();
+    for (const f of state.wmFiles) fd.append('logos', f);
+    fd.append('payload', JSON.stringify({ name, groups: JSON.parse(JSON.stringify(state.groups)), options: options() }));
+    const p = await api('/api/presets', { method: 'POST', body: fd });
+    presets = presets.filter((x) => x.id !== p.id); presets.unshift(p);
+    renderPresetSelect();
+    $('preset-select').value = p.id;
+    hint.textContent = '已保存 ✓（logo 文件已拷贝到程序数据目录，与分组参数一并持久）';
+  } catch (e) {
+    hint.textContent = '✗ 保存失败：' + e.message;
+  }
 }
 
 async function delPreset() {
-  const name = $('preset-select').value;
-  if (!name) { $('preset-hint').textContent = '先在左侧选择要删除的方案'; return; }
-  localStorage.setItem(PRESET_KEY, JSON.stringify(getPresets().filter((p) => p.name !== name)));
-  await idbDel(name);
-  renderPresetSelect();
-  $('preset-hint').textContent = '已删除';
+  const id = $('preset-select').value;
+  if (!id) { $('preset-hint').textContent = '先在左侧选择要删除的方案'; return; }
+  try {
+    await api('/api/presets/' + encodeURIComponent(id), { method: 'DELETE' });
+    presets = presets.filter((p) => p.id !== id);
+    renderPresetSelect();
+    $('preset-hint').textContent = '已删除';
+  } catch (e) {
+    $('preset-hint').textContent = '✗ ' + e.message;
+  }
 }
 
-async function applyPreset(name) {
+async function applyPreset(id) {
   const hint = $('preset-hint');
-  const meta = getPresets().find((p) => p.name === name);
+  const meta = presets.find((p) => p.id === id);
   if (!meta) return;
-  const files = await idbGet(name);
-  if (!files.length) { hint.textContent = '方案缺少 logo 文件（可能被浏览器清理）'; return; }
   hint.textContent = '恢复中…';
+  let files;
+  try {
+    files = [];
+    for (let i = 0; i < meta.files.length; i++) {
+      const res = await fetch(`/api/presets/${encodeURIComponent(id)}/file/${i}`);
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || `读取第 ${i + 1} 个 logo 失败`);
+      files.push(new File([await res.blob()], meta.files[i].name));
+    }
+  } catch (e) {
+    hint.textContent = '✗ ' + e.message;
+    return;
+  }
   onWmFiles(files); // 走真实准备流程，prepare 完成后再套用分组与选项
   const timer = setInterval(() => {
     if (!state.watermarkId || !state.logoSet) return;
@@ -452,20 +440,57 @@ function updateAutoColorUI() {
 }
 
 // ---------- 样式预览（单张实时：任一分组参数变化都重新合成示例图） ----------
-const refreshPreview = debounce(async () => {
+async function doRefreshPreview() {
   if (!state.watermarkId || !state.groups.length) return;
   try {
     const r = await api('/api/preview', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ watermarkId: state.watermarkId, options: options(), groups: state.groups }),
+      body: JSON.stringify({ watermarkId: state.watermarkId, options: options(), groups: state.groups, orient: previewOrient }),
     });
     $('style-preview').src = r.preview;
     const auto = !!r.previewAuto;
     if (auto) $('style-preview-auto').src = r.previewAuto; // 此前只切换显隐、从未赋 src，暗图预览显示为破损图标
     $('style-preview-auto').classList.toggle('hidden', !auto);
     $('preview-cap-auto').classList.toggle('hidden', !auto);
+    updatePreviewCaps();
   } catch { /* 预览失败不打断 */ }
-}, 350);
+}
+const refreshPreview = debounce(doRefreshPreview, 350);
+
+// 说明文案跟随示例图方向（横图保持原文案）
+function updatePreviewCaps() {
+  const p = previewOrient === 'portrait';
+  $('preview-cap').textContent = p ? '样式预览（亮图·竖图示例）' : '样式预览（亮图示例）';
+  $('preview-cap-auto').textContent = p ? '暗图·竖图示例（自动换白标）' : '暗图示例（自动换白标）';
+}
+
+// 横/竖示例图切换：sizeBase=long 时两者水印实际像素一致，可直观验证竖幅构图
+document.querySelectorAll('#preview-orient .tab').forEach((b) => b.addEventListener('click', () => {
+  if (b.dataset.orient === previewOrient) return;
+  previewOrient = b.dataset.orient;
+  document.querySelectorAll('#preview-orient .tab').forEach((x) => x.classList.toggle('on', x === b));
+  updatePreviewCaps();
+  doRefreshPreview();
+}));
+
+// ---------- 预览放大（点击亮/暗示例图看原尺寸；点击任意处或 Esc 关闭） ----------
+function openLightbox(imgEl, capEl) {
+  const src = imgEl.getAttribute('src') || '';
+  if (!/^data:image\/(jpeg|png|webp|avif)/.test(src)) return; // 占位 SVG 不放大
+  $('lightbox-img').src = src;
+  $('lightbox-cap').textContent = capEl.textContent;
+  $('lightbox').classList.remove('hidden');
+}
+function closeLightbox() {
+  $('lightbox').classList.add('hidden');
+  $('lightbox-img').removeAttribute('src');
+}
+$('style-preview').addEventListener('click', () => openLightbox($('style-preview'), $('preview-cap')));
+$('style-preview-auto').addEventListener('click', () => openLightbox($('style-preview-auto'), $('preview-cap-auto')));
+$('lightbox').addEventListener('click', closeLightbox);
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && !$('lightbox').classList.contains('hidden')) closeLightbox();
+});
 
 // ---------- 选项（全局：大小基准/输出格式/质量 + 亮度自适应开关；布局参数在各分组里） ----------
 function options() {
@@ -761,7 +786,7 @@ function init() {
   $('preset-save').addEventListener('click', savePreset);
   $('preset-del').addEventListener('click', delPreset);
   $('preset-select').addEventListener('change', (e) => { if (e.target.value) applyPreset(e.target.value); });
-  renderPresetSelect();
+  loadPresets();
   $('watch-create').addEventListener('click', createWatcher);
   $('watch-refresh').addEventListener('click', refreshWatchers);
   refreshWatchers();
@@ -791,9 +816,9 @@ function init() {
     prepareWatermark();
   });
 
-  // 来源 tabs
-  document.querySelectorAll('.tab').forEach((t) => t.addEventListener('click', () => {
-    document.querySelectorAll('.tab').forEach((x) => x.classList.remove('on'));
+  // 来源 tabs（限定 data-mode，避免误伤预览区的横/竖示例 tab）
+  document.querySelectorAll('.tab[data-mode]').forEach((t) => t.addEventListener('click', () => {
+    document.querySelectorAll('.tab[data-mode]').forEach((x) => x.classList.remove('on'));
     t.classList.add('on');
     state.mode = t.dataset.mode;
     ['fnos', 'local', 'upload'].forEach((m) => $(`src-${m}`).classList.toggle('hidden', m !== state.mode));

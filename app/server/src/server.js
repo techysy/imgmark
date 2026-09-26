@@ -359,35 +359,38 @@ async function resolveGroups(set, rawGroups, autoColor) {
   return defs;
 }
 
-// ---- 样式预览：把水印合成到内置示例图（亮/暗两张，验证亮度自适应）----
+// ---- 样式预览：把水印合成到内置示例图（亮/暗 × 横/竖，验证亮度自适应与竖幅构图）----
 const sampleImages = {};
-async function getSampleImage(kind = 'light') {
-  if (!sampleImages[kind]) {
-    const svg = kind === 'dark'
-      ? `<svg width="960" height="640" xmlns="http://www.w3.org/2000/svg">
+async function getSampleImage(kind = 'light', orient = 'landscape') {
+  const key = `${kind}:${orient}`;
+  if (!sampleImages[key]) {
+    const dark = kind === 'dark';
+    const [W, H] = orient === 'portrait' ? [640, 960] : [960, 640];
+    const [c0, c1, c2] = dark ? ['#1c2530', '#2c3a4a', '#0f141a'] : ['#7f9bb3', '#b8c9d9', '#e8dfd0'];
+    // 几何按画布比例缩放：左上圆形光斑、右下暗色块（横图取值与旧版逐像素一致）；色块靠边时内收防出界
+    const cx = Math.round(W * 0.2083), cy = Math.round(H * 0.28125);
+    const rx = Math.min(Math.round(W * 0.625), W - 280), ry = Math.min(Math.round(H * 0.59375), H - 180);
+    const svg = `<svg width="${W}" height="${H}" xmlns="http://www.w3.org/2000/svg">
           <defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
-            <stop offset="0" stop-color="#1c2530"/><stop offset="0.5" stop-color="#2c3a4a"/><stop offset="1" stop-color="#0f141a"/>
+            <stop offset="0" stop-color="${c0}"/><stop offset="0.5" stop-color="${c1}"/><stop offset="1" stop-color="${c2}"/>
           </linearGradient></defs>
-          <rect width="960" height="640" fill="url(#g)"/>
-          <circle cx="200" cy="180" r="90" fill="#ffffff" opacity="0.08"/>
-          <rect x="600" y="380" width="260" height="160" fill="#0a0e13" opacity="0.5" rx="12"/>
-        </svg>`
-      : `<svg width="960" height="640" xmlns="http://www.w3.org/2000/svg">
-          <defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
-            <stop offset="0" stop-color="#7f9bb3"/><stop offset="0.5" stop-color="#b8c9d9"/><stop offset="1" stop-color="#e8dfd0"/>
-          </linearGradient></defs>
-          <rect width="960" height="640" fill="url(#g)"/>
-          <circle cx="200" cy="180" r="90" fill="#ffffff" opacity="0.25"/>
-          <rect x="600" y="380" width="260" height="160" fill="#3d4f63" opacity="0.35" rx="12"/>
+          <rect width="${W}" height="${H}" fill="url(#g)"/>
+          <circle cx="${cx}" cy="${cy}" r="90" fill="#ffffff" opacity="${dark ? 0.08 : 0.25}"/>
+          <rect x="${rx}" y="${ry}" width="260" height="160" fill="${dark ? '#0a0e13' : '#3d4f63'}" opacity="${dark ? 0.5 : 0.35}" rx="12"/>
         </svg>`;
-    sampleImages[kind] = await sharp(Buffer.from(svg)).jpeg({ quality: 92 }).toBuffer();
+    sampleImages[key] = await sharp(Buffer.from(svg)).jpeg({ quality: 92 }).toBuffer();
   }
-  return sampleImages[kind];
+  return sampleImages[key];
 }
+
+// 预览图保持示例图原生分辨率（长边 960）：面板里 CSS 缩略显示，点击放大不糊
+const PREVIEW_MIME = { '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.webp': 'image/webp', '.avif': 'image/avif' };
+const previewDataUrl = ({ buffer, ext }) => `data:${PREVIEW_MIME[ext] || 'image/jpeg'};base64,${buffer.toString('base64')}`;
 
 app.post('/api/preview', express.json(), async (req, res) => {
   try {
     const options = req.body.options || {};
+    const orient = req.body.orient === 'portrait' ? 'portrait' : 'landscape'; // 示例图方向（仅预览用，不影响处理）
     const groups = Array.isArray(req.body.groups) && req.body.groups.length ? req.body.groups : null;
     // 分组模式：多个分组一次性合成到示例图
     if (groups) {
@@ -395,11 +398,8 @@ app.post('/api/preview', express.json(), async (req, res) => {
       if (!set) return res.status(404).json({ error: 'logo 组不存在或服务已重启，请重新上传' });
       const auto = !!options.autoColor;
       const groupDefs = await resolveGroups(set, groups, auto);
-      const toPreviewG = async (kind) => {
-        const { buffer } = await composeGroups(await getSampleImage(kind), groupDefs, { sizeBase: options.sizeBase });
-        const out = await sharp(buffer).resize({ width: 520 }).jpeg({ quality: 88 }).toBuffer();
-        return `data:image/jpeg;base64,${out.toString('base64')}`;
-      };
+      const toPreviewG = async (kind) =>
+        previewDataUrl(await composeGroups(await getSampleImage(kind, orient), groupDefs, { sizeBase: options.sizeBase }));
       const preview = await toPreviewG('light');
       const previewAuto = auto && groupDefs.some((g) => g.wmAltBuffer) ? await toPreviewG('dark') : null;
       return res.json({ preview, previewAuto });
@@ -407,11 +407,8 @@ app.post('/api/preview', express.json(), async (req, res) => {
     const wm = watermarks.get(req.body.watermarkId);
     if (!wm) return res.status(404).json({ error: '水印不存在或服务已重启，请重新上传' });
     const altBuf = options.autoColor && wm.altPath ? fs.readFileSync(wm.altPath) : null;
-    const toPreview = async (sample) => {
-      const { buffer } = await composeWatermark(await getSampleImage(sample), fs.readFileSync(wm.path), options, altBuf);
-      const out = await sharp(buffer).resize({ width: 520 }).jpeg({ quality: 88 }).toBuffer();
-      return `data:image/jpeg;base64,${out.toString('base64')}`;
-    };
+    const toPreview = async (sample) =>
+      previewDataUrl(await composeWatermark(await getSampleImage(sample, orient), fs.readFileSync(wm.path), options, altBuf));
     const preview = await toPreview('light');
     // 亮度自适应开启时附暗底预览，直观看到"暗图自动换白标"
     const previewAuto = altBuf ? await toPreview('dark') : null;
@@ -419,6 +416,72 @@ app.post('/api/preview', express.json(), async (req, res) => {
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
+});
+
+// ---- 方案（服务端持久化：参数存 DATA_DIR/presets.json，logo 原图拷贝进 DATA_DIR/presets/<id>/）----
+// 此前存浏览器 localStorage+IndexedDB：清浏览器数据、换浏览器或桌面壳换端口都会丢；服务端存储与监听配置同等持久
+const PRESET_FILE = path.join(DATA_DIR, 'presets.json');
+const PRESET_DIR = path.join(DATA_DIR, 'presets');
+fs.mkdirSync(PRESET_DIR, { recursive: true });
+function loadPresets() { try { return JSON.parse(fs.readFileSync(PRESET_FILE, 'utf8')); } catch { return {}; } }
+function savePresets(map) { fs.writeFileSync(PRESET_FILE, JSON.stringify(map, null, 2)); }
+const presetBrief = (id, p) => ({ id, name: p.name, time: p.time, files: p.files.map((f) => ({ name: f.name })), data: p.data });
+
+app.get('/api/presets', (req, res) => {
+  const map = loadPresets();
+  res.json(Object.entries(map).map(([id, p]) => presetBrief(id, p)).sort((a, b) => b.time - a.time));
+});
+
+app.post('/api/presets', upload.fields([{ name: 'logos', maxCount: 20 }]), async (req, res) => {
+  try {
+    let body;
+    try { body = JSON.parse(req.body.payload || '{}'); } catch { return res.status(400).json({ error: 'payload 不是合法 JSON' }); }
+    const name = String(body.name || '').trim();
+    if (!name) return res.status(400).json({ error: '缺少方案名称' });
+    if (!Array.isArray(body.groups) || !body.groups.length) return res.status(400).json({ error: '方案缺少分组配置' });
+    const logos = (req.files && req.files.logos) || [];
+    if (!logos.length) return res.status(400).json({ error: '方案缺少 logo 文件' });
+    for (const f of logos) {
+      const fext = extOf(f.originalname);
+      if (!WM_INPUT_EXTS.has(fext)) return res.status(400).json({ error: `不支持的水印格式 ${fext || '(未知)'}：${f.originalname}` });
+    }
+    const map = loadPresets();
+    // 同名覆盖：复用原 id 与目录（先清旧文件），列表位置按保存时间刷新
+    let entry = Object.entries(map).find(([, p]) => p.name === name);
+    const id = entry ? entry[0] : crypto.randomUUID();
+    const dir = path.join(PRESET_DIR, id);
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.mkdirSync(dir, { recursive: true });
+    const files = [];
+    for (let i = 0; i < logos.length; i++) {
+      const stored = `${i}${extOf(logos[i].originalname) || '.bin'}`;
+      fs.writeFileSync(path.join(dir, stored), logos[i].buffer);
+      files.push({ name: logos[i].originalname, file: stored });
+    }
+    map[id] = { name, time: Date.now(), data: { groups: body.groups, options: body.options || {} }, files };
+    savePresets(map);
+    res.json(presetBrief(id, map[id]));
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get('/api/presets/:id/file/:idx', (req, res) => {
+  const p = loadPresets()[req.params.id];
+  const f = p && p.files[Number(req.params.idx)];
+  if (!f) return res.status(404).json({ error: '方案或文件不存在' });
+  const full = path.join(PRESET_DIR, req.params.id, f.file);
+  if (!fs.existsSync(full)) return res.status(404).json({ error: 'logo 文件已丢失，请重新保存方案' });
+  res.sendFile(full); // 下载名由前端 fetch 后自行构造 File，这里不强制 attachment
+});
+
+app.delete('/api/presets/:id', (req, res) => {
+  const map = loadPresets();
+  if (!map[req.params.id]) return res.status(404).json({ error: '方案不存在' });
+  delete map[req.params.id];
+  savePresets(map);
+  fs.rmSync(path.join(PRESET_DIR, req.params.id), { recursive: true, force: true });
+  res.json({ ok: true });
 });
 
 // ---- 批量处理 ----
