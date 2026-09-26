@@ -92,6 +92,9 @@ jobs:
     if: inputs.release_tag != '' || startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+      - name: 生成 Release 正文
+        run: node scripts/release-notes.js "${{ inputs.release_tag || github.ref_name }}" release-notes.md
       - uses: actions/download-artifact@v4
         with:
           pattern: desktop-*
@@ -102,12 +105,15 @@ jobs:
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ inputs.release_tag || github.ref_name }}
-          overwrite: true
+          overwrite_files: true
+          name: ImgMark ${{ inputs.release_tag || github.ref_name }}
+          body_path: release-notes.md
           files: release/*
 
   build-mac-x64:
-    # Intel Mac：macos-13 runner 免费池排队极慢，独立运行 + 单独补传，不阻塞主线
-    runs-on: macos-13
+    # Intel Mac：macos-13 已于 2025-12 停用（任务会永远排队），改用最后一个 Intel 镜像
+    # macos-15-intel（GitHub 支持到 2027-08）。仍独立运行 + 单独补传，不阻塞主线
+    runs-on: macos-15-intel
     continue-on-error: true
     env:
       CSC_IDENTITY_AUTO_DISCOVERY: "false"
@@ -143,5 +149,5 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ inputs.release_tag || github.ref_name }}
-          overwrite: true
+          overwrite_files: true
           files: out/*.dmg

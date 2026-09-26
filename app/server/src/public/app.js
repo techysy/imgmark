@@ -256,6 +256,7 @@ function renderLogoList() {
 const POS_NAMES = { nw: '左上', n: '上', ne: '右上', w: '左', c: '中', e: '右', sw: '左下', s: '下', se: '右下' };
 
 function renderGroups() {
+  updateAutoColorUI(); // 分组变动会改变哪些组能自动换色
   const box = $('groups-box');
   if (!state.groups.length) {
     box.innerHTML = '<div class="muted">还没有分组：点「＋ 添加分组」，每组可放 1 个或多个 logo</div>';
@@ -435,15 +436,19 @@ function toggleCropMode() {
 }
 
 // ---------- 亮度自适应黑白 ----------
+// 按分组判断（与服务端 resolveGroups 一致：组内 logo 都有反色变体才换色）。
+// 此前只要有一个彩色 logo 就整体禁用，「黑白文字 logo 一组 + 彩色徽标一组」这种典型用法无法开启
 function updateAutoColorUI() {
   const t = $('opt-autocolor');
   const logos = state.logoSet ? state.logoSet.logos : [];
-  const allMono = logos.length > 0 && logos.every((l) => l.monochrome);
-  t.disabled = !allMono;
-  if (!allMono) t.checked = false;
-  $('autocolor-hint').textContent = allMono
-    ? '全部 logo 为纯黑白：每组按图片落点亮度自动选黑/白标'
-    : '存在彩色 logo：彩色所在分组不参与自动换色（不影响正常使用）';
+  const groups = state.groups || [];
+  const eligible = groups.filter((g) => g.logos.length && g.logos.every((i) => logos[i] && logos[i].hasAlt));
+  t.disabled = !eligible.length;
+  if (!eligible.length) t.checked = false;
+  $('autocolor-hint').textContent = !logos.length ? ''
+    : eligible.length === groups.length ? '全部分组为纯黑白 logo：每组按图片落点亮度自动选黑/白标'
+    : eligible.length ? `第 ${eligible.map((g) => groups.indexOf(g) + 1).join('、')} 组为纯黑白 logo，可自动换黑/白标；含彩色 logo 的分组保持原色`
+    : '没有纯黑白 logo 的分组：把黑白 logo 单独放一组即可启用';
 }
 
 // ---------- 样式预览（单张实时：任一分组参数变化都重新合成示例图） ----------
@@ -456,6 +461,7 @@ const refreshPreview = debounce(async () => {
     });
     $('style-preview').src = r.preview;
     const auto = !!r.previewAuto;
+    if (auto) $('style-preview-auto').src = r.previewAuto; // 此前只切换显隐、从未赋 src，暗图预览显示为破损图标
     $('style-preview-auto').classList.toggle('hidden', !auto);
     $('preview-cap-auto').classList.toggle('hidden', !auto);
   } catch { /* 预览失败不打断 */ }

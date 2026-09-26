@@ -165,9 +165,15 @@ async function analyzeInk(buffer) {
   const dark = inkLum < LUM_THRESHOLD;
   let altBuffer = null;
   if (monochrome) {
-    const c = dark ? 255 : 0;
+    // 逐像素取反（按灰度，消掉单色墨的轻微色偏），而不是把所有不透明像素涂成同一色：
+    // 去底时被笔画包围的白色区域（相机机身内部、字母 a/g 的内圈）会保留为不透明白，
+    // 统一涂色会让它们和笔画糊成实心色块
     const out = Buffer.from(data);
-    for (let i = 0; i < px; i++) { out[i * 4] = c; out[i * 4 + 1] = c; out[i * 4 + 2] = c; }
+    for (let i = 0; i < px; i++) {
+      const o = i * 4;
+      const v = 255 - Math.round(0.299 * data[o] + 0.587 * data[o + 1] + 0.114 * data[o + 2]);
+      out[o] = v; out[o + 1] = v; out[o + 2] = v;
+    }
     altBuffer = await sharp(out, { raw: { width, height, channels: 4 } }).png({ compressionLevel: 9 }).toBuffer();
   }
   return { monochrome, dark, inkLum: Math.round(inkLum), altBuffer };

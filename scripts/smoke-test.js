@@ -392,6 +392,19 @@ async function main() {
     assert(!isInside(path.join(TMP, 'a.jpg'), path.join(TMP, 'out')));
   });
 
+  await t('亮度自适应反色变体保留 logo 内部结构（被笔画包围的白色区域不再糊成实心）', async () => {
+    const { analyzeInk } = require('../app/server/src/core/watermark');
+    // 白底上的黑色方框，框内白色区域与外部背景不连通 → 去底后保留为不透明白
+    const svg = '<svg width="200" height="200" xmlns="http://www.w3.org/2000/svg"><rect width="200" height="200" fill="#fff"/><rect x="40" y="40" width="120" height="120" fill="none" stroke="#000" stroke-width="40"/></svg>';
+    const wm = await prepareWatermark(await sharp(Buffer.from(svg)).png().toBuffer(), 'box.png', { force: true });
+    const ink = await analyzeInk(wm.buffer);
+    assert(ink.monochrome && ink.dark, '应识别为深色单色墨');
+    const { data, info } = await sharp(ink.altBuffer).raw().toBuffer({ resolveWithObject: true });
+    const px = (x, y) => data[(y * info.width + x) * info.channels];
+    assert(px(30, 100) > 200, `边框应反成白色，实际 ${px(30, 100)}`);
+    assert(px(100, 100) < 50, `框内白色区域应反成黑色（此前被涂成白色糊成实心块），实际 ${px(100, 100)}`);
+  });
+
   console.log('\n[7] 回归：分组 / 去重 / 上传文件名 / 目录浏览 / 递归监听');
   await t('HTTP 分组 + skipProcessed + 中文上传名 + browse 排序 + 递归监听', async () => {
     const port = 28118;

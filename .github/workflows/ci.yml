@@ -1,0 +1,33 @@
+name: CI
+
+# 推送 main / 提交 PR 时跑冒烟测试（去底、合成、批量、CLI、HTTP、监听、去重、BMP 等全链路）。
+# Linux 对应 fnOS / 服务器部署，Windows 对应桌面版主力平台。
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/server/package-lock.json
+      - name: 安装依赖
+        working-directory: app/server
+        run: npm ci --no-audit --no-fund
+      - name: 冒烟测试
+        run: node scripts/smoke-test.js

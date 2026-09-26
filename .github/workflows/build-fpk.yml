@@ -33,6 +33,11 @@ jobs:
         with:
           node-version: 20
 
+      # 先生成 Release 正文：CHANGELOG.md 缺少该版本小节时在打包前就失败，提醒补更新日志
+      - name: 生成 Release 正文
+        if: inputs.release_tag != '' || startsWith(github.ref, 'refs/tags/v')
+        run: node scripts/release-notes.js "${{ inputs.release_tag || github.ref_name }}" release-notes.md
+
       - name: 校验 manifest 依赖声明
         run: grep -q "install_dep_apps      = nodejs_v24" manifest
 
@@ -84,15 +89,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ inputs.release_tag || github.ref_name }}
-          overwrite: true
+          overwrite_files: true
           name: ImgMark ${{ inputs.release_tag || github.ref_name }}
-          body: |
-            飞牛 fnOS 应用包（fpk），三个变体按需下载其一：
-
-            - **imgmark-*-x86-window.fpk**：桌面窗口入口（推荐，新版 fnOS）。全功能：应用内选择并授权飞牛目录。
-            - **imgmark-*-x86-fullscreen.fpk**：全屏/新标签页入口，功能同上。
-            - **imgmark-*-x86-compat.fpk**：兼容旧版应用中心（安装报「设置目录权限失败」时用它）。飞牛授权目录标签不可用，请用本地路径/上传模式。
-
-            安装：fpk 放到应用中心扫描目录（如 `/vol1/1000/fnOS App/fpk/imgmark/`）→ 应用中心「手动安装」。
-            要求：fnOS ≥ 1.2.0401，应用中心 ≥ 1.34.0（window/fullscreen 变体），依赖应用 nodejs_v24。
+          body_path: release-notes.md
           files: "*.fpk"
