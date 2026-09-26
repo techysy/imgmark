@@ -26,7 +26,8 @@
       "main.js",
       "preload.js",
       "package.json",
-      "icon.png"
+      "icon.png",
+      "tray-icon.png"
     ],
     "win": {
       "target": [

@@ -6,7 +6,7 @@
  * - preload 暴露 window.imgmarkDesktop：原生文件/文件夹对话框（比 <input type=file> 强：
  *   多选文件返回真实路径、选文件夹、按扩展名过滤水印源），路径交给后端 local-files 模式批量处理
  */
-const { app, BrowserWindow, Menu, dialog, ipcMain, shell } = require('electron');
+const { app, BrowserWindow, Tray, Menu, dialog, ipcMain, shell, nativeImage } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
 const http = require('node:http');
@@ -14,6 +14,9 @@ const http = require('node:http');
 const BASE_PORT = Number(process.env.IMGMARK_PORT || 28110);
 let win = null;
 let boundPort = BASE_PORT;
+let tray = null;
+let isQuitting = false;
+let watcherCount = 0; // -1 = 尚未获取
 
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) { app.quit(); }
@@ -61,7 +64,66 @@ function createWindow() {
   Menu.setApplicationMenu(null);
   win.loadURL(`http://127.0.0.1:${boundPort}/`);
   win.webContents.setWindowOpenHandler(({ url }) => { shell.openExternal(url); return { action: 'deny' }; });
+  // 关闭窗口 = 缩到托盘（监听服务继续运行）；真正退出走托盘菜单「退出」
+  win.on('close', (e) => {
+    if (!isQuitting) {
+      e.preventDefault();
+      win.hide();
+    }
+  });
   win.on('closed', () => { win = null; });
+}
+
+function showMain() {
+  if (!win) createWindow();
+  else { win.show(); win.focus(); }
+}
+
+// ---- 托盘 ----
+function buildTrayMenu() {
+  const watchLabel = watcherCount < 0 ? '文件夹监听：获取状态中…'
+    : watcherCount === 0 ? '文件夹监听：无运行中的监听'
+    : `文件夹监听：${watcherCount} 个运行中`;
+  return Menu.buildFromTemplate([
+    { label: '显示主窗口', click: showMain },
+    { type: 'separator' },
+    { label: watchLabel, enabled: false },
+    { type: 'separator' },
+    { label: '退出 ImgMark', click: () => { isQuitting = true; app.quit(); } },
+  ]);
+}
+
+function refreshTray() {
+  if (!tray) return;
+  tray.setToolTip(`ImgMark 批量图片水印（${watcherCount > 0 ? `${watcherCount} 个监听运行中` : '无监听'}）`);
+  tray.setContextMenu(buildTrayMenu());
+}
+
+function pollWatchers() {
+  const req = http.get({ host: '127.0.0.1', port: boundPort, path: '/api/watchers', timeout: 2000 }, (res) => {
+    let body = '';
+    res.on('data', (c) => { body += c; });
+    res.on('end', () => {
+      try {
+        const list = JSON.parse(body).watchers || [];
+        const n = list.filter((w) => w.status === 'watching').length;
+        if (n !== watcherCount) { watcherCount = n; refreshTray(); }
+      } catch { /* 非 imgmark 实例占用端口等情况，忽略 */ }
+    });
+  });
+  req.on('error', () => {});
+  req.on('timeout', () => req.destroy());
+}
+
+function createTray() {
+  // 32px 专用托盘图标；缺失时退回 512px 应用图标（Electron 自动缩放）
+  let icon = nativeImage.createFromPath(path.join(__dirname, 'tray-icon.png'));
+  if (icon.isEmpty()) icon = nativeImage.createFromPath(path.join(__dirname, 'icon.png'));
+  tray = new Tray(icon);
+  tray.setToolTip('ImgMark 批量图片水印');
+  tray.setContextMenu(buildTrayMenu());
+  pollWatchers();
+  setInterval(pollWatchers, 30000);
 }
 
 // ---- 原生对话框（强化文件/文件夹选择能力）----
@@ -100,8 +162,11 @@ app.whenReady().then(async () => {
     return;
   }
   createWindow();
-  app.on('activate', () => { if (!win) createWindow(); });
+  createTray();
+  app.on('activate', () => showMain());
 });
 
-app.on('second-instance', () => { if (win) { if (win.isMinimized()) win.restore(); win.show(); win.focus(); } });
+app.on('before-quit', () => { isQuitting = true; });
+
+app.on('second-instance', () => showMain());
 app.on('window-all-closed', () => app.quit());

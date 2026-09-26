@@ -54,6 +54,8 @@ cd desktop && npm install && npm run dev    # 开发
 npm run dist                                # 打包 → dist/ImgMark-Setup-*.exe / ImgMark-Portable-*.exe
 ```
 
+桌面壳支持**系统托盘**：关闭窗口即缩到托盘后台常驻（文件夹监听持续运行），托盘菜单可显示主窗口、查看监听数量、真正退出；托盘状态每 30s 刷新。
+
 CI 推 `v*` tag 时自动产出 **Windows**（`ImgMark-Setup-*.exe` 安装版 / `ImgMark-Portable-*.exe` 便携版）与 **macOS**（`ImgMark-mac-arm64-*.dmg` Apple Silicon 为主；Intel x64 包为独立任务，runner 空闲时自行补传到 Release，不阻塞发版）。macOS 包未做代码签名：首次打开需**右键 → 打开**，或执行 `xattr -cr /Applications/ImgMark.app`。前端检测到 `window.imgmarkDesktop` 后自动启用：水印文件选择走原生对话框、「上传图片」变为本地文件路径直处理、「本地路径」页签出现「选择文件夹」按钮；纯浏览器环境自动降级为原有行为。桌面壳的「方案」保存走浏览器存储（localStorage + IndexedDB），在壳内同样生效。
 
 ### 打包为 fnOS 应用（fpk）
