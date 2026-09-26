@@ -4,7 +4,7 @@
 
 > 发版时 CI 会从本文件截取对应版本的小节作为 GitHub Release 正文（`scripts/release-notes.js`），新版本请在顶部按同样格式追加。
 
-## [未发布]
+## [0.7.4] - 2026-09-26
 
 ### 修复
 - 亮度自适应的反色 logo 糊成实心色块：被笔画包围的白色区域（如相机图标内部、字母 a/g 的内圈）在反色时被一并涂白，现改为逐像素取反，保留 logo 内部结构
@@ -180,6 +180,7 @@
 - 九宫格定位、平铺、透明度、旋转、缩放，文件夹批量处理
 - 飞牛 fnOS 授权目录、本地路径、上传三种图片来源；CLI
 
+[0.7.4]: https://github.com/techysy/imgmark/compare/v0.7.3...v0.7.4
 [0.7.3]: https://github.com/techysy/imgmark/compare/v0.7.2...v0.7.3
 [0.7.2]: https://github.com/techysy/imgmark/compare/v0.7.1...v0.7.2
 [0.7.1]: https://github.com/techysy/imgmark/compare/v0.7.0...v0.7.1
