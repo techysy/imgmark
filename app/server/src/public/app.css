@@ -44,6 +44,9 @@ header .status { font-size: 12px; color: var(--muted); display: flex; gap: 7px; 
 main { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; padding: 12px 22px 30px; max-width: 1240px; margin: 0 auto; }
 @media (max-width: 980px) { main { grid-template-columns: 1fr; } }
 .col { display: flex; flex-direction: column; gap: 14px; }
+/* ② 的「分组控件 + 预览图」竖排：并排时 .grow 只有 ~247px，装不下
+   九宫格(150) + 滑杆，控件会被 flex 换行挤成阶梯竖排。竖排后拿到整卡宽。 */
+.g-stack { display: flex; flex-direction: column; gap: 14px; }
 
 /* ---- 卡片 ---- */
 .card { background: var(--card); border: 1px solid var(--border-subtle); border-radius: var(--radius); padding: 14px 16px; }
@@ -193,6 +196,18 @@ footer { text-align: center; color: var(--text-3); font-size: 12px; padding: 18p
 .gc-ctrl { gap: 14px; align-items: flex-start; margin-top: 6px; }
 .gc-ctrl .field { min-width: 150px; }
 .gc-ctrl .grid9 { min-width: 150px; }
+/* 九宫格与滑杆并排：九宫格 150px 固定左列，滑杆撑满右列。
+   并排时 .grow 只有 ~247px，而「位置(150) + 3 根滑杆(各 184px)」一行需 744px，
+   flex 换行会把四个控件压成阶梯竖排（实测 y=695/840/910/981，卡片高 412px）。
+   改网格后行数由滑杆个数决定，九宫格跨满这些行；右列宽 = 卡宽 - 150 - 间距，
+   窄窗下也有 ~370px，滑杆比原来的 180px 更长，拖动精度更好。 */
+.gc-ctrl { display: grid; grid-template-columns: 150px minmax(0, 1fr); align-items: start; gap: 8px 14px; }
+.gc-ctrl > .field { min-width: 0; margin: 0; }
+.gc-ctrl > .gc-pos-field { grid-column: 1; grid-row: 1 / span 3; }
+.gc-ctrl > .field:not(.gc-pos-field) { grid-column: 2; }
+/* width:100% 时 range 自身的默认 margin 会把 .field 撑宽 4px，导致 .gc-ctrl 横向溢出 */
+.gc-ctrl input[type="range"] { width: 100%; margin: 0; display: block; }
+.gc-ctrl .grid9 { min-width: 0; }
 /* 分组卡片里九宫格更紧凑：只改单元格尺寸与字号，不再给按钮加 padding（会撑破格子导致错位） */
 .gc-ctrl .grid9 { grid-template-columns: repeat(3, 30px); grid-auto-rows: 30px; }
 .gc-ctrl .grid9 button { font-size: 10.5px; letter-spacing: -.5px; }

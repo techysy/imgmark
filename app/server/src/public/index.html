@@ -105,7 +105,9 @@
     <!-- ② 水印分组 -->
     <div class="card">
       <h2>② 水印分组 <small>每组独立定位/大小/间距，可放 1 个或多个 logo，参数即改即预览</small></h2>
-      <div class="row">
+      <!-- 分组控件与预览竖排：并排时 .grow 只剩 ~247px，九宫格 150 + 滑杆放不下，
+           四个控件会被 flex 换行挤成阶梯竖排。竖排后 .grow 拿到整卡宽 ~560px。 -->
+      <div class="g-stack">
         <div class="grow">
           <div id="groups-box"></div>
           <button id="group-add" class="btn" disabled>＋ 添加分组</button>
