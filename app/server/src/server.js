@@ -112,6 +112,17 @@ setInterval(sweepJobs, 10 * 60 * 1000).unref();
 const POSITIONS = new Set(['nw', 'n', 'ne', 'w', 'c', 'e', 'sw', 's', 'se']);
 const clampNum = (v, min, max) => Math.max(min, Math.min(max, v));
 
+/**
+ * 标记「调用方传参/配置有误」的错误。
+ * 这些错跟服务自身无关（分组没给 logo、分组引用了不存在的序号），
+ * 报 500 会让人以为服务坏了，其实是请求该改。带 status 属性供路由的 catch 取用。
+ */
+function badRequest(msg) {
+  const e = new Error(msg);
+  e.status = 400;
+  return e;
+}
+
 function savePrepared(id, prepared) {
   const file = path.join(WM_DIR, `${id}.png`);
   fs.writeFileSync(file, prepared.buffer);
@@ -399,9 +410,10 @@ async function resolveGroups(set, rawGroups, autoColor) {
       defs.push({ textSpec: g.text, options: opts });
       continue;
     }
-    if (!g.logos.length) throw new Error('存在没有 logo 的分组');
+    // 分组配置是调用方给的，出错属于请求问题而非服务故障 → 标 400（见 process 路由的 catch）
+    if (!g.logos.length) throw badRequest('存在没有 logo 的分组');
     const picked = g.logos.map((i) => set.logos[i]).filter(Boolean);
-    if (!picked.length) throw new Error('分组引用了不存在的 logo');
+    if (!picked.length) throw badRequest('分组引用了不存在的 logo');
     const baseList = picked.map((l) => ({ buffer: fs.readFileSync(l.path), width: l.width, height: l.height }));
     const useAlt = autoColor && picked.every((l) => l.altPath);
     const altList = useAlt ? picked.map((l) => ({ buffer: fs.readFileSync(l.altPath), width: l.width, height: l.height })) : null;
@@ -460,7 +472,12 @@ app.post('/api/preview', express.json(), async (req, res) => {
     const cropRatio = orient === 'portrait'
       ? (options.cropRatioPort || options.cropRatio || null)
       : (options.cropRatio || null);
-    const groups = Array.isArray(req.body.groups) && req.body.groups.length ? req.body.groups : null;
+    // 带了边框就必须走分组那条路：边框要先把画布撑大，再让水印位置按「照片矩形」换算，
+    // 老的单水印合成里没有这一步。纯边框（无分组）也归这条路，否则会被下面
+    // 「水印不存在」挡掉 —— 而批量处理早就允许只加边框了，两边行为得一致。
+    const groups = Array.isArray(req.body.groups) && req.body.groups.length
+      ? req.body.groups
+      : (options.frame ? [] : null);
     // 分组模式：多个分组一次性合成到示例图
     if (groups) {
       const wantsLogo = groups.some((g) => !(g && g.text && g.text.enabled &&
@@ -692,6 +709,11 @@ app.post('/api/process', uploadImages.array('files'), express.json(), async (req
       // 只要边框、不叠任何水印：走分组管线（groups 里只有边框在起作用）
       groupDefs = [];
     } else {
+      // 走到这里既没有分组也没有边框。给了 watermarkId 就是想用单/合并水印，去查它；
+      // 什么都没给的话「水印不存在」会让人以为是过期，其实压根没说要画什么
+      if (!payload.watermarkId && !(Array.isArray(payload.groups) && payload.groups.length)) {
+        return res.status(400).json({ error: '没有可合成的内容：请提供水印、相机参数分组或边框' });
+      }
       wm = watermarks.get(payload.watermarkId);
       if (!wm) return res.status(404).json({ error: '水印不存在或服务已重启，请重新上传' });
     }
@@ -810,7 +832,7 @@ app.post('/api/process', uploadImages.array('files'), express.json(), async (req
     // 已回过 jobId 后再出错：记到任务上（再写响应会抛 ERR_HTTP_HEADERS_SENT，未处理的 rejection 会让进程退出）
     const job = res.headersSent && jobs.get(res.locals.jobId);
     if (job) Object.assign(job, { status: 'error', error: e.message, finishedAt: Date.now() });
-    else if (!res.headersSent) res.status(500).json({ error: e.message });
+    else if (!res.headersSent) res.status(e.status || 500).json({ error: e.message });
   }
 });
 
@@ -841,7 +863,14 @@ app.post('/api/watchers', express.json(), async (req, res) => {
     if (!path.isAbsolute(outDir)) outDir = path.join(inDir, outDir);
     outDir = path.resolve(outDir);
     if (outDir === inDir) return res.status(400).json({ error: '输出目录不能与监听目录相同（防止水印图再次被处理）' });
-    const hasTarget = (Array.isArray(groups) && groups.length && logoSets.get(watermarkId)) || watermarks.get(watermarkId);
+    // 监听的目标可能压根不是 logo：纯文字组（只写相机参数）不需要水印集，
+    // 纯边框（options.frame）更是什么都不叠 —— 这两类都得放行，否则
+    // 「只写参数 / 只加边框」在批量能跑、在监听里却被拒，行为割裂。
+    const wGroups = Array.isArray(groups) ? groups : [];
+    const wantsLogo = wGroups.some((g) => !(g && g.text && g.text.enabled &&
+      Array.isArray(g.text.fields) && g.text.fields.length));
+    const frameOnly = !wGroups.length && !!(options && options.frame);
+    const hasTarget = frameOnly || !wantsLogo || (wGroups.length && logoSets.get(watermarkId)) || watermarks.get(watermarkId);
     if (!hasTarget) return res.status(404).json({ error: '水印不存在或服务已重启，请先在页面重新准备' });
     const cfg = {
       inputDir: inDir, outputDir: outDir,

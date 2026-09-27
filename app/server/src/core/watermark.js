@@ -452,7 +452,11 @@ async function composeGroups(targetBuffer, groupDefs, o = {}) {
   const { format = 'auto', quality = 90, sizeBase = 'width', mozjpeg = false } = o;
   // 允许「只加边框、不叠任何水印」：此时没有分组，但边框本身就是要输出的内容。
   // 边框随后可能因为这张图没 EXIF 而被跳过，那种情况下真就没有任何可输出的了
-  if (!groupDefs.length && !o.frame) throw new Error('没有可合成的分组');
+  if (!groupDefs.length && !o.frame) {
+    const e = new Error('没有可合成的分组');
+    e.status = 400; // 调用方没给任何要画的东西，属于请求有误
+    throw e;
+  }
   const src = await loadTarget(targetBuffer);
   targetBuffer = src.buffer;
   const meta = src.meta;

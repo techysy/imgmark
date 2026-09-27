@@ -39,7 +39,8 @@
     "prepare": "node scripts/sync-readme.js",
     "prepack": "node scripts/sync-readme.js",
     "test:exif": "node scripts/exif-smoke.js",
-    "test": "node scripts/dd-smoke.js && node scripts/exif-smoke.js"
+    "test:routes": "node scripts/routes-smoke.js",
+    "test": "node scripts/dd-smoke.js && node scripts/exif-smoke.js && node scripts/routes-smoke.js"
   },
   "repository": {
     "type": "git",
