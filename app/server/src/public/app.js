@@ -462,7 +462,7 @@ function renderGroups() {
         <button class="btn tiny gc-del" data-gi="${gi}">✕ 删除分组</button>
       </div>
       <div class="row-inline wrap gc-ctrl">
-        <div class="field gc-pos-field"><label>位置</label>
+        <div class="field"><label>位置</label>
           <div class="grid9 gc-pos">${Object.entries(POS_NAMES).map(([k, v]) =>
             `<button data-pos="${k}" class="${g.position === k ? 'on' : ''}" title="${v}">${v}</button>`).join('')}</div>
         </div>
