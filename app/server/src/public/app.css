@@ -131,8 +131,13 @@ input[type="checkbox"] { accent-color: var(--pri); }
 .crop-rect.hidden { display: none; }
 .wm-meta { flex: 1; min-width: 240px; }
 .notes { font-size: 12px; color: var(--muted); margin-top: 6px; white-space: pre-line; }
-/* 裁剪提示常驻一行高度：有字/没字都不改变 .field 高度，避免纵向跳动 */
-#cropratio-hint { min-height: 19px; }
+/* 裁剪提示：没选裁剪时不留空行。
+   这条原来常驻 19px 高，是为了防止「有字/没字」时 .field 高度变化导致纵向跳动；
+   但现在 ④ 里它是和「输出格式」并排的 —— 留 19px 空行会让裁剪那格比格式高 19px，
+   两个下拉的底边不齐，下面「输出质量」之上就空出一大块。
+   改成空时折叠（:empty 时不占高），只在真选了裁剪时才长出来。 */
+#cropratio-hint { min-height: 0; }
+#cropratio-hint:empty { display: none; }
 
 .preview-box { flex: 1; min-width: 260px; text-align: center; }
 .preview-box img { width: 100%; max-width: 420px; border-radius: 10px; border: 1px solid var(--border-subtle); cursor: zoom-in; }
