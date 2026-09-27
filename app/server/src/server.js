@@ -15,14 +15,14 @@ const sharp = require('sharp');
 const { prepareWatermark, mergeWatermarks, composeWatermark, composeGroups, buildGroupWatermark, analyzeInk, applyCrop, parseCropRatio, CROP_RATIOS, IMAGE_EXTS, WM_INPUT_EXTS, extOf } = require('./core/watermark');
 const { checkFontAvailable } = require('./core/textmark');
 const { formatCameraText } = require('./core/exiftext');
-const { runBatch } = require('./core/batch');
+const { runBatch, isInside, normalizeSuffix } = require('./core/batch');
 const { ProcessDB } = require('./core/db');
 const { WatcherManager } = require('./core/watcher');
 const { TrimAppClient } = require('./fnos/trimapp');
 const { createFnosRouter } = require('./fnos/routes');
 
 const PORT = Number(process.env.PORT || 28110);
-const HOST = process.env.HOST || '0.0.0.0';
+const HOST = process.env.HOST || '127.0.0.1';
 const APPNAME = process.env.TRIM_APPNAME || 'imgmark';
 const APP_VERSION = require('../package.json').version;
 
@@ -61,6 +61,9 @@ const watermarks = new Map(); // id -> {path,width,height,bgColor,notes,preview}
 const logoSets = new Map();   // setId -> { logos: [{key,path,altPath,name,width,height,monochrome,inkDark}] }（分组模式）
 const jobs = new Map();       // id -> {status,total,done,ok,failed,current,results,error,outputDir,dirKind}
 const JOB_TTL_MS = 6 * 3600 * 1000; // 结束超过该时长的任务从内存移除，上传模式的临时结果一并删除
+const MAX_ACTIVE_PROCESS_JOBS = 2;
+let activeProcessReservations = 0;
+let activeMemoryUploadReservations = 0;
 
 // 本地处理数据库 + 文件夹监听（DATA_DIR 下持久化）
 const db = new ProcessDB(path.join(DATA_DIR, 'process-db.json'));
@@ -73,13 +76,22 @@ setInterval(compactDb, 24 * 3600 * 1000).unref();
 const watchers = new WatcherManager({
   db,
   stateFile: path.join(DATA_DIR, 'watchers.json'),
+  authorizePath: async (cfg, full, target) => {
+    if (!fnos.isAvailable()) return;
+    if (!cfg.ownerUid) throw httpError(403, '监听缺少 fnOS 用户身份');
+    const roots = await fnosRoots(cfg.ownerUid);
+    await assertFnosPath(cfg.ownerUid, full, { roots });
+    if (target) await assertFnosPath(cfg.ownerUid, target, { write: true, roots });
+  },
   resolveTarget: async (w) => {
     const options = { ...(w.cfg.options || {}) };
     if (Array.isArray(w.cfg.groups) && w.cfg.groups.length) {
+      const wantsLogo = w.cfg.groups.some((g) => !normTextSpec(g && g.text));
       const set = logoSets.get(w.cfg.watermarkId);
-      if (!set) return null;
-      return { groups: await resolveGroups(set, w.cfg.groups, !!options.autoColor), options };
+      if (wantsLogo && !set) return null;
+      return { groups: await resolveGroups(set || { logos: [] }, w.cfg.groups, !!options.autoColor), options };
     }
+    if (options.frame) return { groups: [], options };
     const wm = watermarks.get(w.cfg.watermarkId);
     if (!wm) return null;
     const watermarkAlt = options.autoColor && wm.altPath ? fs.readFileSync(wm.altPath) : null;
@@ -87,15 +99,150 @@ const watchers = new WatcherManager({
   },
 });
 const numOr = (v, def) => { const n = Number(v); return Number.isFinite(n) ? n : def; };
-// 水印源小而少，放内存；批量图片走磁盘（最多 500×100MB，放内存会撑爆进程）
+const MAX_PREPARED_TARGETS = 64;
+
+function discardPrepared(id) {
+  const wm = watermarks.get(id);
+  if (wm) for (const file of [wm.path, wm.altPath]) if (file) fs.rmSync(file, { force: true });
+  const set = logoSets.get(id);
+  if (set) for (const logo of set.logos) {
+    for (const file of [logo.path, logo.altPath]) if (file) fs.rmSync(file, { force: true });
+  }
+  watermarks.delete(id);
+  logoSets.delete(id);
+}
+
+function ensurePreparedCapacity() {
+  const referenced = new Set();
+  for (const job of jobs.values()) if (job.status === 'running' && job.watermarkId) referenced.add(job.watermarkId);
+  for (const watcher of watchers.list()) if (watcher.watermarkId) referenced.add(watcher.watermarkId);
+  while (watermarks.size + logoSets.size >= MAX_PREPARED_TARGETS) {
+    const candidate = [...watermarks.keys(), ...logoSets.keys()].find((id) => !referenced.has(id));
+    if (!candidate) throw httpError(429, '水印缓存已满，请删除旧监听或稍后重试');
+    discardPrepared(candidate);
+  }
+}
+
+function gatewayUid(req) {
+  const uid = Number(req.headers['x-trim-userid'] || 0);
+  return Number.isInteger(uid) && uid > 0 ? uid : 0;
+}
+
+function httpError(status, message) {
+  const e = new Error(message);
+  e.status = status;
+  return e;
+}
+
+function requestContentLengthLimit(maxBytes) {
+  return (req, res, next) => {
+    const length = Number(req.headers['content-length']);
+    if (Number.isFinite(length) && length > maxBytes) {
+      return res.status(413).json({ error: `请求总大小不能超过 ${Math.round(maxBytes / (1024 * 1024))} MB` });
+    }
+    next();
+  };
+}
+
+function validateMutationOrigin(req, res, next) {
+  if (!['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method) || !req.headers.origin) return next();
+  let origin;
+  try { origin = new URL(req.headers.origin); } catch { return res.status(403).json({ error: 'Origin 无效' }); }
+  const hosts = [req.headers.host, ...String(req.headers['x-forwarded-host'] || '').split(',')]
+    .map((host) => String(host || '').trim().toLowerCase()).filter(Boolean);
+  if (!hosts.includes(origin.host.toLowerCase())) return res.status(403).json({ error: '拒绝跨站修改请求' });
+  next();
+}
+
+function reserveProcessSlot(req, res, next) {
+  const running = [...jobs.values()].filter((job) => job.status === 'running').length;
+  if (running + activeProcessReservations >= MAX_ACTIVE_PROCESS_JOBS) {
+    return res.status(429).json({ error: '处理队列已满，请稍后重试' });
+  }
+  activeProcessReservations++;
+  let released = false;
+  const release = () => {
+    if (released) return;
+    released = true;
+    activeProcessReservations = Math.max(0, activeProcessReservations - 1);
+  };
+  req.releaseProcessSlot = release;
+  res.once('finish', release);
+  res.once('close', release);
+  next();
+}
+
+function reserveMemoryUploadSlot(req, res, next) {
+  if (activeMemoryUploadReservations >= 1) return res.status(429).json({ error: '水印/方案上传正在处理，请稍后重试' });
+  activeMemoryUploadReservations++;
+  let released = false;
+  const release = () => {
+    if (released) return;
+    released = true;
+    activeMemoryUploadReservations = Math.max(0, activeMemoryUploadReservations - 1);
+  };
+  res.once('finish', release);
+  res.once('close', release);
+  next();
+}
+
+async function fnosRoots(uid) {
+  const [personal, shared] = await Promise.all([
+    fnos.getUserAccessibleFolders(uid),
+    fnos.getSharedAccessibleFolders(),
+  ]);
+  return [...new Set([...personal, ...shared].filter((p) => typeof p === 'string' && path.isAbsolute(p)).map((p) => path.resolve(p)))];
+}
+
+/** Check a user path against fnOS grants and the ACL of its nearest existing directory. */
+async function assertFnosPath(uid, target, { write = false, roots = null } = {}) {
+  if (!path.isAbsolute(String(target || ''))) throw httpError(403, 'fnOS 路径必须为绝对路径');
+  const resolved = path.resolve(target);
+  const allowed = roots || await fnosRoots(uid);
+  const root = allowed.find((r) => isInside(resolved, r));
+  if (!root) throw httpError(403, '路径不在当前用户已授权目录内');
+  const rootReal = await fs.promises.realpath(root);
+  try {
+    const targetReal = await fs.promises.realpath(resolved);
+    if (!isInside(targetReal, rootReal)) throw httpError(403, '文件通过符号链接离开了授权目录');
+  } catch (e) {
+    if (e.status) throw e;
+    if (e.code !== 'ENOENT' && e.code !== 'ENOTDIR') throw e;
+  }
+
+  let probe = resolved;
+  while (true) {
+    try {
+      const st = await fs.promises.stat(probe);
+      if (!st.isDirectory()) probe = path.dirname(probe);
+      else break;
+    } catch (e) {
+      if (e.code !== 'ENOENT' && e.code !== 'ENOTDIR') throw e;
+      const parent = path.dirname(probe);
+      if (parent === probe) throw httpError(403, '找不到可验证权限的父目录');
+      probe = parent;
+    }
+  }
+
+  const probeReal = await fs.promises.realpath(probe);
+  if (!isInside(probeReal, rootReal)) throw httpError(403, '路径通过符号链接离开了授权目录');
+  const acl = await fnos.checkUserACL(uid, probe);
+  const entry = Array.isArray(acl) ? acl[0] : acl;
+  if (!entry || !entry.readable || (write && !entry.writable)) {
+    throw httpError(403, write ? '当前用户对输出目录没有写权限' : '当前用户对输入目录没有读权限');
+  }
+  return { root, probe: probeReal, entry };
+}
+
+// 小型水印源暂存内存；批量图片落盘，并由请求体、文件数和并发上限控制资源用量。
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 100 * 1024 * 1024, files: 40 },
+  limits: { fileSize: 4 * 1024 * 1024, files: 24, fields: 32, fieldSize: 256 * 1024 },
   defParamCharset: 'utf8', // 浏览器按 UTF-8 发文件名，multer 默认按 latin1 解码会让中文名乱码
 });
 const uploadImages = multer({
   dest: UPLOAD_DIR,
-  limits: { fileSize: 100 * 1024 * 1024, files: 500 },
+  limits: { fileSize: 22 * 1024 * 1024, files: 10, fields: 32, fieldSize: 256 * 1024 },
   defParamCharset: 'utf8',
 });
 
@@ -141,7 +288,8 @@ app.get('/api/config', (req, res) => res.json({ ...loadConfig(), version: APP_VE
 app.get('/api/exif-fields', (req, res) => res.json({ fields: exifFieldsMeta() }));
 app.use('/vendor', express.static(path.join(__dirname, '..', 'node_modules', '@trimjs', 'web-app', 'dist')));
 app.use(express.static(path.join(__dirname, 'public')));
-app.use('/api/fnos', createFnosRouter({ client: fnos, listImages: null }));
+app.use('/api', validateMutationOrigin);
+app.use('/api/fnos', express.json({ limit: '64kb' }), createFnosRouter({ client: fnos, listImages: null }));
 
 // ---- 水印准备 ----
 // 裁剪参数："x,y,w,h"（百分比 0-100）或 {x,y,w,h} 对象；无效返回 null
@@ -170,7 +318,7 @@ function parseCropArray(v, count) {
   return arr.map((c) => (c ? parseCropField(c) : null));
 }
 
-app.post('/api/prepare', upload.fields([
+app.post('/api/prepare', reserveMemoryUploadSlot, requestContentLengthLimit(128 * 1024 * 1024), upload.fields([
   { name: 'watermark', maxCount: 20 },
   { name: 'pairBlack', maxCount: 1 },
   { name: 'pairWhite', maxCount: 1 },
@@ -189,6 +337,7 @@ app.post('/api/prepare', upload.fields([
         return res.status(400).json({ error: `不支持的水印格式 ${fext || '(未知)'}：${f.originalname}，支持：AI / SVG / PNG / JPG / WebP / BMP / GIF / TIFF / AVIF` });
       }
     }
+    ensurePreparedCapacity();
     const base = {
       bg: ['auto', 'white', 'black'].includes(req.body.bg) ? req.body.bg : 'auto',
       tolerance: Math.max(1, Math.min(200, numOr(req.body.tolerance, 40))),
@@ -330,7 +479,7 @@ app.post('/api/prepare', upload.fields([
     res.json({ id, preview, ...meta });
   } catch (e) {
     console.error('[prepare]', e);
-    res.status(500).json({ error: e.message });
+    res.status(e.status || 500).json({ error: e.message });
   }
 });
 
@@ -356,7 +505,7 @@ const TEXT_FONT_WEIGHTS = new Set(['normal', 'bold']);
 /** 把前端的文字水印配置规范化成 textSpec（fields + style），非法/空配置返回 null */
 function normTextSpec(raw) {
   if (!raw || !raw.enabled) return null;
-  const fields = (Array.isArray(raw.fields) ? raw.fields : []).filter((f) => TEXT_FIELD_KEYS.includes(f));
+  const fields = [...new Set((Array.isArray(raw.fields) ? raw.fields : []).filter((f) => TEXT_FIELD_KEYS.includes(f)))].slice(0, TEXT_FIELD_KEYS.length);
   if (!fields.length) return null;
   const color = /^#[0-9a-f]{6}$/i.test(raw.color || '') ? raw.color : '#ffffff';
   const bg = raw.bg && /^#[0-9a-f]{6}$/i.test(raw.bg) ? raw.bg : 'none';
@@ -381,7 +530,7 @@ function normTextSpec(raw) {
 function normGroup(g) {
   const src = g || {};
   return {
-    logos: (Array.isArray(src.logos) ? src.logos : []).map((i) => Math.max(0, Math.floor(Number(i) || 0))).slice(0, 8),
+    logos: (Array.isArray(src.logos) ? src.logos : []).map((i) => Math.floor(Number(i))),
     // 文字水印组：这组不叠 logo，改为叠「本图 EXIF」文字（相机/镜头/曝光/日期）
     text: normTextSpec(src.text),
     position: POSITIONS.has(src.position) ? src.position : 'se',
@@ -397,10 +546,33 @@ function normGroup(g) {
   };
 }
 
+function normalizeGroups(rawGroups, logoCount = null) {
+  if (!Array.isArray(rawGroups) || rawGroups.length > 8) throw badRequest('分组数量必须为 1..8');
+  return rawGroups.map((raw, groupIndex) => {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw badRequest(`第 ${groupIndex + 1} 组配置无效`);
+    const rawLogos = Array.isArray(raw.logos) ? raw.logos : [];
+    if (rawLogos.length > 8) throw badRequest(`第 ${groupIndex + 1} 组最多只能包含 8 个 logo`);
+    if (Array.isArray(raw.ratios) && raw.ratios.length > 8) throw badRequest(`第 ${groupIndex + 1} 组比例数组不能超过 8 项`);
+    const text = normTextSpec(raw.text);
+    if (!text && !rawLogos.length) throw badRequest(`第 ${groupIndex + 1} 组没有 logo 或有效文字字段`);
+    const logos = rawLogos.map((idx) => {
+      const n = idx;
+      if (typeof n !== 'number' || !Number.isInteger(n) || n < 0 || (logoCount != null && n >= logoCount)) {
+        throw badRequest(`第 ${groupIndex + 1} 组引用了无效的 logo 序号`);
+      }
+      return n;
+    });
+    const group = normGroup(raw);
+    group.logos = logos;
+    group.text = text;
+    return group;
+  });
+}
+
 async function resolveGroups(set, rawGroups, autoColor) {
   const defs = [];
-  for (const raw of rawGroups.slice(0, 8)) {
-    const g = normGroup(raw);
+  const groups = normalizeGroups(rawGroups, set.logos.length);
+  for (const g of groups) {
     const opts = {
       position: g.position, sizePct: g.sizePct, marginPct: g.marginPct,
       offsetX: g.offsetX, offsetY: g.offsetY, opacity: g.opacity, autoColor,
@@ -412,7 +584,7 @@ async function resolveGroups(set, rawGroups, autoColor) {
     }
     // 分组配置是调用方给的，出错属于请求问题而非服务故障 → 标 400（见 process 路由的 catch）
     if (!g.logos.length) throw badRequest('存在没有 logo 的分组');
-    const picked = g.logos.map((i) => set.logos[i]).filter(Boolean);
+    const picked = g.logos.map((i) => set.logos[i]);
     if (!picked.length) throw badRequest('分组引用了不存在的 logo');
     const baseList = picked.map((l) => ({ buffer: fs.readFileSync(l.path), width: l.width, height: l.height }));
     const useAlt = autoColor && picked.every((l) => l.altPath);
@@ -464,8 +636,11 @@ const previewDataUrl = ({ buffer, ext }) => `data:${PREVIEW_MIME[ext] || 'image/
 
 app.post('/api/preview', express.json(), async (req, res) => {
   try {
-    const options = req.body.options || {};
-    const orient = req.body.orient === 'portrait' ? 'portrait' : 'landscape'; // 示例图方向（仅预览用，不影响处理）
+    const body = req.body;
+    if (!body || typeof body !== 'object' || Array.isArray(body)) return res.status(400).json({ error: '请求内容必须是 JSON 对象' });
+    const options = body.options || {};
+    if (body.groups != null && !Array.isArray(body.groups)) return res.status(400).json({ error: 'groups 必须为数组' });
+    const orient = body.orient === 'portrait' ? 'portrait' : 'landscape'; // 示例图方向（仅预览用，不影响处理）
     // 示例图方向决定用哪个裁剪比例：竖图示例看 cropRatioPort（勾了「横竖分开设置」时），
     // 否则一律用 cropRatio —— 与批量处理里 applyCrop 的选法保持一致，
     // 这样预览看到的就是实际会裁出来的画面。
@@ -475,14 +650,14 @@ app.post('/api/preview', express.json(), async (req, res) => {
     // 带了边框就必须走分组那条路：边框要先把画布撑大，再让水印位置按「照片矩形」换算，
     // 老的单水印合成里没有这一步。纯边框（无分组）也归这条路，否则会被下面
     // 「水印不存在」挡掉 —— 而批量处理早就允许只加边框了，两边行为得一致。
-    const groups = Array.isArray(req.body.groups) && req.body.groups.length
-      ? req.body.groups
+    const groups = Array.isArray(body.groups) && body.groups.length
+      ? body.groups
       : (options.frame ? [] : null);
     // 分组模式：多个分组一次性合成到示例图
     if (groups) {
       const wantsLogo = groups.some((g) => !(g && g.text && g.text.enabled &&
         Array.isArray(g.text.fields) && g.text.fields.length));
-      const set = logoSets.get(req.body.watermarkId);
+      const set = logoSets.get(body.watermarkId);
       if (wantsLogo && !set) return res.status(404).json({ error: 'logo 组不存在或服务已重启，请重新上传' });
       const auto = !!options.autoColor;
       // 示例图没有 EXIF，文字水印会渲染成空；预览时注入一份「典型相机参数」，
@@ -508,11 +683,12 @@ app.post('/api/preview', express.json(), async (req, res) => {
       const previewAuto = auto && groupDefs.some((g) => g.wmAltBuffer || g.textSpec) ? await toPreviewG('dark') : null;
       return res.json({ preview, previewAuto });
     }
-    const wm = watermarks.get(req.body.watermarkId);
+    const wm = watermarks.get(body.watermarkId);
     if (!wm) return res.status(404).json({ error: '水印不存在或服务已重启，请重新上传' });
+    const wmBuffer = fs.readFileSync(wm.path);
     const altBuf = options.autoColor && wm.altPath ? fs.readFileSync(wm.altPath) : null;
     const toPreview = async (sample) => {
-      const composed = await composeWatermark(await getSampleImage(sample, orient), fs.readFileSync(wm.path), options, altBuf);
+      const composed = await composeWatermark(await getSampleImage(sample, orient), wmBuffer, options, altBuf);
       composed.buffer = await applyCrop(composed.buffer, { cropRatio });
       return previewDataUrl(composed);
     };
@@ -521,7 +697,7 @@ app.post('/api/preview', express.json(), async (req, res) => {
     const previewAuto = altBuf ? await toPreview('dark') : null;
     res.json({ preview, previewAuto });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    res.status(e.status || 500).json({ error: e.message });
   }
 });
 
@@ -578,31 +754,62 @@ function presetSummary(p) {
   return { tags, text, groups: groups.length, logos: logoCount, cropRatio: o.cropRatio || null, format: o.format || 'auto' };
 }
 
-const presetBrief = (id, p) => ({ id, name: p.name, time: p.time, files: p.files.map((f) => ({ name: f.name })), data: p.data, summary: presetSummary(p) });
+function safePresetData(p) {
+  const data = p && p.data || {};
+  let groups = [];
+  try { groups = normalizeGroups(Array.isArray(data.groups) ? data.groups : [], null); } catch { /* 损坏的旧方案按无分组呈现 */ }
+  const options = parseOptions(data.options);
+  return { groups, options };
+}
+
+function presetBrief(id, p) {
+  const data = safePresetData(p);
+  const safe = { ...p, data };
+  return {
+    id, name: String(p.name || '').slice(0, 100), time: Number(p.time) || 0,
+    files: (Array.isArray(p.files) ? p.files : []).map((f) => ({ name: String(f.name || '').slice(0, 255) })),
+    data, summary: presetSummary(safe),
+  };
+}
 
 app.get('/api/presets', (req, res) => {
+  const uid = fnos.isAvailable() ? gatewayUid(req) : 0;
+  if (fnos.isAvailable() && !uid) return res.status(403).json({ error: '请求缺少 fnOS 网关注入的用户身份' });
   const map = loadPresets();
-  res.json(Object.entries(map).map(([id, p]) => presetBrief(id, p)).sort((a, b) => b.time - a.time));
+  res.json(Object.entries(map)
+    .filter(([, p]) => !fnos.isAvailable() || p.ownerUid == null || p.ownerUid === uid)
+    .map(([id, p]) => presetBrief(id, p)).sort((a, b) => b.time - a.time));
 });
 
-app.post('/api/presets', upload.fields([{ name: 'logos', maxCount: 20 }]), async (req, res) => {
+app.post('/api/presets', reserveMemoryUploadSlot, requestContentLengthLimit(128 * 1024 * 1024), upload.fields([{ name: 'logos', maxCount: 20 }]), async (req, res) => {
   try {
+    const presetOwnerUid = fnos.isAvailable() ? gatewayUid(req) : null;
+    if (fnos.isAvailable() && !presetOwnerUid) return res.status(403).json({ error: '请求缺少 fnOS 网关注入的用户身份' });
     let body;
     try { body = JSON.parse(req.body.payload || '{}'); } catch { return res.status(400).json({ error: 'payload 不是合法 JSON' }); }
-    const name = String(body.name || '').trim();
+    if (!body || typeof body !== 'object' || Array.isArray(body)) return res.status(400).json({ error: 'payload 必须是 JSON 对象' });
+    const name = String(body.name || '').trim().slice(0, 100);
     if (!name) return res.status(400).json({ error: '缺少方案名称' });
     if (!Array.isArray(body.groups) || !body.groups.length) return res.status(400).json({ error: '方案缺少分组配置' });
     const logos = (req.files && req.files.logos) || [];
     // 只含相机参数文字水印的方案不带 logo，也是合法的
-    const needsLogo = body.groups.some((g) => !(g && g.text && g.text.enabled));
-    if (needsLogo && !logos.length) return res.status(400).json({ error: '方案缺少 logo 文件' });
     for (const f of logos) {
       const fext = extOf(f.originalname);
       if (!WM_INPUT_EXTS.has(fext)) return res.status(400).json({ error: `不支持的水印格式 ${fext || '(未知)'}：${f.originalname}` });
     }
+    let groups, options;
+    try {
+      groups = normalizeGroups(body.groups, logos.length);
+      options = parseOptions(body.options);
+    } catch (e) {
+      return res.status(e.status || 400).json({ error: e.message });
+    }
+    const needsLogo = groups.some((g) => !g.text);
+    if (needsLogo && !logos.length) return res.status(400).json({ error: '方案缺少 logo 文件' });
     const map = loadPresets();
     // 同名覆盖：复用原 id 与目录（先清旧文件），列表位置按保存时间刷新
-    let entry = Object.entries(map).find(([, p]) => p.name === name);
+    let entry = Object.entries(map).find(([, p]) => p.name === name &&
+      (!fnos.isAvailable() || p.ownerUid === presetOwnerUid));
     const id = entry ? entry[0] : crypto.randomUUID();
     const dir = path.join(PRESET_DIR, id);
     fs.rmSync(dir, { recursive: true, force: true });
@@ -613,16 +820,19 @@ app.post('/api/presets', upload.fields([{ name: 'logos', maxCount: 20 }]), async
       fs.writeFileSync(path.join(dir, stored), logos[i].buffer);
       files.push({ name: logos[i].originalname, file: stored });
     }
-    map[id] = { name, time: Date.now(), data: { groups: body.groups, options: body.options || {} }, files };
+    map[id] = { name, time: Date.now(), ownerUid: presetOwnerUid, data: { groups, options }, files };
     savePresets(map);
     res.json(presetBrief(id, map[id]));
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    res.status(e.status || 500).json({ error: e.message });
   }
 });
 
 app.get('/api/presets/:id/file/:idx', (req, res) => {
   const p = loadPresets()[req.params.id];
+  if (fnos.isAvailable() && (!gatewayUid(req) || !p || (p.ownerUid != null && p.ownerUid !== gatewayUid(req)))) {
+    return res.status(404).json({ error: '方案或文件不存在' });
+  }
   const f = p && p.files[Number(req.params.idx)];
   if (!f) return res.status(404).json({ error: '方案或文件不存在' });
   const full = path.join(PRESET_DIR, req.params.id, f.file);
@@ -633,6 +843,9 @@ app.get('/api/presets/:id/file/:idx', (req, res) => {
 app.delete('/api/presets/:id', (req, res) => {
   const map = loadPresets();
   if (!map[req.params.id]) return res.status(404).json({ error: '方案不存在' });
+  if (fnos.isAvailable() && (!gatewayUid(req) || map[req.params.id].ownerUid !== gatewayUid(req))) {
+    return res.status(404).json({ error: '方案不存在' });
+  }
   delete map[req.params.id];
   savePresets(map);
   fs.rmSync(path.join(PRESET_DIR, req.params.id), { recursive: true, force: true });
@@ -684,16 +897,33 @@ function normFrame(raw) {
   };
 }
 
-app.post('/api/process', uploadImages.array('files'), express.json(), async (req, res) => {
+app.post('/api/process', reserveProcessSlot, requestContentLengthLimit(256 * 1024 * 1024), uploadImages.array('files'), express.json(), async (req, res) => {
   // 请求结束后清掉 multer 的落盘文件（上传模式已 rename 走的不受影响）
   res.on('finish', () => { for (const f of req.files || []) fs.rm(f.path, { force: true }, () => {}); });
   try {
-    const payload = req.body.payload ? JSON.parse(req.body.payload) : req.body;
+    let payload;
+    try { payload = req.body && req.body.payload ? JSON.parse(req.body.payload) : req.body; }
+    catch { return res.status(400).json({ error: 'payload 不是合法 JSON' }); }
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+      return res.status(400).json({ error: 'payload 必须是 JSON 对象' });
+    }
+    if (payload.groups != null && !Array.isArray(payload.groups)) return res.status(400).json({ error: 'groups 必须为数组' });
+    const mode = payload.mode; // local | fnos | upload | local-files
+    if (!['local', 'fnos', 'upload', 'local-files'].includes(mode)) {
+      return res.status(400).json({ error: '处理模式无效' });
+    }
+    const fnosUid = fnos.isAvailable() ? gatewayUid(req) : 0;
+    if (fnos.isAvailable() && !fnosUid) {
+      return res.status(403).json({ error: '请求缺少 fnOS 网关注入的用户身份' });
+    }
+    if (payload.overwrite != null && typeof payload.overwrite !== 'boolean') {
+      return res.status(400).json({ error: 'overwrite 必须为布尔值' });
+    }
+    const suffix = normalizeSuffix(payload.suffix == null ? '_wm' : payload.suffix);
     const options = parseOptions(payload.options);
     const cfg = loadConfig();
-    const overwrite = !!payload.overwrite;
+    const overwrite = payload.overwrite === true;
     const jobId = crypto.randomUUID();
-    const mode = payload.mode; // local | fnos | upload | local-files（桌面壳：本地显式文件列表）
 
     // 分组模式：watermarkId 是 logo 组 id，groups 描述布局；否则走单/合并水印
     let groupDefs = null;
@@ -719,6 +949,7 @@ app.post('/api/process', uploadImages.array('files'), express.json(), async (req
     }
 
     let inputDir, outputDir, dirKind;
+    let jobFnosRoots = null;
     let filesArgExplicit = null; // local-files：显式文件列表（桌面壳原生对话框）
     if (mode === 'upload') {
       if (!req.files || !req.files.length) return res.status(400).json({ error: '未收到图片文件' });
@@ -743,13 +974,6 @@ app.post('/api/process', uploadImages.array('files'), express.json(), async (req
       if (!path.isAbsolute(inputDir)) return res.status(400).json({ error: '请输入绝对路径' });
       if (mode === 'fnos') {
         if (!fnos.isAvailable()) return res.status(501).json({ error: 'fnOS 开放 API 不可用：请在 fnOS 应用环境内使用，或改用本地路径/上传模式' });
-        // 网关身份头可信、payload.uid 由客户端填写不可信：有头时以头为准，防止冒用他人 uid 越权读写
-        const uid = Number(req.headers['x-trim-userid'] || payload.uid || 0);
-        if (!Number.isInteger(uid) || uid <= 0) return res.status(400).json({ error: 'uid 无效' });
-        const acl = await fnos.checkUserACL(uid, inputDir);
-        const entry = Array.isArray(acl) ? acl[0] : acl;
-        if (!entry || !entry.readable) return res.status(403).json({ error: '该目录未授权或当前用户不可读，请先在"飞牛目录"里选择授权' });
-        if (overwrite && !entry.writable) return res.status(403).json({ error: '当前用户对该目录没有写权限，无法覆盖原图' });
         dirKind = 'fnos';
       } else {
         if (!fs.existsSync(inputDir) || !fs.statSync(inputDir).isDirectory()) {
@@ -762,6 +986,19 @@ app.post('/api/process', uploadImages.array('files'), express.json(), async (req
     // 相对输出目录名（UI 默认传 "_watermarked"）锚定到图片所在目录，而非服务进程 CWD
     if (mode !== 'upload' && outputDir && !path.isAbsolute(outputDir)) {
       outputDir = path.join(inputDir, outputDir);
+    }
+
+    // fnOS 中 local/local-files/fnos 都必须受当前登录用户授权约束，不能靠更换 mode 绕过 ACL。
+    if (fnos.isAvailable() && mode !== 'upload') {
+      const roots = await fnosRoots(fnosUid);
+      jobFnosRoots = roots;
+      const inputPaths = mode === 'local-files'
+        ? [...new Set(filesArgExplicit.map((file) => path.dirname(file)))]
+        : [inputDir];
+      for (const sourcePath of inputPaths) {
+        await assertFnosPath(fnosUid, sourcePath, { write: overwrite, roots });
+      }
+      if (!overwrite) await assertFnosPath(fnosUid, outputDir, { write: true, roots });
     }
 
     let filesArg = filesArgExplicit;
@@ -791,10 +1028,12 @@ app.post('/api/process', uploadImages.array('files'), express.json(), async (req
 
     const job = {
       id: jobId, status: 'running', mode, dirKind, inputDir, outputDir, overwrite,
+      ownerUid: fnosUid || null, watermarkId: payload.watermarkId || null,
       total: 0, done: 0, ok: 0, failed: 0, current: null, results: [], error: null,
       startedAt: Date.now(),
     };
     jobs.set(jobId, job);
+    req.releaseProcessSlot(); // 从上传/提交预留转到运行中任务计数，避免短暂双计数
     res.locals.jobId = jobId;
     res.json({ jobId, total: null });
 
@@ -816,8 +1055,10 @@ app.post('/api/process', uploadImages.array('files'), express.json(), async (req
         db, skipProcessed: !!payload.skipProcessed && !overwrite, watermarkId: payload.watermarkId,
         recursive: !!payload.recursive,
         overwrite,
-        suffix: payload.suffix || '_wm',
-        concurrency: Math.max(1, Math.min(8, Number(payload.concurrency) || cfg.concurrency)),
+        suffix,
+        concurrency: Math.max(1, Math.min(4, Number(payload.concurrency) || cfg.concurrency)),
+        authorizeInput: fnosUid && mode !== 'upload' ? (file) => assertFnosPath(fnosUid, file, { roots: jobFnosRoots }) : undefined,
+        authorizeOutput: fnosUid && mode !== 'upload' ? (file) => assertFnosPath(fnosUid, file, { write: true, roots: jobFnosRoots }) : undefined,
         onProgress,
       });
       job.skipped = result.skipped.length;
@@ -839,6 +1080,7 @@ app.post('/api/process', uploadImages.array('files'), express.json(), async (req
 app.get('/api/jobs/:id', (req, res) => {
   const job = jobs.get(req.params.id);
   if (!job) return res.status(404).json({ error: '任务不存在' });
+  if (fnos.isAvailable() && (!gatewayUid(req) || job.ownerUid !== gatewayUid(req))) return res.status(404).json({ error: '任务不存在' });
   res.json(job);
 });
 
@@ -847,14 +1089,27 @@ app.get('/api/jobs/:id/file/:idx', (req, res) => {
   const job = jobs.get(req.params.id);
   const r = job && job.results[Number(req.params.idx)];
   if (!job || !r || !r.output || job.dirKind !== 'upload') return res.status(404).json({ error: '文件不存在' });
+  if (fnos.isAvailable() && (!gatewayUid(req) || job.ownerUid !== gatewayUid(req))) return res.status(404).json({ error: '文件不存在' });
   res.download(r.output, r.name);
 });
 
 // ---- 文件夹监听（新图落盘自动加水印，本地数据库去重） ----
-app.get('/api/watchers', (req, res) => res.json({ watchers: watchers.list() }));
+app.get('/api/watchers', (req, res) => {
+  if (fnos.isAvailable() && !gatewayUid(req)) return res.status(403).json({ error: '请求缺少 fnOS 网关注入的用户身份' });
+  const list = watchers.list();
+  res.json({ watchers: fnos.isAvailable() ? list.filter((w) => w.ownerUid === gatewayUid(req)) : list });
+});
 app.post('/api/watchers', express.json(), async (req, res) => {
   try {
     const { inputDir, outputDir, recursive, suffix, watermarkId, groups, options } = req.body || {};
+    if (groups != null && !Array.isArray(groups)) return res.status(400).json({ error: 'groups 必须为数组' });
+    const ownerUid = fnos.isAvailable() ? gatewayUid(req) : 0;
+    if (fnos.isAvailable() && !ownerUid) return res.status(403).json({ error: '请求缺少 fnOS 网关注入的用户身份' });
+    const ownedWatchers = fnos.isAvailable()
+      ? watchers.list().filter((w) => w.ownerUid === ownerUid).length
+      : watchers.list().length;
+    if (watchers.list().length >= 64) return res.status(429).json({ error: '服务端监听数量已达上限（64）' });
+    if (ownedWatchers >= 16) return res.status(429).json({ error: '监听数量已达上限（16）' });
     if (!inputDir || !path.isAbsolute(String(inputDir))) return res.status(400).json({ error: '监听目录需为绝对路径' });
     if (!fs.existsSync(inputDir) || !fs.statSync(inputDir).isDirectory()) return res.status(400).json({ error: `目录不存在：${inputDir}` });
     const inDir = path.resolve(inputDir);
@@ -866,34 +1121,64 @@ app.post('/api/watchers', express.json(), async (req, res) => {
     // 监听的目标可能压根不是 logo：纯文字组（只写相机参数）不需要水印集，
     // 纯边框（options.frame）更是什么都不叠 —— 这两类都得放行，否则
     // 「只写参数 / 只加边框」在批量能跑、在监听里却被拒，行为割裂。
-    const wGroups = Array.isArray(groups) ? groups : [];
-    const wantsLogo = wGroups.some((g) => !(g && g.text && g.text.enabled &&
-      Array.isArray(g.text.fields) && g.text.fields.length));
-    const frameOnly = !wGroups.length && !!(options && options.frame);
-    const hasTarget = frameOnly || !wantsLogo || (wGroups.length && logoSets.get(watermarkId)) || watermarks.get(watermarkId);
+    const wantsLogo = Array.isArray(groups) && groups.some((g) =>
+      !normTextSpec(g && g.text) && Array.isArray(g && g.logos) && g.logos.length > 0);
+    const logoSet = watermarkId ? logoSets.get(watermarkId) : null;
+    if (wantsLogo && !logoSet) return res.status(404).json({ error: '水印不存在或服务已重启，请先在页面重新准备' });
+    const wGroups = Array.isArray(groups) ? normalizeGroups(groups, logoSet?.logos.length ?? null) : [];
+    const normalizedOptions = parseOptions(options);
+    const usesLogoGroup = wGroups.some((g) => !g.text);
+    const frameOnly = !wGroups.length && !!normalizedOptions.frame;
+    const hasTarget = frameOnly ||
+      (wGroups.length > 0 && !usesLogoGroup) ||
+      (wGroups.length > 0 && usesLogoGroup && logoSet) ||
+      (wGroups.length === 0 && watermarks.get(watermarkId));
     if (!hasTarget) return res.status(404).json({ error: '水印不存在或服务已重启，请先在页面重新准备' });
+    let ownerRoots = null;
+    if (fnos.isAvailable()) {
+      ownerRoots = await fnosRoots(ownerUid);
+      await assertFnosPath(ownerUid, inDir, { roots: ownerRoots });
+      await assertFnosPath(ownerUid, outDir, { write: true, roots: ownerRoots });
+    }
     const cfg = {
       inputDir: inDir, outputDir: outDir,
       recursive: !!recursive, overwrite: false,
-      suffix: suffix || '_wm', watermarkId,
-      groups: Array.isArray(groups) ? groups : null,
-      options: parseOptions(options), // 完整保留输出格式/质量/位置等（此前只存了 autoColor+sizeBase）
+      suffix: normalizeSuffix(suffix || '_wm'), watermarkId, ownerUid: ownerUid || null,
+      authorizedRoots: ownerRoots,
+      groups: wGroups.length ? wGroups : null,
+      options: normalizedOptions,
     };
     res.json(watchers.create(cfg));
   } catch (e) {
     console.error('[watchers]', e);
-    res.status(500).json({ error: e.message });
+    res.status(e.status || 500).json({ error: e.message });
   }
 });
-app.delete('/api/watchers/:id', (req, res) => res.json({ ok: watchers.remove(req.params.id) }));
-app.post('/api/watchers/:id/rescan', (req, res) => res.json({ ok: watchers.rescan(req.params.id) }));
+app.delete('/api/watchers/:id', (req, res) => {
+  const watcher = watchers.status(req.params.id);
+  if (!watcher) return res.status(404).json({ error: '监听不存在' });
+  if (fnos.isAvailable() && (!gatewayUid(req) || watcher.ownerUid !== gatewayUid(req))) return res.status(404).json({ error: '监听不存在' });
+  return res.json({ ok: watchers.remove(req.params.id) });
+});
+app.post('/api/watchers/:id/rescan', (req, res) => {
+  const watcher = watchers.status(req.params.id);
+  if (!watcher) return res.status(404).json({ error: '监听不存在' });
+  if (fnos.isAvailable() && (!gatewayUid(req) || watcher.ownerUid !== gatewayUid(req))) return res.status(404).json({ error: '监听不存在' });
+  return res.json({ ok: watchers.rescan(req.params.id) });
+});
 app.get('/api/db/stats', (req, res) => res.json({ records: db.size }));
 
 // 本地模式目录浏览（辅助选路径）
 app.post('/api/browse', express.json(), async (req, res) => {
   try {
-    const dir = String(req.body.path || '').trim() || path.parse(process.cwd()).root;
+    const body = req.body && typeof req.body === 'object' ? req.body : {};
+    const dir = String(body.path || '').trim() || path.parse(process.cwd()).root;
     if (!path.isAbsolute(dir)) return res.status(400).json({ error: '请输入绝对路径' });
+    if (fnos.isAvailable()) {
+      const uid = gatewayUid(req);
+      if (!uid) return res.status(403).json({ error: '请求缺少 fnOS 网关注入的用户身份' });
+      await assertFnosPath(uid, dir);
+    }
     const dirents = await fs.promises.readdir(dir, { withFileTypes: true });
     const dirs = [], images = [];
     for (const d of dirents) {
@@ -905,14 +1190,40 @@ app.post('/api/browse', express.json(), async (req, res) => {
     images.sort((a, b) => a.localeCompare(b, 'zh-CN'));
     res.json({ path: dir, parent: path.dirname(dir), dirs: dirs.slice(0, 300), imageCount: images.length, images: images.slice(0, 50) });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    res.status(e.status || 500).json({ error: e.message });
   }
+});
+
+app.use('/api', (req, res) => res.status(404).json({ error: '接口不存在' }));
+app.use((err, req, res, next) => {
+  if (res.headersSent) return next(err);
+  let status = Number(err.status || err.statusCode) || 500;
+  let message = err.message || '服务器内部错误';
+  if (err.code && err.code.startsWith('LIMIT_')) {
+    status = err.code === 'LIMIT_UNEXPECTED_FILE' ? 400 : 413;
+    message = err.code === 'LIMIT_FILE_SIZE' ? '单个上传文件超过大小限制'
+      : err.code === 'LIMIT_UNEXPECTED_FILE' ? '上传字段不符合接口要求'
+      : '上传文件或表单字段数量超过限制';
+  }
+  else if (err.type === 'entity.too.large') { status = 413; message = '请求内容超过大小限制'; }
+  else if (err instanceof SyntaxError && 'body' in err) { status = 400; message = '请求 JSON 格式无效'; }
+  if (status >= 500) {
+    console.error('[http]', err);
+    message = '服务器内部错误';
+  }
+  res.status(status).json({ error: message });
 });
 
 /** 启动 HTTP 服务（Electron 桌面壳复用：require('./server').start({port})）
  *  SOCKET_PATH 环境变量非空时额外监听 Unix Socket（fnOS 统一网关模式，见官方 Native 示例） */
 function start({ port = PORT, host = HOST, socketPath = process.env.SOCKET_PATH || '' } = {}) {
   return new Promise((resolve, reject) => {
+    if (!['127.0.0.1', '::1', 'localhost'].includes(host) && process.env.IMGMARK_ALLOW_REMOTE !== '1') {
+      return reject(new Error('服务没有鉴权；非回环监听需显式设置 IMGMARK_ALLOW_REMOTE=1'));
+    }
+    if (!['127.0.0.1', '::1', 'localhost'].includes(host)) {
+      console.warn('[imgmark] 警告：HTTP 服务没有鉴权且绑定了非回环地址，请勿通过公网或不可信网络访问');
+    }
     const srv = app.listen(port, host, () => {
       console.log(`[imgmark] 监听 http://${host}:${port}  (数据目录 ${DATA_DIR})`);
       console.log(`[imgmark] fnOS 开放 API: ${fnos.isAvailable() ? '可用' : '不可用（本地模式：本地路径 / 上传图片）'}`);
@@ -927,6 +1238,9 @@ function start({ port = PORT, host = HOST, socketPath = process.env.SOCKET_PATH 
       }
       resolve(srv);
     });
+    srv.requestTimeout = 120_000;
+    srv.headersTimeout = 65_000;
+    srv.keepAliveTimeout = 5_000;
     srv.on('error', reject);
   });
 }

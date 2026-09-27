@@ -256,7 +256,7 @@
 
       <div id="src-fnos" class="src-panel hidden">
         <div class="row-inline">
-          <label>用户 UID <input type="number" id="fnos-uid" value="1000" class="num" style="width:90px"></label>
+          <label>当前用户 UID <input type="number" id="fnos-uid" value="1000" class="num" style="width:90px"></label>
           <button id="fnos-pick" class="btn">＋ 选择并授权目录</button>
           <button id="fnos-refresh" class="btn ghost">刷新授权列表</button>
         </div>
@@ -387,10 +387,12 @@
       <h2>⑦ 文件夹监听 <small>新图片落盘自动加水印 · 本地数据库校验不重复处理</small></h2>
       <div class="row-inline">
         <input type="text" id="watch-dir" placeholder="监听目录（绝对路径），如 C:\photos\inbox" class="path-input" style="flex:1;min-width:240px">
+        <button id="watch-dir-pick" class="btn hidden">选择文件夹</button>
       </div>
       <div class="row-inline wrap" style="margin-top:10px">
         <label class="check"><input type="checkbox" id="watch-recursive"> 包含子目录</label>
         <span>输出到 <input type="text" id="watch-outdir" class="path-input short" value="_watched"></span>
+        <button id="watch-outdir-pick" class="btn hidden">选择文件夹</button>
         <button id="watch-create" class="btn" disabled>建立监听</button>
         <button id="watch-refresh" class="btn ghost">刷新状态</button>
       </div>

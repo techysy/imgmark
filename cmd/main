@@ -40,7 +40,7 @@ start() {
   # TRIM_API_TOKEN / TRIM_APPNAME / TRIM_PKGVAR 由系统注入本脚本环境，原样传给子进程
   # SOCKET_PATH：统一网关 Unix Socket（app/ui/config 的 gatewaySocket=app.sock，
   #              放 target 目录，应用用户可写，参考官方 Native 示例）
-  PORT="${SERVICE_PORT}" SOCKET_PATH="${APPDEST}/target/app.sock" IMGMARK_DATA_DIR="${PKGVAR}" \
+  PORT="${SERVICE_PORT}" HOST="127.0.0.1" SOCKET_PATH="${APPDEST}/target/app.sock" IMGMARK_DATA_DIR="${PKGVAR}" \
     nohup "${NODE_BIN}" "${SERVER_JS}" >> "${LOG_FILE}" 2>&1 &
   echo $! > "${PID_FILE}"
   sleep 1

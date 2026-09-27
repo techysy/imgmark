@@ -506,20 +506,20 @@ function renderGroups() {
             <option value="h" ${g.direction !== 'v' ? 'selected' : ''}>横排</option>
             <option value="v" ${g.direction === 'v' ? 'selected' : ''}>竖排</option>
           </select></div>` : ''}
-        <div class="field"><label>大小 <b class="gc-sv">${g.sizePct}</b>%</label>
-          <input type="range" class="gc-size" min="2" max="90" value="${g.sizePct}"></div>
-        <div class="field"><label>边距 <b class="gc-mv">${g.marginPct}</b>%</label>
-          <input type="range" class="gc-mg" min="0" max="25" value="${g.marginPct}"></div>
+        <div class="field"><label>大小 <b class="gc-sv">${esc(g.sizePct)}</b>%</label>
+          <input type="range" class="gc-size" min="2" max="90" value="${esc(g.sizePct)}"></div>
+        <div class="field"><label>边距 <b class="gc-mv">${esc(g.marginPct)}</b>%</label>
+          <input type="range" class="gc-mg" min="0" max="25" value="${esc(g.marginPct)}"></div>
         ${multi ? `
-        <div class="field ${g.direction === 'v' ? 'dim' : ''}"><label>水平间距 <b class="gc-gxv">${g.gapX}</b></label>
-          <input type="range" class="gc-gapx" min="0" max="100" value="${g.gapX}"></div>
-        <div class="field ${g.direction === 'h' ? 'dim' : ''}"><label>垂直间距 <b class="gc-gyv">${g.gapY}</b></label>
-          <input type="range" class="gc-gapy" min="0" max="100" value="${g.gapY}"></div>
+        <div class="field ${g.direction === 'v' ? 'dim' : ''}"><label>水平间距 <b class="gc-gxv">${esc(g.gapX)}</b></label>
+          <input type="range" class="gc-gapx" min="0" max="100" value="${esc(g.gapX)}"></div>
+        <div class="field ${g.direction === 'h' ? 'dim' : ''}"><label>垂直间距 <b class="gc-gyv">${esc(g.gapY)}</b></label>
+          <input type="range" class="gc-gapy" min="0" max="100" value="${esc(g.gapY)}"></div>
         ${g.logos.map((li, k) => `
         <div class="field"><label>logo ${li + 1} ${g.direction === 'v' ? '宽' : '高'}比 <b class="gc-rv" data-k="${k}">${(g.ratios[k] || 1).toFixed(2)}</b></label>
           <input type="range" class="gc-ratio" data-k="${k}" min="0.2" max="3" step="0.05" value="${g.ratios[k] || 1}"></div>`).join('')}` : ''}
-        <div class="field"><label>不透明度 <b class="gc-ov">${g.opacity}</b></label>
-          <input type="range" class="gc-op" min="5" max="100" value="${g.opacity}"></div>
+        <div class="field"><label>不透明度 <b class="gc-ov">${esc(g.opacity)}</b></label>
+          <input type="range" class="gc-op" min="5" max="100" value="${esc(g.opacity)}"></div>
       </div>
       ${canDel ? `<button class="btn tiny gc-del" data-gi="${gi}">✕ 删除分组</button>` : ''}
     </div>`;
@@ -989,6 +989,8 @@ async function loadFnosStatus() {
     const s = await api('/api/fnos/status');
     state.fnosAvailable = s.available;
     if (s.available) {
+      $('fnos-uid').readOnly = true; // fnOS 用户身份只认网关头，不接受页面自选 UID
+      $('fnos-uid').title = '由 fnOS 网关身份头确定';
       $('fnos-dot').className = 'dot ok';
       $('fnos-text').textContent = `fnOS 开放 API 已连接（${esc(s.appName)}）`;
       // 尝试加载 SDK；在宿主 iframe 内可直接选目录授权
@@ -996,7 +998,7 @@ async function loadFnosStatus() {
         const { TrimApp } = await import('/vendor/index.js');
         state.sdk = new TrimApp();
         $('fnos-hint').textContent = state.sdk.isStandaloneWeb
-          ? '当前是独立浏览器页面：目录授权需在 fnOS 桌面内打开本应用完成；此前授权过的目录仍会显示在下面。'
+          ? '当前是独立浏览器页面：fnOS 目录访问需要应用网关注入当前用户身份，请从 fnOS 应用入口打开。'
           : '';
       } catch { $('fnos-hint').textContent = '未找到 fnOS SDK（可能不在宿主环境内），只能查询已授权目录。'; }
     } else {
@@ -1016,6 +1018,7 @@ async function refreshFolders() {
   const uid = +$('fnos-uid').value || 0;
   try {
     const r = await api(`/api/fnos/folders?uid=${uid}`);
+    $('fnos-uid').value = String(r.uid);
     const box = $('fnos-folders');
     const items = [
       ...r.shared.map((f) => ({ ...f, tag: '共享' })),
@@ -1293,6 +1296,20 @@ function init() {
   loadPresets();
   $('watch-create').addEventListener('click', createWatcher);
   $('watch-refresh').addEventListener('click', refreshWatchers);
+  if (native) {
+    // 桌面壳：原生选目录。监听目录要绝对路径，手打容易错；输出目录既能给绝对路径
+    // 也能给子目录名，所以选完填绝对路径（同样被服务端接受）
+    $('watch-dir-pick').classList.remove('hidden');
+    $('watch-dir-pick').addEventListener('click', async () => {
+      const dir = await native.pickFolder('选择要监听的文件夹（新图片落盘后自动加水印）');
+      if (dir) $('watch-dir').value = dir;
+    });
+    $('watch-outdir-pick').classList.remove('hidden');
+    $('watch-outdir-pick').addEventListener('click', async () => {
+      const dir = await native.pickFolder('选择监听输出的文件夹');
+      if (dir) $('watch-outdir').value = dir;
+    });
+  }
   refreshWatchers();
 
   $('wm-file').addEventListener('change', (e) => onWmFiles(Array.from(e.target.files || [])));
@@ -1347,7 +1364,7 @@ function init() {
   // 本地
   if (native) $('local-pick').classList.remove('hidden');
   $('local-pick').addEventListener('click', async () => {
-    const dir = await native.pickFolder();
+    const dir = await native.pickFolder('选择要加水印的图片文件夹');
     if (dir) { $('local-path').value = dir; browseLocal(dir); }
   });
   $('local-browse').addEventListener('click', () => browseLocal($('local-path').value.trim()));
@@ -1377,7 +1394,7 @@ function init() {
     // 桌面壳：原生选择输出文件夹（绝对路径），并移除 fnOS 页签（壳内无 fnOS 开放 API）
     $('outdir-pick').classList.remove('hidden');
     $('outdir-pick').addEventListener('click', async () => {
-      const dir = await native.pickFolder();
+      const dir = await native.pickFolder('选择水印输出的文件夹');
       if (dir) $('opt-outdir').value = dir;
     });
     document.querySelector('.tab[data-mode="fnos"]').classList.add('hidden');

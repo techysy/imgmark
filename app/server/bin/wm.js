@@ -30,7 +30,7 @@ function usage() {
                   [--margin 3] [--tile] [--tile-gap 10] [--rotate 0] [--format auto|png|jpeg|webp]
                   [--quality 90] [--mozjpeg] [--recursive] [--overwrite] [--suffix _wm] [--concurrency 3]
                   [--bg auto|white|black] [--tolerance 40] [--force] [--trim] [--crop "..."] [--gap 10] [--unequal]
-  imgmark serve   启动 Web 界面（浏览器批量操作 + fnOS 授权目录；PORT/HOST 环境变量可覆盖）
+  imgmark serve   启动 Web 界面（默认只监听本机；非回环 HOST 还需 IMGMARK_ALLOW_REMOTE=1）
 
 说明:
   -w 可重复传入多个 logo，自动等高并排合并（--gap 间距%，--unequal 关闭等高）
@@ -100,7 +100,8 @@ async function main() {
   };
 
   if (cmd === 'serve') {
-    require('../src/server'); // 启动 Web 界面（PORT/HOST 环境变量可覆盖，默认 28110）
+    const { start } = require('../src/server');
+    await start(); // PORT/HOST 环境变量可覆盖，默认只监听本机 28110
     return;
   }
 
@@ -150,7 +151,7 @@ async function main() {
     console.log(`  水印 ${merged.width}×${merged.height}${preparedList.length > 1 ? `（${preparedList.length} 个 logo 并排）` : ''}`);
     merged.notes && merged.notes.forEach((n) => console.log(`  · ${n}`));
     const inputDir = path.resolve(args.i);
-    const outputDir = args.o ? path.resolve(args.o) : null;
+    const outputDir = args.o ? path.resolve(args.o) : (args.overwrite ? null : path.join(inputDir, '_watermarked'));
     const result = await runBatch({
       inputDir,
       outputDir,

@@ -42,8 +42,15 @@ async function renderWithPdfjs(buffer, maxDim) {
   try {
     const page = await doc.getPage(1);
     const vp1 = page.getViewport({ scale: 1 });
-    const scale = Math.max(0.5, Math.min(8, maxDim / Math.max(vp1.width, vp1.height)));
+    if (!Number.isFinite(vp1.width) || !Number.isFinite(vp1.height) || vp1.width <= 0 || vp1.height <= 0) {
+      throw new Error('PDF 页面尺寸无效');
+    }
+    const scale = Math.min(8, maxDim / Math.max(vp1.width, vp1.height));
     const vp = page.getViewport({ scale });
+    if (!Number.isFinite(vp.width) || !Number.isFinite(vp.height) ||
+        vp.width <= 0 || vp.height <= 0 || vp.width * vp.height > maxDim * maxDim) {
+      throw new Error('PDF 页面栅格化尺寸超过限制');
+    }
     const canvas = createCanvas(Math.ceil(vp.width), Math.ceil(vp.height));
     const ctx = canvas.getContext('2d');
     ctx.clearRect(0, 0, canvas.width, canvas.height); // 保持透明底
@@ -72,6 +79,7 @@ async function renderWithGhostscript(buffer) {
     fs.writeFileSync(inFile, buffer);
     const r = spawnSync(bin, [
       '-dNOPAUSE', '-dBATCH', '-dSAFER',
+      '-dMaxBitmap=268435456',
       '-dFirstPage=1', '-dLastPage=1',
       '-sDEVICE=pngalpha', '-r150',
       `-sOutputFile=${outFile}`, inFile,

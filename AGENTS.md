@@ -11,12 +11,16 @@ ImgMark = HTTP 服务（默认 `http://127.0.0.1:28110`）+ CLI（`node bin/wm.j
 curl -s http://127.0.0.1:28110/api/health
 # → {"ok":true,"app":"imgmark","dataDir":"..."}
 
-# 没有实例就起一个（Node ≥ 18，首次需 npm install）：
+# 没有实例就起一个（Node ≥ 20.9，首次需 npm install）：
 cd app/server && npm install && npm start
-# 端口占用：PORT=28120 npm start；fnOS 环境 HOST/PORT 由平台注入
+# 端口占用：PORT=28120 npm start；fnOS 使用平台端口并经 app.sock 网关转发
 ```
 
-无鉴权，仅限本机/局域网使用，**不要暴露公网**。
+无鉴权，默认只监听 `127.0.0.1`；fnOS 通过 `app.sock` 网关访问。非回环绑定需同时设置 `HOST` 和 `IMGMARK_ALLOW_REMOTE=1`，只用于受信任网络，**不要暴露公网或不可信网络**。
+
+- 上传水印/方案：单文件最多 4 MB，请求体最多 128 MB；图片上传：单文件最多 22 MB、每批最多 10 张、请求体最多 256 MB
+- 同时最多处理 2 个批量任务；每个任务最多 4 路并发；每位 fnOS 用户最多创建 16 个监听，服务端总数最多 64 个
+- 解码上限：目标图最多 50,000,000 像素；水印源最多 40,000,000 像素；PDF/AI 栅格化长边最多 4,000 像素
 
 ## 1. 约定
 
@@ -170,7 +174,7 @@ CLI 暂不支持分组布局 / 监听 / 数据库去重（这三项走 HTTP API�
 ## 7. 其他模式
 
 - `mode=upload`：multipart 附 `files[]`（与 payload 同表单），结果用 `GET /api/jobs/:id/file/:idx` 逐个下载
-- `mode=fnos`：飞牛 NAS 内使用，需 `uid` + 已授权目录（开放平台 `trim.file.*`），桌面壳内隐藏该页签
+- `mode=fnos`：飞牛 NAS 内使用，UID 由应用网关注入 `x-trim-userid`（请求 payload/query 的 UID 不可信），输入和输出路径都必须位于当前用户可读/可写的授权目录（开放平台 `trim.file.*`），桌面壳内隐藏该页签
 - `mode=local-files`：桌面壳原生对话框的显式文件列表
 
 ## 8. Agent 注意事项

@@ -12,6 +12,7 @@ FNPACK_URL="https://static2.fnnas.com/fnpack/fnpack-${FNPACK_VERSION}-linux-amd6
 [ "$ARCH" = "arm" ] && FNPACK_URL="https://static2.fnnas.com/fnpack/fnpack-${FNPACK_VERSION}-linux-arm64"
 
 VERSION=$(tr -d ' \n' < VERSION)
+node scripts/check-versions.js
 sed -i "s/^platform.*/platform              = ${ARCH}/" manifest
 sed -i "s/^version.*/version               = ${VERSION}/" manifest
 

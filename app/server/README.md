@@ -10,7 +10,7 @@
 [![CI](https://img.shields.io/github/actions/workflow/status/techysy/imgmark/ci.yml?branch=main&label=CI)](https://github.com/techysy/imgmark/actions/workflows/ci.yml)
 [![Downloads](https://img.shields.io/github/downloads/techysy/imgmark/total?label=%E4%B8%8B%E8%BD%BD&color=16a34a)](https://github.com/techysy/imgmark/releases)
 [![Platform](https://img.shields.io/badge/%E5%B9%B3%E5%8F%B0-Windows%20%7C%20macOS%20%7C%20%E9%A3%9E%E7%89%9B%20fnOS-6b7280)](#下载)
-[![Node](https://img.shields.io/badge/Node.js-%E2%89%A5%2018-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
+[![Node](https://img.shields.io/badge/Node.js-%E2%89%A5%2020.9-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
 [![License](https://img.shields.io/github/license/techysy/imgmark?label=%E8%AE%B8%E5%8F%AF&color=f59e0b)](LICENSE)
 
 [下载](#下载) · [功能](#功能) · [快速开始](#快速开始) · [CLI](#cli-用法) · [HTTP API](#http-api) · [更新日志](CHANGELOG.md) · [Agent 手册](AGENTS.md)
@@ -105,7 +105,7 @@
 
 ### 从源码运行（任意系统）
 
-需要 Node.js ≥ 18。
+需要 Node.js ≥ 20.9。
 
 ```bash
 git clone https://github.com/techysy/imgmark.git

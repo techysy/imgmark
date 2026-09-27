@@ -2,7 +2,7 @@
 /**
  * ImgMark Windows 桌面壳（Electron，参考 CreditDaddy 模式）
  * - 主进程内直接 require ImgMark 的 Express 服务（同 Node 栈），端口占用自动 +1，
- *   28110 已有 imgmark 实例则直接复用
+ *   仅复用使用同一用户数据目录的 ImgMark 实例
  * - preload 暴露 window.imgmarkDesktop：原生文件/文件夹对话框（比 <input type=file> 强：
  *   多选文件返回真实路径、选文件夹、按扩展名过滤水印源），路径交给后端 local-files 模式批量处理
  */
@@ -26,25 +26,40 @@ function probeImgmark(port) {
     const req = http.get({ host: '127.0.0.1', port, path: '/api/health', timeout: 1200 }, (res) => {
       let body = '';
       res.on('data', (c) => { body += c; });
-      res.on('end', () => { try { resolve(JSON.parse(body).app === 'imgmark'); } catch { resolve(false); } });
+      res.on('end', () => {
+        try {
+          const health = JSON.parse(body);
+          resolve(health.app === 'imgmark' && typeof health.dataDir === 'string' ? health : null);
+        } catch { resolve(null); }
+      });
     });
-    req.on('error', () => resolve(false));
-    req.on('timeout', () => { req.destroy(); resolve(false); });
+    req.on('error', () => resolve(null));
+    req.on('timeout', () => { req.destroy(); resolve(null); });
   });
 }
 
 async function startServer() {
+  const dataDir = path.resolve(app.getPath('userData'));
+  const normalizeDataDir = (value) => {
+    const resolved = path.resolve(value);
+    return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+  };
+  const expectedDataDir = normalizeDataDir(dataDir);
+  const usesExpectedDataDir = (health) => health && normalizeDataDir(health.dataDir) === expectedDataDir;
+
   for (let p = BASE_PORT; p < BASE_PORT + 20; p++) {
-    if (await probeImgmark(p)) { boundPort = p; return 'reused'; }
+    if (usesExpectedDataDir(await probeImgmark(p))) { boundPort = p; return 'reused'; }
   }
   // 服务代码打包在 resources/imgmark/server（开发时用仓库 app/server）
   const serverRoot = app.isPackaged
     ? path.join(process.resourcesPath, 'imgmark', 'server')
     : path.join(__dirname, '..', 'app', 'server');
-  process.env.IMGMARK_DATA_DIR = app.getPath('userData'); // 必须在 require 前设置
+  process.env.IMGMARK_DATA_DIR = dataDir; // 必须在 require 前设置
   const { start } = require(path.join(serverRoot, 'src', 'server.js'));
   for (let p = BASE_PORT; p < BASE_PORT + 20; p++) {
-    if (await probeImgmark(p)) { boundPort = p; return 'reused-mid'; }
+    const health = await probeImgmark(p);
+    if (usesExpectedDataDir(health)) { boundPort = p; return 'reused-mid'; }
+    if (health) continue; // 端口上虽有 ImgMark，但属于另一份数据目录，不能复用
     // 只绑回环地址：桌面版无鉴权，绑 0.0.0.0 等于把本机文件浏览/改写接口暴露给整个局域网
     try { await start({ port: p, host: '127.0.0.1' }); boundPort = p; return 'started'; }
     catch { /* 端口被其它程序占用，换下一个 */ }
@@ -140,8 +155,13 @@ ipcMain.handle('pick-images', async () => {
   return r.canceled ? [] : r.filePaths;
 });
 
-ipcMain.handle('pick-folder', async () => {
-  const r = await dialog.showOpenDialog(win, { title: '选择图片文件夹', properties: ['openDirectory'] });
+// title 由调用方给：同一个对话框要服务「选图片来源」「选输出目录」「选监听目录」等
+// 多种场景，写死一个标题会让用户对着「选择图片文件夹」去选输出目录
+ipcMain.handle('pick-folder', async (_e, title) => {
+  const r = await dialog.showOpenDialog(win, {
+    title: typeof title === 'string' && title.trim() ? title : '选择文件夹',
+    properties: ['openDirectory'],
+  });
   return r.canceled ? null : r.filePaths[0];
 });
 

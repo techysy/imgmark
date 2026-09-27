@@ -17,6 +17,9 @@ const { applyFrame } = require('./framemark');
 
 const IMAGE_EXTS = new Set(['.jpg', '.jpeg', '.png', '.webp', '.bmp', '.gif', '.tif', '.tiff', '.avif']);
 const WM_INPUT_EXTS = new Set(['.ai', '.svg', '.png', '.jpg', '.jpeg', '.webp', '.bmp', '.gif', '.tif', '.tiff', '.avif']);
+const MAX_INPUT_PIXELS = 50_000_000;
+const MAX_INPUT_PAGES = 100;
+const MAX_WATERMARK_PIXELS = 40_000_000;
 
 const extOf = (name) => path.extname(name || '').toLowerCase();
 const clampNum = (v, min, max) => Math.max(min, Math.min(max, v));
@@ -63,10 +66,11 @@ async function contentBBox(buffer, threshold = 8) {
  * @returns {{buffer, width, height, sourceWidth, sourceHeight, sourcePreview, cropApplied, bgColor, removed, alreadyTransparent, notes}}
  */
 async function prepareWatermark(inputBuffer, filename, opts = {}) {
-  const {
+  let {
     bg = 'auto', tolerance = 40, maxSize = 1600, force = false,
     crop = null, trim = false,
   } = opts;
+  maxSize = clampNum(Math.round(Number(maxSize) || 1600), 200, 4000);
   const ext = extOf(filename);
   const notes = [];
   let png;
@@ -78,7 +82,8 @@ async function prepareWatermark(inputBuffer, filename, opts = {}) {
     // 交给 libvips(librsvg) 栅格化；density 提高避免小 viewBox 模糊
     const meta = await sharp(inputBuffer).metadata();
     const targetPx = Math.max(meta.width || 0, meta.height || 0, 0);
-    const density = targetPx > 0 && targetPx < maxSize ? Math.min(2400, 72 * (maxSize / targetPx)) : 300;
+    if (targetPx > maxSize * 72) throw new Error('SVG 声明尺寸过大');
+    const density = targetPx > 0 ? Math.max(1, Math.min(2400, 72 * (maxSize / targetPx))) : 300;
     png = await sharp(inputBuffer, { density: Math.round(density) }).png().toBuffer();
     notes.push(`SVG 已栅格化（density ${Math.round(density)}）`);
   } else {
@@ -88,6 +93,9 @@ async function prepareWatermark(inputBuffer, filename, opts = {}) {
   // 裁剪参考系 = 栅格化后的原始画布（不受裁剪/去边/缩放影响）
   const srcMeta = await sharp(png).metadata();
   const sourceWidth = srcMeta.width, sourceHeight = srcMeta.height;
+  if (!sourceWidth || !sourceHeight || sourceWidth * sourceHeight > MAX_WATERMARK_PIXELS) {
+    throw new Error(`水印源尺寸过大（最多 ${MAX_WATERMARK_PIXELS.toLocaleString()} 像素）`);
+  }
   const sourcePreview = await toSmallDataUrl(png, 512);
 
   let cropApplied = null;
@@ -349,9 +357,21 @@ async function composeWatermark(targetBuffer, wmBuffer, o = {}, wmAltBuffer = nu
 /** 合成结果编码（保持原格式/指定格式 + 质量）。composeWatermark / composeGroups 共用 */
 /** 读目标图元数据；BMP 先转 PNG 进 sharp 管线，但 meta.format 仍记为 bmp（auto 格式时按 BMP 写回） */
 async function loadTarget(buffer) {
-  if (!isBmp(buffer)) return { buffer, meta: await sharp(buffer).metadata() };
+  if (!isBmp(buffer)) {
+    const meta = await sharp(buffer, { limitInputPixels: MAX_INPUT_PIXELS }).metadata();
+    if (!meta.width || !meta.height || meta.width * meta.height > MAX_INPUT_PIXELS) {
+      throw new Error(`图片尺寸过大（最多 ${MAX_INPUT_PIXELS.toLocaleString()} 像素）`);
+    }
+    if ((meta.pages || 1) > MAX_INPUT_PAGES) throw new Error(`图片页数过多（最多 ${MAX_INPUT_PAGES} 页）`);
+    return { buffer, meta };
+  }
   const png = await bmpToPng(buffer);
-  return { buffer: png, meta: { ...(await sharp(png).metadata()), format: 'bmp' } };
+  const meta = await sharp(png, { limitInputPixels: MAX_INPUT_PIXELS }).metadata();
+  if (!meta.width || !meta.height || meta.width * meta.height > MAX_INPUT_PIXELS) {
+    throw new Error(`图片尺寸过大（最多 ${MAX_INPUT_PIXELS.toLocaleString()} 像素）`);
+  }
+  if ((meta.pages || 1) > MAX_INPUT_PAGES) throw new Error(`图片页数过多（最多 ${MAX_INPUT_PAGES} 页）`);
+  return { buffer: png, meta: { ...meta, format: 'bmp' } };
 }
 
 async function encodeCompose(base, meta, { format = 'auto', quality = 90, mozjpeg = false }) {

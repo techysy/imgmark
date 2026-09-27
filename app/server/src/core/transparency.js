@@ -49,7 +49,12 @@ async function removeBackground(buffer, opts = {}) {
   const { bg = 'auto', tolerance = 40, global = false, force = false } = opts;
   const tol = Math.max(1, Math.min(255, tolerance));
 
-  const { data, info } = await sharp(buffer).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+  const meta = await sharp(buffer, { limitInputPixels: 40_000_000 }).metadata();
+  if (!meta.width || !meta.height || meta.width * meta.height > 40_000_000) {
+    throw new Error('水印源尺寸过大（最多 40,000,000 像素）');
+  }
+
+  const { data, info } = await sharp(buffer, { limitInputPixels: 40_000_000 }).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
   const { width, height, channels } = info;
 
   // 已有透明像素 → 认为已是透明图（除非 force）

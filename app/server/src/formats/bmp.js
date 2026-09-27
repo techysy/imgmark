@@ -8,7 +8,7 @@
  */
 const sharp = require('sharp');
 
-const MAX_PIXELS = 268402689; // 与 sharp 默认 limitInputPixels 一致
+const MAX_PIXELS = 50_000_000; // RGBA 展开和背景处理会额外占用数倍内存
 
 function isBmp(buf) {
   return Buffer.isBuffer(buf) && buf.length > 26 && buf[0] === 0x42 && buf[1] === 0x4d; // 'BM'
@@ -16,11 +16,17 @@ function isBmp(buf) {
 
 /** 掩码 → { shift, max }，用于把位域分量缩放到 0-255 */
 function maskInfo(mask) {
+  mask >>>= 0;
   if (!mask) return null;
   let shift = 0;
-  while (!((mask >>> shift) & 1)) shift++;
+  while (shift < 32 && !((mask >>> shift) & 1)) shift++;
+  if (shift === 32) return null;
   let bits = 0;
-  while ((mask >>> (shift + bits)) & 1) bits++;
+  while (shift + bits < 32 && ((mask >>> (shift + bits)) & 1)) bits++;
+  for (let i = shift + bits; i < 32; i++) {
+    if ((mask >>> i) & 1) throw new Error('BMP 位域掩码必须连续');
+  }
+  if (bits > 8) throw new Error('BMP 通道掩码不能超过 8 位');
   return { mask, shift, max: 2 ** bits - 1 };
 }
 const channel = (px, m) => (m ? Math.round((((px & m.mask) >>> m.shift) * 255) / m.max) : 0);
@@ -52,9 +58,19 @@ function decodeBmp(buf) {
   if (bpp === 16 || bpp === 32) {
     if (compression === 3 || compression === 6) {
       const hasAlphaMask = compression === 6 || hdrSize >= 56;
+      const raw = {
+        r: buf.readUInt32LE(54), g: buf.readUInt32LE(58), b: buf.readUInt32LE(62),
+        a: hasAlphaMask ? buf.readUInt32LE(66) : 0,
+      };
+      const maskLimit = bpp === 32 ? 0xffffffff : (2 ** bpp) - 1;
+      const colors = [raw.r, raw.g, raw.b, raw.a].filter(Boolean);
+      if (!raw.r || !raw.g || !raw.b || colors.some((m) => (m & ~maskLimit) !== 0) ||
+          colors.some((m, i) => colors.slice(i + 1).some((n) => (m & n) !== 0))) {
+        throw new Error('BMP 位域掩码无效或互相重叠');
+      }
       masks = {
-        r: maskInfo(buf.readUInt32LE(54)), g: maskInfo(buf.readUInt32LE(58)), b: maskInfo(buf.readUInt32LE(62)),
-        a: hasAlphaMask ? maskInfo(buf.readUInt32LE(66)) : null,
+        r: maskInfo(raw.r), g: maskInfo(raw.g), b: maskInfo(raw.b),
+        a: raw.a ? maskInfo(raw.a) : null,
       };
     } else if (bpp === 16) {
       masks = { r: maskInfo(0x7c00), g: maskInfo(0x03e0), b: maskInfo(0x001f), a: null }; // 默认 X1R5G5B5

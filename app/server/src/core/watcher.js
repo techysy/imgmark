@@ -13,7 +13,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { IMAGE_EXTS, extOf, composeWatermark, composeGroups, applyCrop } = require('./watermark');
-const { outPathFor, expectedExt, isInside, pathKey } = require('./batch');
+const { outPathFor, expectedExt, isInside, pathKey, assertOutputTarget } = require('./batch');
 const { writeFileAtomic } = require('./db');
 
 const exists = (p) => fs.promises.access(p).then(() => true, () => false);
@@ -26,11 +26,13 @@ class WatcherManager {
    *     由服务端注入：按 cfg.watermarkId/cfg.groups 解析出可合成的 buffer（重启后解析不到返回 null）
    *   stateFile: watchers.json 路径（持久化）
    */
-  constructor({ db, resolveTarget, stateFile }) {
+  constructor({ db, resolveTarget, authorizePath = async () => {}, stateFile }) {
     this.db = db;
     this.resolveTarget = resolveTarget;
+    this.authorizePath = authorizePath;
     this.stateFile = stateFile;
     this.watchers = new Map(); // id -> watcher 运行时
+    this.reservedTargets = new Set(); // fs.watch 多事件并发时，防止不同源文件抢同一输出路径
     this._load();
   }
 
@@ -188,6 +190,7 @@ class WatcherManager {
 
     let target;
     try {
+      await this.authorizePath(w.cfg, full, null);
       const t = await this._resolve(w);
       if (!t) { w.status = 'paused'; w.lastError = '水印已失效（服务重启后未恢复），请重新创建监听'; return; }
       const buf = await fs.promises.readFile(full);
@@ -197,12 +200,16 @@ class WatcherManager {
       composed.buffer = await applyCrop(composed.buffer, t.options);
       target = w.cfg.overwrite ? full : await this._freeTarget(w, full, composed.ext);
       await fs.promises.mkdir(path.dirname(target), { recursive: true });
+      if (!w.cfg.overwrite) await assertOutputTarget(target, w.cfg.outputDir);
+      await this.authorizePath(w.cfg, full, target);
       await fs.promises.writeFile(target, composed.buffer);
       this.db.put(chk.key, { output: target, watermarkId: w.cfg.watermarkId, watcher: w.cfg.id });
       w.stats.processed++;
     } catch (e) {
       w.stats.failed++;
       w.lastError = `${path.basename(full)}: ${e.message}`;
+    } finally {
+      if (target && !w.cfg.overwrite) this.reservedTargets.delete(pathKey(target));
     }
   }
 
@@ -215,9 +222,13 @@ class WatcherManager {
   async _freeTarget(w, full, ext) {
     for (let n = 1; n < 1000; n++) {
       const t = this._outPath(w, full, ext, n === 1 ? '' : `(${n})`);
-      if (!(await exists(t))) return t;
+      const key = pathKey(t);
+      if (this.reservedTargets.has(key)) continue;
+      const targetExists = await exists(t);
+      if (this.reservedTargets.has(key)) continue;
+      if (!targetExists) { this.reservedTargets.add(key); return t; }
       const owner = this.db.ownerOf(t);
-      if (owner && pathKey(owner) === pathKey(full)) return t;
+      if (owner && pathKey(owner) === pathKey(full)) { this.reservedTargets.add(key); return t; }
     }
     throw new Error('同名输出过多，无法分配文件名');
   }

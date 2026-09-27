@@ -11,8 +11,8 @@
     "dist:mac": "electron-builder --mac"
   },
   "devDependencies": {
-    "electron": "^37.2.0",
-    "electron-builder": "^25.1.8"
+    "electron": "^44.4.5",
+    "electron-builder": "^26.15.3"
   },
   "build": {
     "appId": "cn.techysy.imgmark",
@@ -73,10 +73,14 @@
       {
         "from": "server",
         "to": "imgmark/server"
+      },
+      {
+        "from": "server/node_modules",
+        "to": "imgmark/server/node_modules"
       }
     ]
   },
   "allowScripts": {
-    "electron@37.10.3": true
+    "electron@44.4.5": true
   }
 }

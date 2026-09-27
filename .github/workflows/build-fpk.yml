@@ -31,7 +31,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
 
       # 先生成 Release 正文：CHANGELOG.md 缺少该版本小节时在打包前就失败，提醒补更新日志
       - name: 生成 Release 正文
@@ -41,9 +41,16 @@ jobs:
       - name: 校验 manifest 依赖声明
         run: grep -q "install_dep_apps      = nodejs_v24" manifest
 
+      - name: 校验版本一致性
+        run: node scripts/check-versions.js "${{ inputs.release_tag || github.ref_name }}"
+
       - name: 安装生产依赖（Linux x64 二进制）
         working-directory: app/server
         run: npm ci --omit=dev --no-audit --no-fund
+
+      - name: 检查生产依赖公告
+        working-directory: app/server
+        run: npm audit --omit=dev --registry=https://registry.npmjs.org
 
       - name: 删除符号链接（fnpack 不支持，解包后 .bin 循环链接导致安装失败）
         run: find app -type l -delete || true

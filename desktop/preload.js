@@ -5,6 +5,6 @@ const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('imgmarkDesktop', {
   isDesktop: true,
   pickImages: () => ipcRenderer.invoke('pick-images'),
-  pickFolder: () => ipcRenderer.invoke('pick-folder'),
+  pickFolder: (title) => ipcRenderer.invoke('pick-folder', title),
   pickWatermark: () => ipcRenderer.invoke('pick-watermark'),
 });

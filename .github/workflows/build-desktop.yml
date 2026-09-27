@@ -30,7 +30,9 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
+      - name: 校验版本一致性
+        run: node scripts/check-versions.js "${{ inputs.release_tag || github.ref_name }}"
       - name: Stage 服务端（含 Windows 原生依赖）
         run: |
           mkdir -p desktop/server
@@ -40,6 +42,9 @@ jobs:
       - name: 安装 Electron 与打包工具
         working-directory: desktop
         run: npm install --no-audit --no-fund
+      - name: 检查桌面与构建依赖公告
+        working-directory: desktop
+        run: npm audit --registry=https://registry.npmjs.org
       - name: electron-builder 打包
         working-directory: desktop
         run: npx electron-builder --win --x64 --publish never
@@ -63,7 +68,9 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
+      - name: 校验版本一致性
+        run: node scripts/check-versions.js "${{ inputs.release_tag || github.ref_name }}"
       - name: Stage 服务端（Apple Silicon 原生依赖）
         run: |
           mkdir -p desktop/server
@@ -73,6 +80,9 @@ jobs:
       - name: 安装 Electron 与打包工具
         working-directory: desktop
         run: npm install --no-audit --no-fund
+      - name: 检查桌面与构建依赖公告
+        working-directory: desktop
+        run: npm audit --registry=https://registry.npmjs.org
       - name: electron-builder 打包（arm64）
         working-directory: desktop
         run: npx electron-builder --mac --arm64 --publish never
@@ -121,7 +131,9 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
+      - name: 校验版本一致性
+        run: node scripts/check-versions.js "${{ inputs.release_tag || github.ref_name }}"
       - name: Stage 服务端（Intel 原生依赖）
         run: |
           mkdir -p desktop/server
@@ -131,6 +143,9 @@ jobs:
       - name: 安装 Electron 与打包工具
         working-directory: desktop
         run: npm install --no-audit --no-fund
+      - name: 检查桌面与构建依赖公告
+        working-directory: desktop
+        run: npm audit --registry=https://registry.npmjs.org
       - name: electron-builder 打包（x64）
         working-directory: desktop
         run: npx electron-builder --mac --x64 --publish never

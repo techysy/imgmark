@@ -27,6 +27,16 @@ function isInside(child, dir) {
   return rel === '' || (rel !== '..' && !rel.startsWith('..' + path.sep) && !path.isAbsolute(rel));
 }
 
+function normalizeSuffix(suffix = '_wm') {
+  if (typeof suffix !== 'string' || suffix.length < 1 || suffix.length > 64 ||
+      /[\\:<>"|?*\x00-\x1f]/.test(suffix) || suffix.includes('/') || suffix.includes('..')) {
+    const e = new Error('suffix 只能包含普通文件名字符，不能包含路径分隔符或 ..');
+    e.status = 400;
+    throw e;
+  }
+  return suffix;
+}
+
 async function listImages(dir, { recursive, skipDirs, out = [] }) {
   let entries;
   try { entries = await fs.promises.readdir(dir, { withFileTypes: true }); }
@@ -65,7 +75,24 @@ function outPathFor(file, inputDir, outputDir, { suffix, overwrite, keepStructur
   const rel = keepStructure ? path.relative(inputDir, file) : path.basename(file);
   const dir = path.dirname(path.join(outputDir, rel));
   const base = path.basename(path.join(outputDir, rel), extOf(path.join(outputDir, rel)));
-  return path.join(dir, `${base}${tag}${suffix}${ext}`);
+  const safeSuffix = normalizeSuffix(suffix == null ? '_wm' : suffix);
+  const target = path.resolve(dir, `${base}${tag}${safeSuffix}${ext}`);
+  if (!isInside(target, outputDir)) throw new Error('输出文件路径超出输出目录');
+  if (path.resolve(target) === path.resolve(file)) throw new Error('输出路径不能覆盖输入文件');
+  return target;
+}
+
+async function assertOutputTarget(target, outputDir) {
+  const [rootReal, parentReal] = await Promise.all([
+    fs.promises.realpath(outputDir), fs.promises.realpath(path.dirname(target)),
+  ]);
+  if (!isInside(parentReal, rootReal)) throw new Error('输出文件路径通过符号链接离开了输出目录');
+  try {
+    const st = await fs.promises.lstat(target);
+    if (st.isSymbolicLink()) throw new Error('输出目标不能是符号链接');
+  } catch (e) {
+    if (e.code !== 'ENOENT') throw e;
+  }
 }
 
 /** 路径比较键：Windows / macOS 文件系统默认大小写不敏感 */
@@ -90,6 +117,7 @@ async function runBatch(p) {
     inputDir, files = null, outputDir, watermark, watermarkAlt = null, groups = null, options = {},
     db = null, skipProcessed = false, watermarkId = null,
     recursive = false, overwrite = false, suffix = '_wm', concurrency = 3,
+    authorizeInput = async () => {}, authorizeOutput = async () => {},
     onProgress = () => {},
   } = p;
 
@@ -153,6 +181,7 @@ async function runBatch(p) {
   const settled = await mapPool(list, concurrency, async (file, i) => {
     let inputStat = null;
     try {
+      await authorizeInput(file);
       inputStat = await fs.promises.stat(file);
       const buf = await fs.promises.readFile(file);
       let { buffer, ext } = groups
@@ -162,6 +191,8 @@ async function runBatch(p) {
       // 实际格式与预判不符（如扩展名是 .png 的 JPEG 文件）时现场再分配一个不冲突的名字
       const target = overwrite ? file : (planned[i].ext === ext ? planned[i].target : claim(file, ext));
       await fs.promises.mkdir(path.dirname(target), { recursive: true });
+      if (!overwrite) await assertOutputTarget(target, outputDir);
+      await authorizeOutput(target);
       await fs.promises.writeFile(target, buffer);
       if (db) db.put(ProcessDB.keyFor(file, inputStat), { output: target, watermarkId: watermarkId || null });
       done++;
@@ -183,4 +214,4 @@ async function runBatch(p) {
   return { total: list.length, ok: okCount, failed: failCount, skipped, results };
 }
 
-module.exports = { runBatch, listImages, outPathFor, expectedExt, isInside, pathKey };
+module.exports = { runBatch, listImages, outPathFor, expectedExt, isInside, pathKey, normalizeSuffix, assertOutputTarget };

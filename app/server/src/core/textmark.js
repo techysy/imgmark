@@ -60,7 +60,7 @@ async function renderTextWatermark(text, o = {}) {
     stroke = null, strokeWidth = 0, lineGap = 0.28,
   } = o;
 
-  const lines = String(text == null ? '' : text).split(/\r?\n/).map((s) => s.replace(/\s+$/, ''));
+  const lines = String(text == null ? '' : text).slice(0, 256).split(/\r?\n/).map((s) => s.replace(/\s+$/, ''));
   if (!lines.some((l) => l.trim())) throw new Error('文字水印内容为空');
 
   const size = Math.max(8, Math.min(400, Math.round(fontSize)));

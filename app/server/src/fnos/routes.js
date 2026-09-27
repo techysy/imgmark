@@ -5,14 +5,11 @@ const path = require('path');
 /**
  * fnOS 开放能力路由（仅在 fnOS 应用环境内可用；否则返回 501 + 说明）。
  * 目录访问不做 HTTP 代理下载/上传——授权后应用用户具备 ACL，直接读写真实路径。
- * uid 来源优先级：统一网关身份头 x-trim-userid（网关模式下可信）> 请求参数。
+ * fnOS 特权操作只接受统一网关注入的 x-trim-userid；请求参数不能作为身份凭据。
  */
 function resolveUid(req) {
-  // 网关身份头由平台注入、客户端无法伪造，存在时必须优先；参数 uid 仅作无网关时的兜底
-  const h = Number(req.headers['x-trim-userid'] || 0);
-  if (Number.isInteger(h) && h > 0) return h;
-  const q = Number(req.query.uid || (req.body && req.body.uid) || 0);
-  return Number.isInteger(q) && q > 0 ? q : 0;
+  const uid = Number(req.headers['x-trim-userid'] || 0);
+  return Number.isInteger(uid) && uid > 0 ? uid : 0;
 }
 
 function createFnosRouter({ client, listImages }) {
@@ -81,8 +78,18 @@ function createFnosRouter({ client, listImages }) {
         client.getSharedAccessibleFolders().catch(() => []),
       ]);
       const roots = [...new Set([...user, ...shared])];
-      const inside = roots.find((r) => dir === r || dir.startsWith(r.replace(/\/+$/, '') + '/'));
+      const inside = roots.find((r) => dir === path.posix.normalize(r) ||
+        dir.startsWith(path.posix.normalize(r).replace(/\/+$/, '') + '/'));
       if (!inside) return res.status(403).json({ error: '目录未授权', roots });
+
+      // 不允许授权根中的符号链接把浏览范围带出根目录。
+      const [realDir, realRoot] = await Promise.all([
+        require('fs').promises.realpath(dir), require('fs').promises.realpath(inside),
+      ]);
+      const realRel = path.posix.relative(realRoot, realDir);
+      if (realRel === '..' || realRel.startsWith('../') || path.posix.isAbsolute(realRel)) {
+        return res.status(403).json({ error: '路径通过符号链接离开了授权目录' });
+      }
 
       const acl = await client.checkUserACL(uid, dir);
       const entry = Array.isArray(acl) ? acl[0] : acl;
@@ -124,14 +131,19 @@ function createFnosRouter({ client, listImages }) {
       const { path: dir, shared } = req.body || {};
       const uid = resolveUid(req);
       if (shared) {
-        await client.delSharedAccessibleFolder(dir);
+        // 目前没有服务端可验证的管理员身份声明；不能把 shared=true 当作管理员凭据。
+        return res.status(403).json({ error: '共享授权只能由 fnOS 管理员界面管理' });
       } else {
         if (uid <= 0) return res.status(400).json({ error: 'uid 无效' });
+        const roots = await client.getUserAccessibleFolders(uid);
+        if (!roots.some((root) => path.posix.normalize(root) === path.posix.normalize(String(dir || '')))) {
+          return res.status(403).json({ error: '只能删除当前用户自己的授权目录' });
+        }
         await client.delUserAccessibleFolder(uid, dir);
       }
       res.json({ ok: true });
     } catch (e) {
-      res.status(500).json({ error: e.message });
+      res.status(e.status || 500).json({ error: e.message });
     }
   });
 

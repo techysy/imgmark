@@ -19,7 +19,7 @@
     "LICENSE"
   ],
   "engines": {
-    "node": ">=18"
+    "node": ">=20.9.0"
   },
   "keywords": [
     "watermark",
@@ -58,7 +58,7 @@
     "express": "^4.21.2",
     "multer": "^2.4.0",
     "pdfjs-dist": "^4.10.38",
-    "sharp": "^0.33.5"
+    "sharp": "^0.35.4"
   },
   "devDependencies": {
     "jsdom": "^26.0.0"
