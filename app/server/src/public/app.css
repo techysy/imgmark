@@ -55,7 +55,14 @@ main { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; padding: 12px 2
 /* 55:45 —— 左列 55%、预览 45%（gap 14 从总宽扣，故实际是 299 : 245）。
    用 flex-basis 0 + grow 55/45：两列都从 0 开始按比例分配，卡片不会因为
    内容 max-content 更宽而抢占份额（这正是之前预览被挤换行的原因）。 */
-.g-row > .grow { flex: 55 1 0; min-width: 0; }
+/* ② 的分组列：没分组时只有「添加分组」一个按钮，而右列预览有 221px 高。
+   两列都是 align-self:flex-start，行高由最高的预览决定，按钮就被压在行首 ——
+   卡片下方因此出现 190px 空白。这里让左列撑满行高、按钮沉到行底，
+   「＋ 添加分组」正好落在预览图底边那一行，空白消失。
+   auto margin 只在 free space > 0 时生效（即未换行、行内有富余高度时），
+   窗口窄到预览换行后两列等宽等高，行为退回原样，不会把按钮推远。 */
+.g-row > .grow { flex: 55 1 0; min-width: 0; display: flex; flex-direction: column; }
+.g-row > .grow > #group-add { margin-top: auto; }
 .g-row > .preview-box { flex: 45 1 0; min-width: 200px; }
 /* ② 卡片里其余的 55:45 行（亮度自适应 / 大小基准）见下方 .row.g-row > .field ——
    那条要写在「.row > .field 定宽」之后才生效，故不在这一块。 */
@@ -65,11 +72,19 @@ main { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; padding: 12px 2
 .card h2 { margin: 0 0 12px; font-size: 13px; font-weight: 700; }
 .card h2 small { color: var(--text-3); font-weight: normal; font-size: 12px; margin-left: 6px; }
 
-.row { display: flex; gap: 14px; align-items: flex-start; flex-wrap: wrap; }
-.row-inline { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin: 6px 0; }
+/* 所有「行」容器统一竖直节奏：用 gap 而不是子元素 margin。
+   之前 .row 靠 .field 的 margin 6px 撑出 12px 行距，.row-inline 自带 margin 6px、
+   子元素 margin 0，于是同一张卡里出现 12 / 6 / 0 三种行距。 */
+.row, .row-inline { display: flex; gap: 14px; align-items: flex-start; flex-wrap: wrap; }
+.row { row-gap: 12px; }
+.row-inline { row-gap: 10px; align-items: center; }
+/* 行容器不再自带 margin、子元素不再自带 margin：行距一律由上面两个 gap 决定 */
+.row-inline, .row { margin: 0; }
+.row > .field, .row-inline > .field { margin: 0; }
+.row-inline.wrap { margin: 0; }
 .grow { flex: 1; min-width: 220px; }
 
-.field { margin: 6px 0; }
+.field { margin: 0; }
 /* 输出设置行（④）里每个 .field 固定宽度：宽度必须由容器决定，
    否则下拉选中值文字长短 + hint 出现会把 .field 撑宽/收窄，
    触发 flex 换行 → 整块控件在行间跳来跳去（实测横移 312px、纵移 94px） */
@@ -116,7 +131,8 @@ input[type="checkbox"] { accent-color: var(--pri); }
   background: var(--surface-2); color: var(--muted); }
 
 /* ---- 预览 / 裁剪 ---- */
-.wm-preview-row { margin-top: 10px; }
+/* 行距已由 .row 的 row-gap 统一给出，这里不再另加 margin */
+.wm-preview-row { margin-top: 0; }
 .preview-side { display: flex; flex-direction: column; gap: 6px; }
 .checker { width: 180px; height: 140px; border: 1px solid var(--border-subtle); border-radius: 10px; overflow: hidden;
   background: conic-gradient(var(--chk1) 25%, var(--chk2) 0 50%, var(--chk1) 0 75%, var(--chk2) 0) 0 0/20px 20px;
@@ -146,7 +162,10 @@ input[type="checkbox"] { accent-color: var(--pri); }
 #preview-orient .tab { padding: 3px 12px; font-size: 12px; }
 /* ② 右列的窄预览：横图/竖图两个按钮并排一行、各占一半宽（等分用 flex:1 1 0，
    这样按钮宽度跟随预览列宽，不再随文字长短一宽一窄）；按钮文字压到一行不换行，
-   列再窄也只是挤，不会变成上下堆叠。图按列宽自适应（点击仍可放大看原尺寸）。 */
+   列再窄也只是挤，不会变成上下堆叠。图按列宽自适应（点击仍可放大看原尺寸）。
+   注意：右列比左列矮（左列是分组卡），align-items 默认拉伸会把 9 宫格拉高，
+   这里给预览列 flex-start 保持它自己的高度。 */
+.g-row > .preview-box { align-self: flex-start; }
 .g-row > .preview-box img { max-width: 100%; }
 .g-row > .preview-box #preview-orient { flex-wrap: nowrap; gap: 4px; }
 .g-row > .preview-box #preview-orient .tab { flex: 1 1 0; width: auto; min-width: 0; white-space: nowrap; padding: 3px 4px; }
@@ -174,7 +193,9 @@ input[type="checkbox"] { accent-color: var(--pri); }
   cursor: pointer; font-size: 12px; font-weight: 600; color: var(--muted); transition: all .15s; }
 .tab:hover { color: var(--txt); border-color: var(--border-strong); }
 .tab.on { background: var(--btn-bg); color: var(--btn-fg); border-color: var(--btn-bg); }
-.src-panel { border-top: 1px dashed var(--border-subtle); padding-top: 10px; }
+/* 三个来源面板是互斥显示的，只留一条虚线分割。原来是 .tabs 的 10px 下边距
+ * 再叠 padding-top 10px；现在 tabs 收进 gap，这里补上分割线上方的留白。 */
+.src-panel { border-top: 1px dashed var(--border-subtle); padding-top: 10px; margin-top: 10px; }
 .picked { margin-top: 8px; font-size: 13px; }
 
 .folder-list { margin-top: 8px; display: flex; flex-direction: column; gap: 4px; max-height: 220px; overflow: auto; }
@@ -194,10 +215,10 @@ input[type="checkbox"] { accent-color: var(--pri); }
 .entries button.picked-dir { background: var(--pri); color: #fff; border-color: var(--pri); }
 
 /* ---- 进度 / 日志 ---- */
-.progress { height: 8px; background: var(--tertiary); border-radius: 6px; overflow: hidden; margin-bottom: 8px; }
+.progress { height: 8px; background: var(--tertiary); border-radius: 6px; overflow: hidden; }
 #bar { height: 100%; width: 0; background: var(--pri); transition: width .3s; }
 .log { max-height: 260px; overflow: auto; font: 12px/1.7 Consolas, monospace; background: #0f172a; color: #cbd5e1;
-  border-radius: 10px; padding: 8px 10px; margin-top: 8px; }
+  border-radius: 10px; padding: 8px 10px; }
 .log .fail { color: #fca5a5; }
 .log .done { color: #86efac; }
 
@@ -241,6 +262,11 @@ footer { text-align: center; color: var(--text-3); font-size: 12px; padding: 18p
    且不会撑满分组的整卡宽度 —— 卡片比列宽出的一大截留给首行的 logo 选项。
    --gc-w 与这里的 220px 是两处独立取值，改列宽不必同步改卡片宽。 */
 :root { --gc-w: 330px; }
+/* 卡片里的 logo 列表 / 监听列表间距：原来是 .logo-list 的 8px 上下 margin，
+   现在 .row 不再提供行距，这部分边距收到这里。 */
+.logo-list, #watch-list { margin: 8px 0 0; }
+/* 分组卡里的 logo 选项行贴着标题，不要再叠一行距 */
+.gc-head { margin: 0; }
 .gc-ctrl { display: grid; grid-template-columns: 220px; align-items: start; gap: 8px; }
 .gc-ctrl > .field { min-width: 0; margin: 0; }
 /* width:100% 时 range 自身的默认 margin 会把 .field 撑宽 4px，导致 .gc-ctrl 横向溢出 */
