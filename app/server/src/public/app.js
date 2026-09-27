@@ -869,7 +869,7 @@ async function refreshWatchers() {
           <button class="btn tiny" data-rescan="${w.id}">立即扫描</button>
           <button class="btn tiny ghost" data-del="${w.id}">删除</button>
         </div>
-      </div>`).join('') : '<div class="muted">暂无监听：选好 logo 与分组后，填监听目录点「建立监听」</div>';
+      </div>`).join('') : '<div class="muted">暂无监听：填好监听目录，点「建立监听」</div>';
     box.querySelectorAll('[data-rescan]').forEach((b) => b.addEventListener('click', async () => {
       await api(`/api/watchers/${b.dataset.rescan}/rescan`, { method: 'POST' });
       refreshWatchers();
