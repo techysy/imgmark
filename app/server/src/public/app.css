@@ -91,6 +91,14 @@ main { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; padding: 12px 2
 .row > .field { width: 168px; flex: 0 0 auto; }
 /* 质量组里有 180px 滑杆 + 两行标签，需要更宽，不参与定宽 */
 .row > #quality-wrap { width: auto; }
+/* 质量这一格是「标签 + 滑杆 + 复选框」三行，右边的格式是「标签 + 下拉」两行，
+   两个标签本来是对齐的（都在 374），但控件错开：滑杆 398-414、下拉 402-432。
+   原因：滑杆自带 margin-top 8px（把 label 的 2px 行距顶成 10px），而下拉紧贴标签 ——
+   下拉比滑杆低 4px，看着就是没对齐。这里给右边那格的标签补 8px 下间距，
+   让下拉落到 402（滑杆 398 起、下拉 402 起：下拉框多了 2px 边框 + 1px padding，
+   视觉中线因此重合）。推的是标签不是 padding —— padding 会把标签一起推下去，
+   量出来中线差反而从 6 涨到 11。 */
+.row:has(#quality-wrap) > .field:last-child > label:first-child { margin-bottom: 8px; }
 /* ② 里的 .field 不吃上面那条定宽：改按 55:45 分栏（放在 .row > .field 之后，
    否则同权重下被它覆盖 —— 早先版本就是这么失效的，量出来 168/376）。
    用 55:45 而不是给右栏更窄的 65:35：这样两行 divider 都在 424 与
