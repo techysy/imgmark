@@ -207,6 +207,39 @@
           </div>
         </div>
         <div class="notes">示例文案：<b id="exif-sample">—</b></div>
+
+        <!-- 边框容器：把参数放进新撑出来的留白里，而不是浮在画面上 —— 这是与上面「文字水印」的区别。
+             选了版式后，画面尺寸会变大（下方的条/四周的白边都算输出的一部分）。 -->
+        <div class="row" style="margin-top:12px">
+          <div class="field" style="flex:0 0 auto">
+            <label>边框样式</label>
+            <select id="exif-frame">
+              <option value="" selected>不加边框</option>
+              <option value="band">下方条幅（白底黑字）</option>
+              <option value="frame">四周白框 + 底部文字</option>
+              <option value="inset">装裱细线框（照片内缩）</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>留白底色 <input type="color" id="exif-frame-bg" value="#ffffff" title="边框/条幅的底色"></label>
+          </div>
+          <div class="field">
+            <label>文字对齐</label>
+            <select id="exif-frame-align">
+              <option value="left" selected>左对齐</option>
+              <option value="center">居中</option>
+            </select>
+          </div>
+        </div>
+        <div id="frame-extra" class="hidden">
+          <div class="row">
+            <div class="field"><label>条幅文字 · 主行</label>
+              <input type="text" id="exif-line1" class="num" style="width:100%" maxlength="120" placeholder="留空则自动填机型"></div>
+            <div class="field"><label>条幅文字 · 副行</label>
+              <input type="text" id="exif-line2" class="num" style="width:100%" maxlength="120" placeholder="留空则自动填曝光参数"></div>
+          </div>
+          <div class="notes">两行都留空 → 自动用「机型 / 曝光参数」。留白比例跟着短边走，横竖构图观感一致。</div>
+        </div>
       </div>
     </div>
   </section>

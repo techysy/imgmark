@@ -105,6 +105,20 @@ curl -s http://127.0.0.1:28110/api/jobs/<jobId>
 - **没有 EXIF 的照片会自动跳过这一组**：原图字节不动（不重编码，不掉画质），不是画一行空白
 - `date` 与 `datetime` 同时勾选时只输出 `datetime`（避免同一时间出现两遍）
 - 文字渲染依赖系统字体；服务启动时会自检并在日志里警告（字体缺失时 libvips 不报错、只画空白）
+- **边框 / 条幅**（`options.frame`）：把参数写进**新撑出来的留白**，而不是浮在画面上 ——
+  这是它与上面「文字组」的本质区别（文字是 composite 到图上，边框是先改画布尺寸）。
+  因此边框必须在合成前生效：它会撑大画布，随后 logo / 文字水印的位置全部按「照片那块矩形」换算，
+  不会落进留白里。三种版式：
+  ```json
+  "frame": { "style": "band|frame|inset",   // 下方条幅 / 四周白框 / 装裱细线框
+             "lines": ["主行", "副行"],        // 留空 → 用该图 EXIF 自动填（机型 / 曝光）
+             "bg": "#ffffff", "color": "#111111", "subColor": "#8a93a0",
+             "align": "left|center",
+             "padPct": 0.045, "bottomPct": 0.10 }   // 可选，覆盖预设比例（相对短边）
+  ```
+  留白比例跟着**短边**走，所以横竖构图的观感一致。`options.frame` 存在**全局 options** 里
+  （不在某个 group 上），且**套边框不改变输出格式**（format=auto 的 JPEG 仍是 JPEG）。
+  没有 EXIF 且两行都留空时整张跳过边框（不留一条空白），显式给了字则照加；
 - 引擎可独立使用：`node -e "require('./src/core/exiftext').formatCameraText(exif, {fields:['camera']})"`
 
 - `options.sizeBase`：`long`（默认，同一相机横/竖构图水印实际像素大小一致）| `short` | `width`

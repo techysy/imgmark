@@ -14,6 +14,7 @@ const sharp = require('sharp');
 
 const { prepareWatermark, mergeWatermarks, composeWatermark, composeGroups, buildGroupWatermark, analyzeInk, applyCrop, parseCropRatio, CROP_RATIOS, IMAGE_EXTS, WM_INPUT_EXTS, extOf } = require('./core/watermark');
 const { checkFontAvailable } = require('./core/textmark');
+const { formatCameraText } = require('./core/exiftext');
 const { runBatch } = require('./core/batch');
 const { ProcessDB } = require('./core/db');
 const { WatcherManager } = require('./core/watcher');
@@ -471,8 +472,17 @@ app.post('/api/preview', express.json(), async (req, res) => {
       // 让用户看到文字的实际排版与长度（真实处理时用的是每张图自己的 EXIF）
       const groupDefs = (await resolveGroups(set || { logos: [] }, groups, auto))
         .map((d) => (d.textSpec ? { ...d, previewExif: SAMPLE_EXIF } : d));
+      // 边框的文案是 options.frame.lines，预览时把空行换成示例参数（真实处理时由前端填好）
+      const previewFrame = options.frame ? {
+        ...options.frame,
+        lines: options.frame.lines && options.frame.lines.some(Boolean)
+          ? options.frame.lines
+          : [formatCameraText(SAMPLE_EXIF, { fields: ['camera'] }),
+            formatCameraText(SAMPLE_EXIF, { fields: ['exposure'] })],
+      } : null;
       const toPreviewG = async (kind) => {
-        const composed = await composeGroups(await getSampleImage(kind, orient), groupDefs, { sizeBase: options.sizeBase });
+        const composed = await composeGroups(await getSampleImage(kind, orient), groupDefs,
+          { sizeBase: options.sizeBase, frame: previewFrame });
         composed.buffer = await applyCrop(composed.buffer, { cropRatio });
         return previewDataUrl(composed);
       };
@@ -523,6 +533,7 @@ function cropLabel(raw) {
 }
 const FORMAT_LABEL = { auto: '保持原格式', png: 'PNG', jpeg: 'JPEG', webp: 'WebP' };
 const SIZEBASE_LABEL = { long: '长边', short: '短边', width: '图宽' };
+const FRAME_LABEL = { band: '条形边框', frame: '白框', inset: '装裱框' };
 function presetSummary(p) {
   const o = (p && p.data && p.data.options) || {};
   const groups = Array.isArray(p && p.data && p.data.groups) ? p.data.groups : [];
@@ -544,6 +555,7 @@ function presetSummary(p) {
   else tags.push({ k: 'format', label: '保持原格式' });
   if (o.quality && ['jpeg', 'webp'].includes(o.format)) tags.push({ k: 'quality', label: `质量 ${o.quality}` });
   if (o.sizeBase && SIZEBASE_LABEL[o.sizeBase]) tags.push({ k: 'sizebase', label: `基准 ${SIZEBASE_LABEL[o.sizeBase]}` });
+  if (o.frame && FRAME_LABEL[o.frame.style]) tags.push({ k: 'frame', label: FRAME_LABEL[o.frame.style] });
   if (o.autoColor) tags.push({ k: 'autocolor', label: '亮度自适应' });
   const text = tags.map((t) => t.label).join(' · ');
   return { tags, text, groups: groups.length, logos: logoCount, cropRatio: o.cropRatio || null, format: o.format || 'auto' };
@@ -632,6 +644,26 @@ function parseOptions(raw) {
     // 用 parseCropRatio 校验（直接查 CROP_RATIOS 会把带前缀的一律判成非法而丢掉）
     cropRatio: parseCropRatio(o.cropRatio) ? o.cropRatio : null,
     cropRatioPort: parseCropRatio(o.cropRatioPort) ? o.cropRatioPort : null,
+    // 边框 / 条幅：把相机参数放进新撑出来的留白，而不是浮在画面上
+    frame: normFrame(o.frame),
+  };
+}
+
+const FRAME_STYLES = new Set(['band', 'frame', 'inset']);
+/** 边框配置规范化；style 缺失或非法 → null（等于不加边框） */
+function normFrame(raw) {
+  if (!raw || !FRAME_STYLES.has(raw.style)) return null;
+  const hex = (v, dflt) => (typeof v === 'string' && /^#[0-9a-f]{6}$/i.test(v) ? v : dflt);
+  return {
+    style: raw.style,
+    lines: (Array.isArray(raw.lines) ? raw.lines : []).slice(0, 3)
+      .map((s) => String(s == null ? '' : s).slice(0, 120)),
+    bg: hex(raw.bg, '#ffffff'),
+    color: hex(raw.color, '#111111'),
+    subColor: raw.subColor ? hex(raw.subColor, null) : null,
+    align: raw.align === 'center' ? 'center' : 'left',
+    ...(Number.isFinite(+raw.padPct) ? { padPct: clampNum(+raw.padPct, 0, 0.3) } : {}),
+    ...(Number.isFinite(+raw.bottomPct) ? { bottomPct: clampNum(+raw.bottomPct, 0, 0.4) } : {}),
   };
 }
 
@@ -656,6 +688,9 @@ app.post('/api/process', uploadImages.array('files'), express.json(), async (req
       const set = logoSets.get(payload.watermarkId);
       if (wantsLogo && !set) return res.status(404).json({ error: 'logo 组不存在或服务已重启，请重新上传' });
       groupDefs = await resolveGroups(set || { logos: [] }, payload.groups, options.autoColor);
+    } else if (options.frame) {
+      // 只要边框、不叠任何水印：走分组管线（groups 里只有边框在起作用）
+      groupDefs = [];
     } else {
       wm = watermarks.get(payload.watermarkId);
       if (!wm) return res.status(404).json({ error: '水印不存在或服务已重启，请重新上传' });

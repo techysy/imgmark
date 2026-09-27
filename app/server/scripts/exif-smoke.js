@@ -161,6 +161,61 @@ async function jpegWithExif(exif, w = 64, h = 48) {
     ok('跳过时带 skipped 标记与正确扩展名', () => { eq(r2.skipped, true); eq(r2.ext, '.jpg'); });
   }
 
+  console.log('[8] 边框 / 条幅');
+  {
+    const src = await jpegWithExif({
+      IFD0: { Make: 'FUJIFILM', Model: 'X-E4' },
+      IFD2: { LensModel: 'XC15-45mmF3.5-5.6 OIS PZ', ExposureTime: '1/125' },
+    }, 400, 300);
+    const plain = await sharp({ create: { width: 400, height: 300, channels: 3, background: '#88aacc' } }).jpeg().toBuffer();
+
+    // 三种版式都要能撑大画布
+    for (const style of ['band', 'frame', 'inset']) {
+      const r = await composeGroups(src, [], { format: 'jpeg', quality: 88,
+        frame: { style, lines: ['A', 'B'], bg: '#ffffff', align: 'left' } });
+      const m = await sharp(r.buffer).metadata();
+      ok(`${style}：画布被撑大`, () => assert(m.width >= 400 && m.height > 300, `得到 ${m.width}x${m.height}`));
+    }
+
+    // 留空两行 → 自动用该图 EXIF 填
+    const auto = await composeGroups(src, [], { format: 'jpeg', quality: 88,
+      frame: { style: 'band', lines: [], bg: '#ffffff', align: 'left' } });
+    const am = await sharp(auto.buffer).metadata();
+    ok('留空两行时自动填该图 EXIF', () => assert(am.height > 300, `得到 ${am.height}`));
+
+    // 无 EXIF + 留空 → 没内容可写，原图字节不变（不留空白条）
+    const none = await composeGroups(plain, [], { format: 'jpeg', quality: 88,
+      frame: { style: 'band', lines: [], bg: '#ffffff', align: 'left' } });
+    ok('无 EXIF 且没给字 → 跳过边框，原图字节不变', () =>
+      assert(plain.equals(none.buffer), '应当完全一致'));
+
+    // 显式给了字 → 无 EXIF 也照加（用户明确要了）
+    const forced = await composeGroups(plain, [], { format: 'jpeg', quality: 88,
+      frame: { style: 'band', lines: ['No EXIF here', ''], bg: '#ffffff', align: 'left' } });
+    const fm = await sharp(forced.buffer).metadata();
+    ok('显式给了字 → 无 EXIF 也照加边框', () => assert(fm.height > 300, `得到 ${fm.height}`));
+
+    // 边框 + 水印分组叠加
+    const logo = await renderTextWatermark('MARK', { color: '#ff0000', fontWeight: 'bold' });
+    const both = await composeGroups(src, [{ wmBuffer: logo.buffer,
+      options: { position: 'nw', sizePct: 20, marginPct: 5, opacity: 100 } }],
+      { format: 'jpeg', quality: 90, sizeBase: 'long', frame: { style: 'frame', lines: ['X', 'Y'], align: 'left' } });
+    const bm = await sharp(both.buffer).metadata();
+    ok('边框 + 水印分组可叠加', () => assert(bm.width > 400, `得到 ${bm.width}`));
+
+    // 套了边框也要守住用户选的输出格式：format=auto 的 JPEG 输入不能变成 PNG
+    // （中途 targetBuffer 是 PNG，但不能因此把 meta.format 也改掉）
+    for (const [fmt, ext, real] of [['auto', '.jpg', 'jpeg'], ['jpeg', '.jpg', 'jpeg'],
+      ['png', '.png', 'png'], ['webp', '.webp', 'webp']]) {
+      const r = await composeGroups(src, [], { format: fmt, quality: 88,
+        frame: { style: 'band', lines: ['A', 'B'], align: 'left' } });
+      const m = await sharp(r.buffer).metadata();
+      ok(`边框不改变输出格式（format=${fmt}）`, () => {
+        eq(r.ext, ext); eq(m.format, real);
+      });
+    }
+  }
+
   console.log(`\n全部通过（${pass} 项）\n`);
 })().catch((e) => {
   console.error('\n✗ 失败：', e && e.message);

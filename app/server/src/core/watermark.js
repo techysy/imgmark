@@ -13,6 +13,7 @@ const { isBmp, bmpToPng, encodeBmp } = require('../formats/bmp');
 const { readExif } = require('./exif');
 const { formatCameraText } = require('./exiftext');
 const { renderTextWatermark } = require('./textmark');
+const { applyFrame } = require('./framemark');
 
 const IMAGE_EXTS = new Set(['.jpg', '.jpeg', '.png', '.webp', '.bmp', '.gif', '.tif', '.tiff', '.avif']);
 const WM_INPUT_EXTS = new Set(['.ai', '.svg', '.png', '.jpg', '.jpeg', '.webp', '.bmp', '.gif', '.tif', '.tiff', '.avif']);
@@ -430,6 +431,13 @@ function sizeBaseDim(W, H, sizeBase) {
   return W;
 }
 
+/** 把 group 的 position/offset 从「整张成品」换算到「照片所在的那块矩形」内 */
+function offsetEntry(entry, frame) {
+  if (!frame) return entry;
+  const { padLeft, padTop, photoW, photoH } = frame;
+  return { ...entry, left: entry.left + padLeft, top: entry.top + padTop };
+}
+
 /**
  * 多分组合成：一次叠加所有分组的水印并编码输出（相比多次 composeWatermark 少几次编解码）。
  * @param {Buffer} targetBuffer
@@ -437,16 +445,46 @@ function sizeBaseDim(W, H, sizeBase) {
  *   textSpec: 给了就按「这张图的 EXIF」现场渲染文字水印（相机参数），忽略 wmBuffer
  *   options: position/sizePct/marginPct/offsetX/offsetY/opacity/autoColor
  * @param {object} o format/quality（输出编码，全局）+ sizeBase: 'long'|'short'|'width'（大小基准，默认 width）
+ *   frame: {style, lines, bg, color, subColor, align} —— 给了就先把画布撑大套边框，
+ *          水印全部按「照片那块矩形」定位（否则会落进留白里）
  */
 async function composeGroups(targetBuffer, groupDefs, o = {}) {
   const { format = 'auto', quality = 90, sizeBase = 'width', mozjpeg = false } = o;
-  if (!groupDefs.length) throw new Error('没有可合成的分组');
+  // 允许「只加边框、不叠任何水印」：此时没有分组，但边框本身就是要输出的内容。
+  // 边框随后可能因为这张图没 EXIF 而被跳过，那种情况下真就没有任何可输出的了
+  if (!groupDefs.length && !o.frame) throw new Error('没有可合成的分组');
   const src = await loadTarget(targetBuffer);
   targetBuffer = src.buffer;
   const meta = src.meta;
-  const oriented = meta.orientation && meta.orientation >= 5;
-  const W = oriented ? meta.height : meta.width;
-  const H = oriented ? meta.width : meta.height;
+
+  // 边框：先撑大画布，之后所有水印都相对照片区域定位
+  let frame = null;
+  if (o.frame) {
+    const frameOpts = { ...o.frame };
+    // 两行留空 → 用这张图自己的 EXIF 自动填（机型 / 曝光参数）。
+    // 一张都没有的话，这个边框只会是块空白，不如不加 —— 与文字水印同样的取舍
+    if (!Array.isArray(frameOpts.lines) || !frameOpts.lines.some((s) => String(s || '').trim())) {
+      const exif = o.frame.previewExif || await readExif(sharp, targetBuffer);
+      const l1 = formatCameraText(exif, { fields: ['camera'] });
+      const l2 = formatCameraText(exif, { fields: ['exposure'] });
+      if (!l1 && !l2) {
+        frameOpts.skip = true;
+      } else {
+        frameOpts.lines = [l1, l2];
+      }
+    }
+    if (!frameOpts.skip) {
+      const fr = await applyFrame(targetBuffer, frameOpts);
+      frame = { padLeft: fr.cropRect.left, padTop: fr.cropRect.top, photoW: fr.cropRect.width, photoH: fr.cropRect.height };
+      targetBuffer = fr.buffer;
+      // targetBuffer 变成了 PNG（中间产物，无所谓），但 meta.format 必须保留原格式 ——
+      // encodeCompose 在 format=auto 时要照旧写成 JPEG，否则套个边框就把用户的 .jpg 变成了 .png
+    }
+  }
+
+  const oriented = !frame && meta.orientation && meta.orientation >= 5;
+  const W = frame ? frame.photoW : (oriented ? meta.height : meta.width);
+  const H = frame ? frame.photoH : (oriented ? meta.width : meta.height);
   // 文字水印要按「这张图」的 EXIF 渲染：同一批里每张图的相机参数都可能不同，
   // 所以不能像 logo 那样在提交任务前预先建好 —— 这里按需解析一次，多组共用。
   // 样式预览的示例图没有 EXIF，靠 group 上的 previewExif 注入一份「典型相机参数」
@@ -500,21 +538,23 @@ async function composeGroups(targetBuffer, groupDefs, o = {}) {
     wmBuf = await scaledAlphaOpacity(wmBuf, Math.max(1, Math.min(100, go.opacity ?? 80)));
     const margin = Math.round(Math.min(W, H) * clampNum(go.marginPct ?? 3, 0, 30) / 100);
     const [x, y] = positionXY(go.position || 'se', W, H, wmW, wmH, margin);
-    entries.push({
+    entries.push(offsetEntry({
       input: wmBuf,
       left: clampNum(Math.round(x + (go.offsetX || 0)), 0, W - wmW),
       top: clampNum(Math.round(y + (go.offsetY || 0)), 0, H - wmH),
-    });
+    }, frame));
   }
   // 一组都没叠上（例如全是文字组、而这张图没有 EXIF）→ 原样返回，
   // 不要白跑一次有损编码：没水印的图再压一遍纯属掉画质。
   // ext 要跟 encodeCompose 在 format=auto 下的结果一致，否则会被当成换格式而重命名
-  if (!entries.length) {
+  if (!entries.length && !frame) {
     const f = (format === 'auto' ? (meta.format || 'png') : format);
     const ext = f === 'jpeg' || f === 'jpg' ? '.jpg' : '.' + f;
     return { buffer: targetBuffer, ext, skipped: true };
   }
-  const base = sharp(targetBuffer).rotate().withMetadata();
+  const base = frame
+    ? sharp(targetBuffer).withMetadata()      // 边框产物已摆正，再 rotate 会按 EXIF 二次旋转
+    : sharp(targetBuffer).rotate().withMetadata();
   base.composite(entries);
   return encodeCompose(base, meta, { format, quality, mozjpeg });
 }

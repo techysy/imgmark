@@ -421,6 +421,7 @@ function applyPresetData(meta) {
     updateCropSplitUI();
   }
   if (o.autoColor && !$('opt-autocolor').disabled) $('opt-autocolor').checked = true;
+  applyFrameOpt(o.frame);
   refreshDD(); // 程序改了原生 select，同步刷新自定义下拉的显示文字
   renderLogoList(); renderGroups();
   updateAutoColorUI(); refreshPreview(); updateRun();
@@ -739,6 +740,19 @@ function applyExifGroup(g) {
   updateExifUI();
 }
 
+/** 方案恢复：把 options.frame 回填到 UI */
+function applyFrameOpt(f) {
+  const has = !!(f && f.style);
+  $('exif-frame').value = has ? f.style : '';
+  $('exif-frame-align').value = (f && f.align) || 'left';
+  if (f && f.bg) $('exif-frame-bg').value = f.bg;
+  $('exif-line1').value = has && Array.isArray(f.lines) ? (f.lines[0] || '') : '';
+  $('exif-line2').value = has && Array.isArray(f.lines) ? (f.lines[1] || '') : '';
+  refreshDD($('exif-frame'));
+  refreshDD($('exif-frame-align'));
+  updateFrameUI();
+}
+
 function bindExifUI() {
   if (!$('opt-exif')) return;
   $('opt-exif').addEventListener('change', () => { updateExifUI(); refreshPreview(); });
@@ -751,8 +765,16 @@ function bindExifUI() {
   [['exif-size', 'exif-sizev'], ['exif-mg', 'exif-mgv'], ['exif-op', 'exif-opv']].forEach(([sl, lb]) => {
     $(sl).addEventListener('input', () => { $(lb).textContent = $(sl).value; refreshPreview(); });
   });
+  ['exif-frame', 'exif-frame-align'].forEach((id) => {
+    $(id).addEventListener('change', () => { updateFrameUI(); refreshPreview(); });
+  });
+  ['exif-line1', 'exif-line2'].forEach((id) => {
+    $(id).addEventListener('change', refreshPreview);
+  });
+  $('exif-frame-bg').addEventListener('change', refreshPreview);
   renderExifPos();
   updateExifUI();
+  updateFrameUI();
 }
 
 // ---------- 框选裁剪 ----------
@@ -928,7 +950,27 @@ function options() {
     // 只有勾了「横竖分开设置」才把竖图比例一起发出去；不勾时 cropRatio 两个方向都管
     cropRatioPort: $('opt-cropsplit') && $('opt-cropsplit').checked
       ? ($('opt-cropratio-port').value || null) : null,
+    frame: frameDef(),
   };
+}
+
+// ---------- 边框 / 条幅 ----------
+// 与「文字水印」的区别：文字浮在画面上，边框是把画布撑大、参数写进留白。
+// 两行都留空时交给服务端用机型/曝光参数自动填（见 /api/preview 的 previewFrame）。
+function frameDef() {
+  const style = $('exif-frame') ? $('exif-frame').value : '';
+  if (!style) return null;
+  return {
+    style,
+    lines: [$('exif-line1').value.trim(), $('exif-line2').value.trim()],
+    bg: $('exif-frame-bg').value,
+    align: $('exif-frame-align').value,
+  };
+}
+
+function updateFrameUI() {
+  const on = !!($('exif-frame') && $('exif-frame').value);
+  $('frame-extra').classList.toggle('hidden', !on);
 }
 function bindPreviewOn(selector, ev = 'input') {
   document.querySelectorAll(selector).forEach((el) => el.addEventListener(ev, refreshPreview));
@@ -1219,7 +1261,7 @@ function init() {
   slider('wm-tol', 'tol-v'); slider('opt-quality', 'q-v');
 
   // 原生 select 统一升级为自定义下拉（保留原生元素做数据源与事件目标）
-  ['wm-bg', 'opt-sizebase', 'opt-format', 'opt-cropratio', 'opt-cropratio-port', 'exif-sep', 'exif-weight'].forEach((id) => enhanceSelect($(id)));
+  ['wm-bg', 'opt-sizebase', 'opt-format', 'opt-cropratio', 'opt-cropratio-port', 'exif-sep', 'exif-weight', 'exif-frame', 'exif-frame-align'].forEach((id) => enhanceSelect($(id)));
   ['wm-tol', 'opt-quality'].forEach((id) => $(id).addEventListener('input', refreshPreview));
   bindPreviewOn('#opt-format', 'change');
   bindPreviewOn('#opt-sizebase', 'change');
