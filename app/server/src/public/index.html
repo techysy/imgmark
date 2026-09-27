@@ -208,16 +208,6 @@
           </select>
           <div id="cropratio-hint" class="notes"></div>
         </div>
-      </div>
-      <!-- 输出质量单独一行：滑杆 + JPEG 体积优先都要宽度，跟上面三个下拉挤一行会互相压窄 -->
-      <div class="row">
-        <div class="field" id="quality-wrap">
-          <label>输出质量 <b id="q-v">90</b></label>
-          <input type="range" id="opt-quality" min="50" max="100" value="90">
-          <label title="mozjpeg 编码：JPEG 体积小约 10-15%，但处理速度慢约 5 倍"><input type="checkbox" id="opt-mozjpeg"> JPEG 体积优先（更慢）</label>
-        </div>
-      </div>
-      <div class="row">
         <div class="field">
           <label>输出格式</label>
           <select id="opt-format">
@@ -226,6 +216,14 @@
             <option value="jpeg">JPEG</option>
             <option value="webp">WebP</option>
           </select>
+        </div>
+      </div>
+      <!-- 输出质量单独一行：滑杆 + JPEG 体积优先都要宽度，跟上面两个下拉挤一行会互相压窄 -->
+      <div class="row">
+        <div class="field" id="quality-wrap">
+          <label>输出质量 <b id="q-v">90</b></label>
+          <input type="range" id="opt-quality" min="50" max="100" value="90">
+          <label title="mozjpeg 编码：JPEG 体积小约 10-15%，但处理速度慢约 5 倍"><input type="checkbox" id="opt-mozjpeg"> JPEG 体积优先（更慢）</label>
         </div>
       </div>
       <div class="row-inline wrap">
