@@ -318,6 +318,13 @@ function parseCropArray(v, count) {
   return arr.map((c) => (c ? parseCropField(c) : null));
 }
 
+// 前端对单文件和多文件统一发送 JSON 数组；保留旧客户端的单文件 "x,y,w,h" 格式。
+function parseCropFields(v, count) {
+  const arr = parseCropArray(v, count);
+  if (arr) return arr;
+  return count === 1 ? [parseCropField(v)] : null;
+}
+
 app.post('/api/prepare', reserveMemoryUploadSlot, requestContentLengthLimit(128 * 1024 * 1024), upload.fields([
   { name: 'watermark', maxCount: 20 },
   { name: 'pairBlack', maxCount: 1 },
@@ -385,10 +392,10 @@ app.post('/api/prepare', reserveMemoryUploadSlot, requestContentLengthLimit(128 
 
     // ---- 分组模式：每个 logo 独立准备（不合并），布局由前端在 preview/process 时以 groups 传入 ----
     if (req.body.split === 'true' && wmFiles.length) {
-      const cropArr = parseCropArray(req.body.crop, wmFiles.length);
+      const cropArr = parseCropFields(req.body.crop, wmFiles.length);
       const entries = [];
       for (let i = 0; i < wmFiles.length; i++) {
-        const crop = wmFiles.length === 1 ? parseCropField(req.body.crop) : (cropArr ? cropArr[i] : null);
+        const crop = cropArr ? cropArr[i] : null;
         const p = await prepareWatermark(wmFiles[i].buffer, wmFiles[i].originalname, { ...base, crop });
         const ink = await analyzeInk(p.buffer);
         const key = crypto.randomUUID();
@@ -417,10 +424,10 @@ app.post('/api/prepare', reserveMemoryUploadSlot, requestContentLengthLimit(128 
       return;
     }
 
-    const cropList = files.length > 1 ? parseCropArray(req.body.crop, files.length) : null;
+    const cropList = parseCropFields(req.body.crop, files.length);
     const preparedList = [];
     for (let i = 0; i < files.length; i++) {
-      const crop = files.length === 1 ? parseCropField(req.body.crop) : (cropList ? cropList[i] : null);
+      const crop = cropList ? cropList[i] : null;
       const p = await prepareWatermark(files[i].buffer, files[i].originalname, { ...base, crop });
       p.ink = await analyzeInk(p.buffer); // 亮度自适应黑白：单色墨才生成反色变体
       preparedList.push(p);

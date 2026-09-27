@@ -169,6 +169,48 @@ function req(method, urlPath, body) {
     ok('水印集不存在 → 404（早于分组解析）', () => eq(r4.status, 404, r4.text.slice(0, 120)));
   }
 
+  console.log('\n[7] 单个水印的框选裁剪');
+  {
+    const source = await sharp({ create: { width: 64, height: 48, channels: 3, background: '#456789' } }).png().toBuffer();
+    const region = { x: 25, y: 25, w: 50, h: 50 };
+    const prepare = async (crop, split) => {
+      const form = new FormData();
+      form.append('watermark', new Blob([source], { type: 'image/png' }), 'crop.png');
+      form.append('split', split ? 'true' : 'false');
+      form.append('crop', crop);
+      const response = await fetch(`http://127.0.0.1:${PORT}/api/prepare`, { method: 'POST', body: form });
+      return { status: response.status, json: await response.json() };
+    };
+    const splitArray = await prepare(JSON.stringify([region]), true);
+    ok('分组模式单文件读取前端发送的裁剪数组', () => {
+      eq(splitArray.status, 200);
+      assert.deepStrictEqual(splitArray.json.logos[0].cropApplied.pct, region);
+    });
+    const mergedArray = await prepare(JSON.stringify([region]), false);
+    ok('合并模式单文件读取前端发送的裁剪数组', () => {
+      eq(mergedArray.status, 200);
+      assert.deepStrictEqual(mergedArray.json.cropApplied.pct, region);
+    });
+    const legacy = await prepare('25,25,50,50', false);
+    ok('合并模式继续支持旧版 x,y,w,h 格式', () => {
+      eq(legacy.status, 200);
+      assert.deepStrictEqual(legacy.json.cropApplied.pct, region);
+    });
+  }
+
+  console.log('\n[8] 输出比例裁剪');
+  {
+    const id = await postJob({ mode: 'local', inputDir: inDir, outputDir: path.join(TMP, 'out-crop'),
+      options: { format: 'jpeg', quality: 90, cropRatio: 'land@1:1' },
+      groups: [{ text: { enabled: true, fields: ['camera'] }, position: 'se', sizePct: 30 }] });
+    const j = await waitJob(id);
+    ok('批量任务完成并返回两张裁剪结果', () => { eq(j.status, 'done'); eq(j.ok, 2); });
+    for (const result of j.results) {
+      const meta = await sharp(result.output).metadata();
+      ok(`${result.name} 输出为 1:1`, () => { eq(meta.width, meta.height); eq(meta.width, 600); });
+    }
+  }
+
   srv.close();
   console.log(`\n全部通过（${pass} 项）\n`);
   process.exit(0);
