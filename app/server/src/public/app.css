@@ -77,7 +77,10 @@ main { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; padding: 12px 2
 /* 质量组里有 180px 滑杆 + 两行标签，需要更宽，不参与定宽 */
 .row > #quality-wrap { width: auto; }
 /* ② 里的 .field 不吃上面那条定宽：改按 55:45 分栏（放在 .row > .field 之后，
-   否则同权重下被它覆盖 —— 上一版就是这么失效的，量出来 168/376）。 */
+   否则同权重下被它覆盖 —— 早先版本就是这么失效的，量出来 168/376）。
+   用 55:45 而不是给右栏更窄的 65:35：这样两行 divider 都在 424 与
+   「分组卡 | 预览」对齐，整个 ② 只有一条竖线；文案精简后
+   「亮度自适应黑白（自动换黑/白 logo）」在 55 的份额里也是单行。 */
 .row.g-row > .field { flex: 55 1 0; min-width: 0; width: auto; }
 .row.g-row > .field:last-child { flex: 45 1 0; }
 .field > label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 2px; }
