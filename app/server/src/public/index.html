@@ -134,37 +134,6 @@
             <option value="width">图宽</option>
           </select>
         </div>
-        <div class="field">
-          <label>输出格式</label>
-          <select id="opt-format">
-            <option value="auto">保持原格式</option>
-            <option value="png">PNG</option>
-            <option value="jpeg">JPEG</option>
-            <option value="webp">WebP</option>
-          </select>
-        </div>
-        <div class="field" id="quality-wrap">
-          <label>质量 <b id="q-v">90</b></label>
-          <input type="range" id="opt-quality" min="50" max="100" value="90">
-          <label title="mozjpeg 编码：JPEG 体积小约 10-15%，但处理速度慢约 5 倍"><input type="checkbox" id="opt-mozjpeg"> JPEG 体积优先（更慢）</label>
-        </div>
-        <div class="field">
-          <label>输出裁剪</label>
-          <select id="opt-cropratio">
-            <option value="">不裁剪（保持原比例）</option>
-            <option value="1:1">1:1 正方形</option>
-            <option value="4:5">4:5 竖版</option>
-            <option value="3:4">3:4 竖版</option>
-            <option value="2:3">2:3 竖版</option>
-            <option value="9:16">9:16 竖屏/Stories</option>
-            <option value="5:4">5:4 横版</option>
-            <option value="4:3">4:3 横版</option>
-            <option value="3:2">3:2 横版</option>
-            <option value="16:9">16:9 宽屏</option>
-            <option value="21:9">21:9 超宽/影院</option>
-          </select>
-          <div id="cropratio-hint" class="notes"></div>
-        </div>
       </div>
     </div>
   </section>
@@ -218,6 +187,40 @@
     <!-- 输出设置 -->
     <div class="card">
       <h2>④ 输出设置</h2>
+      <!-- 格式/质量/裁剪都是「输出」参数，不属于 ② 的分组布局，故集中到这里 -->
+      <div class="row">
+        <div class="field">
+          <label>输出格式</label>
+          <select id="opt-format">
+            <option value="auto">保持原格式</option>
+            <option value="png">PNG</option>
+            <option value="jpeg">JPEG</option>
+            <option value="webp">WebP</option>
+          </select>
+        </div>
+        <div class="field" id="quality-wrap">
+          <label>质量 <b id="q-v">90</b></label>
+          <input type="range" id="opt-quality" min="50" max="100" value="90">
+          <label title="mozjpeg 编码：JPEG 体积小约 10-15%，但处理速度慢约 5 倍"><input type="checkbox" id="opt-mozjpeg"> JPEG 体积优先（更慢）</label>
+        </div>
+        <div class="field">
+          <label>输出裁剪</label>
+          <select id="opt-cropratio">
+            <option value="">不裁剪（保持原比例）</option>
+            <option value="1:1">1:1 正方形</option>
+            <option value="4:5">4:5 竖版</option>
+            <option value="3:4">3:4 竖版</option>
+            <option value="2:3">2:3 竖版</option>
+            <option value="9:16">9:16 竖屏/Stories</option>
+            <option value="5:4">5:4 横版</option>
+            <option value="4:3">4:3 横版</option>
+            <option value="3:2">3:2 横版</option>
+            <option value="16:9">16:9 宽屏</option>
+            <option value="21:9">21:9 超宽/影院</option>
+          </select>
+          <div id="cropratio-hint" class="notes"></div>
+        </div>
+      </div>
       <div class="row-inline wrap">
         <label class="check"><input type="checkbox" id="opt-recursive"> 包含子目录</label>
         <span id="outdir-wrap">输出到（子目录名或完整路径）<input type="text" id="opt-outdir" class="path-input short" value="_watermarked"></span>
