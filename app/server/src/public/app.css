@@ -57,6 +57,8 @@ main { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; padding: 12px 2
    内容 max-content 更宽而抢占份额（这正是之前预览被挤换行的原因）。 */
 .g-row > .grow { flex: 55 1 0; min-width: 0; }
 .g-row > .preview-box { flex: 45 1 0; min-width: 200px; }
+/* ② 卡片里其余的 55:45 行（亮度自适应 / 大小基准）见下方 .row.g-row > .field ——
+   那条要写在「.row > .field 定宽」之后才生效，故不在这一块。 */
 
 /* ---- 卡片 ---- */
 .card { background: var(--card); border: 1px solid var(--border-subtle); border-radius: var(--radius); padding: 14px 16px; }
@@ -74,6 +76,10 @@ main { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; padding: 12px 2
 .row > .field { width: 168px; flex: 0 0 auto; }
 /* 质量组里有 180px 滑杆 + 两行标签，需要更宽，不参与定宽 */
 .row > #quality-wrap { width: auto; }
+/* ② 里的 .field 不吃上面那条定宽：改按 55:45 分栏（放在 .row > .field 之后，
+   否则同权重下被它覆盖 —— 上一版就是这么失效的，量出来 168/376）。 */
+.row.g-row > .field { flex: 55 1 0; min-width: 0; width: auto; }
+.row.g-row > .field:last-child { flex: 45 1 0; }
 .field > label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 2px; }
 .field label b { color: var(--pri-dk); font-variant-numeric: tabular-nums; }
 select, input[type="text"], input[type="number"] { padding: 6px 8px; border: 1px solid var(--border); border-radius: 8px;

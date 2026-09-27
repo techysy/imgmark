@@ -121,7 +121,9 @@
           <img id="style-preview-auto" class="hidden" alt="暗图预览"><span class="preview-cap hidden" id="preview-cap-auto">暗图示例（自动换白标）</span>
         </div>
       </div>
-      <div class="row">
+      <!-- 与上面 g-row 同一条 55:45 竖线：亮度自适应占左 55、大小基准占右 45，
+           右栏宽度与样式预览列一致，整个 ② 卡片只有一条分割线 -->
+      <div class="row g-row">
         <div class="field check">
           <label><input type="checkbox" id="opt-autocolor" disabled> 亮度自适应黑白（按图片明暗自动换黑/白 logo）</label>
           <div id="autocolor-hint" class="notes"></div>
@@ -190,20 +192,6 @@
       <!-- 格式/质量/裁剪都是「输出」参数，不属于 ② 的分组布局，故集中到这里 -->
       <div class="row">
         <div class="field">
-          <label>输出格式</label>
-          <select id="opt-format">
-            <option value="auto">保持原格式</option>
-            <option value="png">PNG</option>
-            <option value="jpeg">JPEG</option>
-            <option value="webp">WebP</option>
-          </select>
-        </div>
-        <div class="field" id="quality-wrap">
-          <label>质量 <b id="q-v">90</b></label>
-          <input type="range" id="opt-quality" min="50" max="100" value="90">
-          <label title="mozjpeg 编码：JPEG 体积小约 10-15%，但处理速度慢约 5 倍"><input type="checkbox" id="opt-mozjpeg"> JPEG 体积优先（更慢）</label>
-        </div>
-        <div class="field">
           <label>输出裁剪</label>
           <select id="opt-cropratio">
             <option value="">不裁剪（保持原比例）</option>
@@ -220,6 +208,21 @@
           </select>
           <div id="cropratio-hint" class="notes"></div>
         </div>
+        <div class="field" id="quality-wrap">
+          <label>质量 <b id="q-v">90</b></label>
+          <input type="range" id="opt-quality" min="50" max="100" value="90">
+          <label title="mozjpeg 编码：JPEG 体积小约 10-15%，但处理速度慢约 5 倍"><input type="checkbox" id="opt-mozjpeg"> JPEG 体积优先（更慢）</label>
+        </div>
+        <div class="field">
+          <label>输出格式</label>
+          <select id="opt-format">
+            <option value="auto">保持原格式</option>
+            <option value="png">PNG</option>
+            <option value="jpeg">JPEG</option>
+            <option value="webp">WebP</option>
+          </select>
+        </div>
+
       </div>
       <div class="row-inline wrap">
         <label class="check"><input type="checkbox" id="opt-recursive"> 包含子目录</label>
