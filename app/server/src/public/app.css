@@ -44,12 +44,11 @@ header .status { font-size: 12px; color: var(--muted); display: flex; gap: 7px; 
 main { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; padding: 12px 22px 30px; max-width: 1240px; margin: 0 auto; }
 @media (max-width: 980px) { main { grid-template-columns: 1fr; } }
 .col { display: flex; flex-direction: column; gap: 14px; }
-/* ② 左列分组控件、右列样式预览。预览点击可放大，不需要大，固定在 160px；
-   左列因此稳定拿到 558-160-14 ≈ 384px，九宫格(150) + 滑杆列 ~196px。
-   （不分栏时左列只有 247px，控件会被 flex 换行挤成阶梯竖排。） */
+/* ② 左列分组 6、右列预览 4：预览图跟随列宽伸缩，不再固定 160px 而在右侧留空。
+   6:4 用 flex-basis 0 + flex-grow 6/4 实现，gap 14 从总宽里扣。 */
 .g-row { align-items: flex-start; }
-.g-row > .grow { flex: 1 1 auto; min-width: 0; }
-.g-row > .preview-box { flex: 0 0 160px; width: 160px; min-width: 0; }
+.g-row > .grow { flex: 6 1 0; min-width: 0; }
+.g-row > .preview-box { flex: 4 1 0; min-width: 0; }
 
 /* ---- 卡片 ---- */
 .card { background: var(--card); border: 1px solid var(--border-subtle); border-radius: var(--radius); padding: 14px 16px; }
