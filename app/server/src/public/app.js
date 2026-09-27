@@ -48,6 +48,57 @@ async function api(path, opts) {
 const debounce = (fn, ms) => { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; };
 function esc(s) { return String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
 
+// ---------- 可拖拽列宽（localStorage 记忆） ----------
+function saveColW(key, v) { try { localStorage.setItem(key, String(Math.round(v))); } catch { /* 隐私模式忽略 */ } }
+function loadColW(key) { const v = parseFloat(localStorage.getItem(key)); return Number.isFinite(v) ? v : null; }
+
+// ② 分组 / 预览 分隔条：拖动改预览列宽。
+// 预览列宽 = 整行宽 - 卡片宽 - 分隔条 - gap，所以卡片宽（--gc-w）保持不变，
+// 只让预览区变大变小；夹在 [200, 520] 内，避免拖成 0 宽或吃掉整个卡片区。
+function setupGroupSplit() {
+  const bar = $('g-split');
+  const row = bar && bar.parentElement;
+  const preview = row && row.querySelector('.preview-box');
+  const grow = row && row.querySelector('.grow');
+  if (!bar || !row || !preview || !grow) return;
+
+  const MIN = 200, MAX = 520;
+  const apply = (targetW) => {
+    const gap = parseFloat(getComputedStyle(row).columnGap) || 0;
+    // 预览列只能蚕食「整行宽 - 卡片宽 - 两根 gap - 分隔条」，留一格 gap 给右侧留白
+    const maxByRow = row.clientWidth - grow.offsetWidth - bar.offsetWidth - gap * 2;
+    const w = Math.max(MIN, Math.min(MAX, maxByRow, targetW));
+    preview.style.flex = `0 0 ${Math.round(w)}px`;
+    return w;
+  };
+
+  const saved = loadColW('imgmark_gcol');
+  if (saved) apply(saved);
+  // 窗口变窄时重新夹一次，避免之前拖宽的预览把卡片挤出容器
+  let rt; addEventListener('resize', () => { clearTimeout(rt); rt = setTimeout(() => apply(preview.offsetWidth), 120); });
+
+  let startX = 0, startW = 0;
+  const onMove = (e) => apply(startW - (e.clientX - startX));
+  const onUp = () => {
+    bar.classList.remove('dragging'); document.body.classList.remove('col-resizing');
+    document.removeEventListener('pointermove', onMove); document.removeEventListener('pointerup', onUp);
+    saveColW('imgmark_gcol', preview.offsetWidth);
+  };
+  bar.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    startX = e.clientX; startW = preview.offsetWidth;
+    bar.classList.add('dragging'); document.body.classList.add('col-resizing');
+    document.addEventListener('pointermove', onMove); document.addEventListener('pointerup', onUp);
+  });
+  // 键盘可达：← / → 各调 20px
+  bar.addEventListener('keydown', (e) => {
+    const step = e.key === 'ArrowLeft' ? 20 : e.key === 'ArrowRight' ? -20 : 0;
+    if (!step) return;
+    e.preventDefault();
+    saveColW('imgmark_gcol', apply(preview.offsetWidth + step));
+  });
+}
+
 // ---------- 自定义下拉（统一替换原生 select） ----------
 // 原生 <select> 保留在 DOM 中作为数据源与 change 事件目标：外部读 .value / 绑定 change 的代码完全不变，
 // 只在它旁边渲染一层自定义按钮 + 菜单，并负责触底向上弹、右侧空间不足时右对齐。
@@ -993,6 +1044,7 @@ function init() {
   });
   $('opt-format').addEventListener('change', () => { $('quality-wrap').style.opacity = ['jpeg', 'webp'].includes($('opt-format').value) ? 1 : .4; refreshPreview(); });
   $('group-add').addEventListener('click', addGroup);
+  setupGroupSplit(); // ② 分组/预览 之间的拖拽分隔条
   $('preset-save').addEventListener('click', savePreset);
   $('preset-del').addEventListener('click', delPreset);
   $('preset-toggle').addEventListener('click', (e) => { e.stopPropagation(); togglePresetMenu(); });
