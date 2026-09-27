@@ -434,9 +434,10 @@ function loadPresets() { try { return JSON.parse(fs.readFileSync(PRESET_FILE, 'u
 function savePresets(map) { fs.writeFileSync(PRESET_FILE, JSON.stringify(map, null, 2)); }
 
 // 方案摘要：从已存 options/groups 推导出人类可读的关键参数，供前端下拉与详情卡片展示
+// 只标注比例，不带「横版/竖版」——那是图片方向，与裁剪比例无关
 const CROP_LABEL = {
-  '1:1': '1:1 正方', '4:5': '4:5 竖版', '5:4': '5:4 横版', '3:4': '3:4 竖版', '4:3': '4:3 横版',
-  '2:3': '2:3 竖版', '3:2': '3:2 横版', '9:16': '9:16 竖屏', '16:9': '16:9 宽屏', '21:9': '21:9 超宽',
+  '1:1': '1:1 正方', '4:5': '4:5', '5:4': '5:4', '3:4': '3:4', '4:3': '4:3',
+  '2:3': '2:3', '3:2': '3:2', '9:16': '9:16', '16:9': '16:9', '21:9': '21:9',
 };
 const FORMAT_LABEL = { auto: '保持原格式', png: 'PNG', jpeg: 'JPEG', webp: 'WebP' };
 const SIZEBASE_LABEL = { long: '长边', short: '短边', width: '图宽' };
@@ -446,6 +447,8 @@ function presetSummary(p) {
   const tags = [];
   const logoCount = groups.reduce((n, g) => n + ((g && Array.isArray(g.logos)) ? g.logos.length : 0), 0);
   tags.push({ k: 'groups', label: `${groups.length} 组${logoCount ? ` · ${logoCount} logo` : ''}` });
+  // 比例标签（4:5）单独看只有数字，跟旁边的「4 组 · 2 logo」混在一起认不出是裁剪，
+  // 故这里在标签前补一个「裁剪」词：4:5 + 「裁剪」→「裁剪 4:5」。
   if (o.cropRatio && CROP_LABEL[o.cropRatio]) tags.push({ k: 'crop', label: `裁剪 ${CROP_LABEL[o.cropRatio]}` });
   if (o.format && o.format !== 'auto') tags.push({ k: 'format', label: FORMAT_LABEL[o.format] || o.format });
   else tags.push({ k: 'format', label: '保持原格式' });

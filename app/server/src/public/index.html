@@ -193,18 +193,20 @@
       <div class="row">
         <div class="field">
           <label>输出裁剪</label>
+          <!-- 选项只写比例，不带「横版/竖版」——那说的是图片方向，跟裁剪无关：
+               「4:5」在一张横图上裁出来的仍是竖幅画面。 -->
           <select id="opt-cropratio">
             <option value="">不裁剪（保持原比例）</option>
             <option value="1:1">1:1 正方形</option>
-            <option value="4:5">4:5 竖版</option>
-            <option value="3:4">3:4 竖版</option>
-            <option value="2:3">2:3 竖版</option>
-            <option value="9:16">9:16 竖屏/Stories</option>
-            <option value="5:4">5:4 横版</option>
-            <option value="4:3">4:3 横版</option>
-            <option value="3:2">3:2 横版</option>
-            <option value="16:9">16:9 宽屏</option>
-            <option value="21:9">21:9 超宽/影院</option>
+            <option value="4:5">4:5</option>
+            <option value="3:4">3:4</option>
+            <option value="2:3">2:3</option>
+            <option value="9:16">9:16</option>
+            <option value="5:4">5:4</option>
+            <option value="4:3">4:3</option>
+            <option value="3:2">3:2</option>
+            <option value="16:9">16:9</option>
+            <option value="21:9">21:9</option>
           </select>
           <div id="cropratio-hint" class="notes"></div>
         </div>
