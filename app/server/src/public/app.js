@@ -386,7 +386,15 @@ async function applyPreset(id) {
     if (o.quality) $('opt-quality').value = o.quality;
     if ($('opt-mozjpeg')) $('opt-mozjpeg').checked = !!o.mozjpeg;
     if (o.sizeBase) $('opt-sizebase').value = o.sizeBase;
-    if ($('opt-cropratio')) $('opt-cropratio').value = o.cropRatio || '';
+    if ($('opt-cropratio')) { $('opt-cropratio').value = o.cropRatio || ''; cropHintRefresh(); }
+    // 方案里带竖图比例 → 自动勾上「横竖分开设置」并把第二个下拉填好；
+    // 老方案（只有 cropRatio）保持不勾，行为与拆分前一致
+    if ($('opt-cropsplit')) {
+      $('opt-cropsplit').checked = !!o.cropRatioPort;
+      $('opt-cropratio-port').value = o.cropRatioPort || '';
+      $('cropratio-port-hint').textContent = o.cropRatioPort ? '智能裁剪（保留细节多的一侧）' : '';
+      updateCropSplitUI();
+    }
     if (o.autoColor && !$('opt-autocolor').disabled) $('opt-autocolor').checked = true;
     refreshDD(); // 程序改了原生 select，同步刷新自定义下拉的显示文字
     renderLogoList(); renderGroups();
@@ -642,6 +650,19 @@ function updateAutoColorUI() {
     : '没有纯黑白 logo 的分组：把黑白 logo 单独放一组即可启用';
 }
 
+// 输出裁剪：勾了「横竖分开设置」就露出竖图那个下拉；不勾则只有横图那个可用，
+// 它选的比例两个方向都套用（即默认行为与拆分成两个下拉之前完全一致）
+function updateCropSplitUI() {
+  const split = $('opt-cropsplit').checked;
+  $('cropsplit-extra').classList.toggle('hidden', !split);
+  if (!split) {
+    // 收起时清掉竖图那个值，避免它留在 payload 里却看不见
+    $('opt-cropratio-port').value = '';
+    $('cropratio-port-hint').textContent = '';
+    refreshDD($('opt-cropratio-port'));
+  }
+}
+
 // ---------- 样式预览（单张实时：任一分组参数变化都重新合成示例图） ----------
 async function doRefreshPreview() {
   if (!state.watermarkId || !state.groups.length) return;
@@ -704,10 +725,20 @@ function options() {
     sizeBase: $('opt-sizebase') ? $('opt-sizebase').value : 'long',
     autoColor: !$('opt-autocolor').disabled && $('opt-autocolor').checked,
     cropRatio: $('opt-cropratio') ? $('opt-cropratio').value || null : null,
+    // 只有勾了「横竖分开设置」才把竖图比例一起发出去；不勾时 cropRatio 两个方向都管
+    cropRatioPort: $('opt-cropsplit') && $('opt-cropsplit').checked
+      ? ($('opt-cropratio-port').value || null) : null,
   };
 }
 function bindPreviewOn(selector, ev = 'input') {
   document.querySelectorAll(selector).forEach((el) => el.addEventListener(ev, refreshPreview));
+}
+
+// 裁剪提示文案：刻意压到 14 字以内（168px 容器一行只放得下 14 字，实测），
+// 换行会让 .field 变高。两个裁剪下拉共用同一条文案，各更新自己那一格。
+function cropHintRefresh() {
+  $('cropratio-hint').textContent = $('opt-cropratio').value ? '智能裁剪（保留细节多的一侧）' : '';
+  $('cropratio-port-hint').textContent = $('opt-cropratio-port').value ? '智能裁剪（保留细节多的一侧）' : '';
 }
 
 // ---------- fnOS 目录 ----------
@@ -983,17 +1014,19 @@ function init() {
   slider('wm-tol', 'tol-v'); slider('opt-quality', 'q-v');
 
   // 原生 select 统一升级为自定义下拉（保留原生元素做数据源与事件目标）
-  ['wm-bg', 'opt-sizebase', 'opt-format', 'opt-cropratio'].forEach((id) => enhanceSelect($(id)));
+  ['wm-bg', 'opt-sizebase', 'opt-format', 'opt-cropratio', 'opt-cropratio-port'].forEach((id) => enhanceSelect($(id)));
   ['wm-tol', 'opt-quality'].forEach((id) => $(id).addEventListener('input', refreshPreview));
   bindPreviewOn('#opt-format', 'change');
   bindPreviewOn('#opt-sizebase', 'change');
   bindPreviewOn('#opt-cropratio', 'change');
+  bindPreviewOn('#opt-cropratio-port', 'change');
   $('opt-autocolor').addEventListener('change', refreshPreview);
-  $('opt-cropratio').addEventListener('change', () => {
-    const v = $('opt-cropratio').value;
-    // 文案刻意压到 14 字以内：168px 容器一行只放得下 14 字（实测），换行会让
-    // .field 高度从 77 涨到 96px，在输出设置行里造成纵向跳动。改文案前先量宽度
-    $('cropratio-hint').textContent = v ? '智能裁剪（保留细节多的一侧）' : '';
+  $('opt-cropratio').addEventListener('change', cropHintRefresh);
+  $('opt-cropratio-port').addEventListener('change', cropHintRefresh);
+  // 横竖分开设置：不勾选时只看左边（横图）那个下拉，它的比例两个方向都套用
+  $('opt-cropsplit').addEventListener('change', () => {
+    updateCropSplitUI();
+    refreshPreview();
   });
   $('opt-format').addEventListener('change', () => { $('quality-wrap').style.opacity = ['jpeg', 'webp'].includes($('opt-format').value) ? 1 : .4; refreshPreview(); });
   $('group-add').addEventListener('click', addGroup);

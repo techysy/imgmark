@@ -190,26 +190,51 @@
     <div class="card">
       <h2>④ 输出设置</h2>
       <!-- 输出裁剪独占一行：它带一行提示（智能裁剪…），跟别的挤一行会把提示挤到隔壁格下面去。
-           裁剪在最前 —— 它决定画面，是这一步里最「上游」的选择。 -->
+           裁剪在最前 —— 它决定画面，是这一步里最「上游」的选择。
+           两个下拉：勾上「横竖分开设置」才各管一个方向，否则只有左边（横图）那个可用，
+           它的选择两个方向都套用 —— 即默认行为与拆分前完全一致。 -->
       <div class="row">
-        <div class="field">
+        <div class="field" id="cropratio-wrap">
           <label>输出裁剪</label>
-          <!-- 选项只写比例，不带「横版/竖版」——那说的是图片方向，跟裁剪无关：
-               「4:5」在一张横图上裁出来的仍是竖幅画面。 -->
+          <!-- 带 land@ / port@ 的比例只对相应方向的图片生效，另一方向原样输出
+               （见 watermark.js parseCropRatio）；不带前缀的（如 1:1）两个方向都裁。
+               选项顺序：都是「轻微→大幅」的裁宽/裁高在前，改变方向的（改竖幅/改横幅）在后。 -->
           <select id="opt-cropratio">
-            <option value="">不裁剪（保持原比例）</option>
-            <option value="1:1">1:1 正方形</option>
-            <option value="4:5">4:5</option>
-            <option value="3:4">3:4</option>
-            <option value="2:3">2:3</option>
-            <option value="9:16">9:16</option>
-            <option value="5:4">5:4</option>
-            <option value="4:3">4:3</option>
-            <option value="3:2">3:2</option>
-            <option value="16:9">16:9</option>
-            <option value="21:9">21:9</option>
+            <option value="">保持一致（不裁剪）</option>
+            <optgroup label="横图">
+              <option value="land@5:4">5:4 轻微裁宽</option>
+              <option value="land@4:3">4:3 裁宽</option>
+              <option value="land@3:2">3:2 裁宽</option>
+              <option value="land@16:9">16:9 裁宽</option>
+              <option value="land@21:9">21:9 裁宽（影院）</option>
+              <option value="land@4:5">4:5 改竖版</option>
+              <option value="land@1:1">1:1 正方形</option>
+            </optgroup>
+            <optgroup label="竖图">
+              <option value="port@4:5">4:5 轻微裁高</option>
+              <option value="port@3:4">3:4 裁高</option>
+              <option value="port@2:3">2:3 裁高</option>
+              <option value="port@9:16">9:16 裁高（Stories）</option>
+              <option value="port@16:9">16:9 改横版</option>
+              <option value="port@1:1">1:1 正方形</option>
+            </optgroup>
           </select>
           <div id="cropratio-hint" class="notes"></div>
+          <label class="check" title="勾选后横图、竖图各用一个比例；不勾选则只按左边横图的比例处理两种方向的图片">
+            <input type="checkbox" id="opt-cropsplit"> 横竖分开设置</label>
+          <div id="cropsplit-extra" class="hidden">
+            <label class="sublabel">竖图裁剪</label>
+            <select id="opt-cropratio-port">
+              <option value="">保持一致（不裁剪）</option>
+              <option value="port@4:5">4:5 轻微裁高</option>
+              <option value="port@3:4">3:4 裁高</option>
+              <option value="port@2:3">2:3 裁高</option>
+              <option value="port@9:16">9:16 裁高（Stories）</option>
+              <option value="port@5:4">5:4 改横版</option>
+              <option value="port@1:1">1:1 正方形</option>
+            </select>
+            <div id="cropratio-port-hint" class="notes"></div>
+          </div>
         </div>
       </div>
       <!-- 输出质量 + 输出格式同排：质量滑杆与 JPEG 体积优先在左（要宽），格式下拉在右。

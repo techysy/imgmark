@@ -12,7 +12,7 @@ const express = require('express');
 const multer = require('multer');
 const sharp = require('sharp');
 
-const { prepareWatermark, mergeWatermarks, composeWatermark, composeGroups, buildGroupWatermark, analyzeInk, cropOutput, CROP_RATIOS, IMAGE_EXTS, WM_INPUT_EXTS, extOf } = require('./core/watermark');
+const { prepareWatermark, mergeWatermarks, composeWatermark, composeGroups, buildGroupWatermark, analyzeInk, applyCrop, parseCropRatio, CROP_RATIOS, IMAGE_EXTS, WM_INPUT_EXTS, extOf } = require('./core/watermark');
 const { runBatch } = require('./core/batch');
 const { ProcessDB } = require('./core/db');
 const { WatcherManager } = require('./core/watcher');
@@ -391,7 +391,12 @@ app.post('/api/preview', express.json(), async (req, res) => {
   try {
     const options = req.body.options || {};
     const orient = req.body.orient === 'portrait' ? 'portrait' : 'landscape'; // 示例图方向（仅预览用，不影响处理）
-    const cropRatio = CROP_RATIOS[options.cropRatio] ? options.cropRatio : null;
+    // 示例图方向决定用哪个裁剪比例：竖图示例看 cropRatioPort（勾了「横竖分开设置」时），
+    // 否则一律用 cropRatio —— 与批量处理里 applyCrop 的选法保持一致，
+    // 这样预览看到的就是实际会裁出来的画面。
+    const cropRatio = orient === 'portrait'
+      ? (options.cropRatioPort || options.cropRatio || null)
+      : (options.cropRatio || null);
     const groups = Array.isArray(req.body.groups) && req.body.groups.length ? req.body.groups : null;
     // 分组模式：多个分组一次性合成到示例图
     if (groups) {
@@ -401,7 +406,7 @@ app.post('/api/preview', express.json(), async (req, res) => {
       const groupDefs = await resolveGroups(set, groups, auto);
       const toPreviewG = async (kind) => {
         const composed = await composeGroups(await getSampleImage(kind, orient), groupDefs, { sizeBase: options.sizeBase });
-        if (cropRatio) composed.buffer = await cropOutput(composed.buffer, cropRatio);
+        composed.buffer = await applyCrop(composed.buffer, { cropRatio });
         return previewDataUrl(composed);
       };
       const preview = await toPreviewG('light');
@@ -413,7 +418,7 @@ app.post('/api/preview', express.json(), async (req, res) => {
     const altBuf = options.autoColor && wm.altPath ? fs.readFileSync(wm.altPath) : null;
     const toPreview = async (sample) => {
       const composed = await composeWatermark(await getSampleImage(sample, orient), fs.readFileSync(wm.path), options, altBuf);
-      if (cropRatio) composed.buffer = await cropOutput(composed.buffer, cropRatio);
+      composed.buffer = await applyCrop(composed.buffer, { cropRatio });
       return previewDataUrl(composed);
     };
     const preview = await toPreview('light');
@@ -434,11 +439,20 @@ function loadPresets() { try { return JSON.parse(fs.readFileSync(PRESET_FILE, 'u
 function savePresets(map) { fs.writeFileSync(PRESET_FILE, JSON.stringify(map, null, 2)); }
 
 // 方案摘要：从已存 options/groups 推导出人类可读的关键参数，供前端下拉与详情卡片展示
-// 只标注比例，不带「横版/竖版」——那是图片方向，与裁剪比例无关
+// 摘要里裁剪切片的文案：只写比例，方向由「横向 / 竖向」前缀交代，
+// 因为带 land@ / port@ 的选项本来就分方向，不加前缀两张卡片的「裁剪 5:4」会看不出区别。
 const CROP_LABEL = {
   '1:1': '1:1 正方', '4:5': '4:5', '5:4': '5:4', '3:4': '3:4', '4:3': '4:3',
   '2:3': '2:3', '3:2': '3:2', '9:16': '9:16', '16:9': '16:9', '21:9': '21:9',
 };
+function cropLabel(raw) {
+  const spec = parseCropRatio(raw);
+  if (!spec) return null;
+  const m = /^(land|port)@(.+)$/.exec(String(raw || ''));
+  const base = CROP_LABEL[m ? m[2] : String(raw)] || (m ? m[2] : String(raw));
+  if (!m) return base;                                  // 不带前缀：两个方向都裁，不加方向词
+  return `${m[1] === 'port' ? '竖向' : '横向'} ${base}`;  // 只对一种方向生效，标出来
+}
 const FORMAT_LABEL = { auto: '保持原格式', png: 'PNG', jpeg: 'JPEG', webp: 'WebP' };
 const SIZEBASE_LABEL = { long: '长边', short: '短边', width: '图宽' };
 function presetSummary(p) {
@@ -449,7 +463,11 @@ function presetSummary(p) {
   tags.push({ k: 'groups', label: `${groups.length} 组${logoCount ? ` · ${logoCount} logo` : ''}` });
   // 比例标签（4:5）单独看只有数字，跟旁边的「4 组 · 2 logo」混在一起认不出是裁剪，
   // 故这里在标签前补一个「裁剪」词：4:5 + 「裁剪」→「裁剪 4:5」。
-  if (o.cropRatio && CROP_LABEL[o.cropRatio]) tags.push({ k: 'crop', label: `裁剪 ${CROP_LABEL[o.cropRatio]}` });
+  // 横竖分开设置时两个比例各出一个标签，靠「横向 / 竖向」区分。
+  const cl = cropLabel(o.cropRatio);
+  if (cl) tags.push({ k: 'crop', label: `裁剪 ${cl}` });
+  const clp = o.cropRatioPort ? cropLabel(o.cropRatioPort) : null;
+  if (clp) tags.push({ k: 'crop', label: `裁剪 ${clp}` });
   if (o.format && o.format !== 'auto') tags.push({ k: 'format', label: FORMAT_LABEL[o.format] || o.format });
   else tags.push({ k: 'format', label: '保持原格式' });
   if (o.quality && ['jpeg', 'webp'].includes(o.format)) tags.push({ k: 'quality', label: `质量 ${o.quality}` });
@@ -536,7 +554,10 @@ function parseOptions(raw) {
     format: ['auto', 'png', 'jpeg', 'webp'].includes(o.format) ? o.format : 'auto',
     quality: Math.max(50, Math.min(100, numOr(o.quality, 90))),
     mozjpeg: !!o.mozjpeg, // JPEG 体积优先（小 10-15%，编码慢约 5 倍）
-    cropRatio: CROP_RATIOS[o.cropRatio] ? o.cropRatio : null,
+    // 裁剪比例可能是 '4:5' 也可能是带方向前缀的 'land@5:4' / 'port@4:5'，
+    // 用 parseCropRatio 校验（直接查 CROP_RATIOS 会把带前缀的一律判成非法而丢掉）
+    cropRatio: parseCropRatio(o.cropRatio) ? o.cropRatio : null,
+    cropRatioPort: parseCropRatio(o.cropRatioPort) ? o.cropRatioPort : null,
   };
 }
 

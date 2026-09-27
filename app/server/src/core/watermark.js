@@ -511,6 +511,13 @@ async function mergeWatermarks(preparedList, o = {}) {
 /**
  * 输出裁剪：按指定宽高比裁剪已合成的图片，通过亮度分析智能选择裁剪区域。
  * 分析上/下（或左/右）半区亮度方差，方差大的区域更可能包含主体/细节，裁剪时尽量保留。
+ *
+ * ratio 支持两种写法：
+ *   '4:5'      —— 不看图片方向，一律按 4:5 裁（横图会得到竖幅画面）
+ *   'land@5:4' —— 只对横图生效，竖图原样输出（'port@' 反之）
+ * 带方向前缀的写法用来把「横图裁成 5:4」和「竖图裁成 5:4」分开表达：
+ * 同一组比例下，横图最常见的诉求是裁宽、竖图是裁高，混在一起选不出想要的那条。
+ * 不带前缀的比例仍然有效（老方案里存的就是这种），行为与旧版完全一致。
  */
 const CROP_RATIOS = {
   '1:1':   [1, 1],
@@ -524,14 +531,54 @@ const CROP_RATIOS = {
   '16:9':  [16, 9],
   '21:9':  [21, 9],
 };
-
-async function cropOutput(buffer, ratio) {
-  const [rw, rh] = CROP_RATIOS[ratio] || [0, 0];
-  if (!rw || !rh) return buffer;
-
-  const meta = await sharp(buffer).metadata();
+// 解析 'land@4:5' / 'port@5:4' / '16:9' 三种写法
+function parseCropRatio(ratio) {
+  const m = /^(land|port)@(.+)$/.exec(String(ratio || ''));
+  const ratioKey = m ? m[2] : String(ratio || '');
+  const wh = CROP_RATIOS[ratioKey];
+  if (!wh) return null;
+  return { scope: m ? m[1] : 'any', rw: wh[0], rh: wh[1] };
+}
+// 源图是不是竖幅（含 EXIF 方向修正）
+function sourceIsPortrait(meta) {
   const oriented = meta.orientation && meta.orientation >= 5;
   const W = oriented ? meta.height : meta.width;
+  const H = oriented ? meta.width : meta.height;
+  return W < H;
+}
+
+/**
+ * 按 options 里的裁剪配置处理一张已合成的图。
+ *   options.cropRatio     —— 横图用的比例（不带 land@/port@ 前缀时两个方向都套用）
+ *   options.cropRatioPort —— 仅当勾了「横竖分开设置」才有值，只作用于竖图
+ * 竖图会优先用 cropRatioPort；没配置或对竖图不生效时，回落到 cropRatio
+ * （落在不带前缀的比例上 → 仍然裁剪，所以「不勾分开设置」的行为与旧版一致）。
+ */
+async function applyCrop(buffer, opts) {
+  const o = opts || {};
+  if (!o.cropRatio && !o.cropRatioPort) return buffer;
+  const meta = await sharp(buffer).metadata();
+  if (sourceIsPortrait(meta) && o.cropRatioPort) {
+    // 竖图专用的那个比例若对竖图不生效（理论上不会，选项都是 port@ 开头），
+    // 就不裁剪 —— 不要悄悄改用横图的比例裁掉一张竖图
+    return cropOutput(buffer, o.cropRatioPort, meta);
+  }
+  return cropOutput(buffer, o.cropRatio, meta);
+}
+
+async function cropOutput(buffer, ratio, metaIn) {
+  const spec = parseCropRatio(ratio);
+  if (!spec) return buffer;
+
+  const meta = metaIn || await sharp(buffer).metadata();
+  const oriented = meta.orientation && meta.orientation >= 5;
+  const W = oriented ? meta.height : meta.width;
+  if (spec.scope !== 'any' && spec.scope !== (sourceIsPortrait(meta) ? 'port' : 'land')) {
+    return buffer;
+  }
+  const { rw, rh } = spec;
+  if (!rw || !rh) return buffer;
+
   const H = oriented ? meta.width : meta.height;
   const targetAR = rw / rh;
   const srcAR = W / H;
@@ -615,4 +662,4 @@ async function smartOffset(buffer, W, H, cropW, cropH, axis) {
   return Math.round(excess / 2);
 }
 
-module.exports = { prepareWatermark, mergeWatermarks, composeWatermark, composeGroups, buildGroupWatermark, analyzeInk, cropOutput, CROP_RATIOS, IMAGE_EXTS, WM_INPUT_EXTS, extOf };
+module.exports = { prepareWatermark, mergeWatermarks, composeWatermark, composeGroups, buildGroupWatermark, analyzeInk, cropOutput, applyCrop, parseCropRatio, CROP_RATIOS, IMAGE_EXTS, WM_INPUT_EXTS, extOf };
