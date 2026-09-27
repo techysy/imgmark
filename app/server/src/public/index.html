@@ -101,15 +101,11 @@
         </div>
       </div>
     </div>
-  </section>
 
-  <!-- ② 水印分组：内容需求 744px，窄列只有 243px，会把四个控件挤成一列竖排。
-       故整块提为通栏（main 网格 span 2），卡片内部再分两栏。 -->
-  <section class="col span-all">
     <!-- ② 水印分组 -->
     <div class="card">
       <h2>② 水印分组 <small>每组独立定位/大小/间距，可放 1 个或多个 logo，参数即改即预览</small></h2>
-      <div class="row-inline wrap g-row-a">
+      <div class="row">
         <div class="grow">
           <div id="groups-box"></div>
           <button id="group-add" class="btn" disabled>＋ 添加分组</button>
@@ -123,7 +119,7 @@
           <img id="style-preview-auto" class="hidden" alt="暗图预览"><span class="preview-cap hidden" id="preview-cap-auto">暗图示例（自动换白标）</span>
         </div>
       </div>
-      <div class="row-inline wrap g-row-b">
+      <div class="row">
         <div class="field check">
           <label><input type="checkbox" id="opt-autocolor" disabled> 亮度自适应黑白（按图片明暗自动换黑/白 logo）</label>
           <div id="autocolor-hint" class="notes"></div>

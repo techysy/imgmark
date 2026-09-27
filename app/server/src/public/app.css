@@ -44,11 +44,6 @@ header .status { font-size: 12px; color: var(--muted); display: flex; gap: 7px; 
 main { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; padding: 12px 22px 30px; max-width: 1240px; margin: 0 auto; }
 @media (max-width: 980px) { main { grid-template-columns: 1fr; } }
 .col { display: flex; flex-direction: column; gap: 14px; }
-/* ② 跨两栏通栏：它的分组控制区一行需要 744px，窄列只有 243px 时四个控件会
-   被 flex 换行挤成一列竖排（实测 y 依次 695/840/910/981，卡片高 343px）。
-   通栏后可用宽 ~1160px，一行排得下，卡片高降到约 200px。 */
-.span-all { grid-column: 1 / -1; }
-@media (max-width: 980px) { .span-all { grid-column: auto; } }
 
 /* ---- 卡片 ---- */
 .card { background: var(--card); border: 1px solid var(--border-subtle); border-radius: var(--radius); padding: 14px 16px; }
@@ -66,16 +61,6 @@ main { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; padding: 12px 2
 .row > .field { width: 168px; flex: 0 0 auto; }
 /* 质量组里有 180px 滑杆 + 两行标签，需要更宽，不参与定宽 */
 .row > #quality-wrap { width: auto; }
-/* ② 已提为通栏，里面的两半各占一行：左半分组卡片 + 预览图，右半输出设置字段。
-   两半等宽且各自 wrap，字段不再共享一个 550px 的窄行。 */
-.g-row-a, .g-row-b { width: 100%; margin: 0; }
-.g-row-a > .grow { flex: 1 1 640px; min-width: 340px; }
-.g-row-a > .preview-box { flex: 0 1 420px; min-width: 280px; }
-.g-row-b > .field { width: 168px; flex: 0 0 auto; }
-.g-row-b > #quality-wrap { width: auto; }
-/* ② 通栏后 .gc-ctrl 需 ≥ 九宫格 150 + 3 滑杆 + 间距 = 612px 才不复换行，
-   故左半（.grow）给足 660px 下限，避免窗口略窄时又退回竖排 */
-.g-row-a > .grow { flex: 1 1 660px; min-width: 340px; }
 .field > label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 2px; }
 .field label b { color: var(--pri-dk); font-variant-numeric: tabular-nums; }
 select, input[type="text"], input[type="number"] { padding: 6px 8px; border: 1px solid var(--border); border-radius: 8px;
@@ -208,11 +193,6 @@ footer { text-align: center; color: var(--text-3); font-size: 12px; padding: 18p
 .gc-ctrl { gap: 14px; align-items: flex-start; margin-top: 6px; }
 .gc-ctrl .field { min-width: 150px; }
 .gc-ctrl .grid9 { min-width: 150px; }
-/* 分组内滑杆收窄到 140px：全局 input[type=range] 是 180px，四个控件一行共需
-   150 + 184×3 + 14×3 = 744px，而通栏后 .gc-ctrl 只有 670px → 第 4 个仍会换行。
-   140px 滑杆后一行需 612px < 670px，四个控件真正并排（140px 拖动精度足够）。 */
-.gc-ctrl input[type="range"] { width: 140px; }
-.gc-ctrl .field { min-width: 140px; }
 /* 分组卡片里九宫格更紧凑：只改单元格尺寸与字号，不再给按钮加 padding（会撑破格子导致错位） */
 .gc-ctrl .grid9 { grid-template-columns: repeat(3, 30px); grid-auto-rows: 30px; }
 .gc-ctrl .grid9 button { font-size: 10.5px; letter-spacing: -.5px; }
