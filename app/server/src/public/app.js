@@ -25,6 +25,7 @@ const state = {
 };
 let cropMode = false, dragStart = null;
 let previewOrient = 'landscape'; // 样式预览示例图方向：landscape|portrait（仅预览用）
+let prepareGeneration = 0;
 
 // ---------- 图标（Lucide 风格线性图标，与 CreditDaddy 同款，currentColor） ----------
 const svg = (d) => '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' + d + '</svg>';
@@ -167,14 +168,17 @@ window.addEventListener('resize', () => closeAllDD());
 
 // ---------- 水印准备（split：每个 logo 独立去底；布局在 ② 分组里配置） ----------
 async function prepareWatermark() {
+  const generation = ++prepareGeneration;
   state.watermarkId = null;
-  state.logoSet = null;
+  updateRun();
   if (!state.wmFiles.length) {
+    state.logoSet = null;
     $('wm-preview').src = PLACEHOLDER_WM;
     $('style-preview').src = PLACEHOLDER_STYLE;
     $('style-preview-auto').classList.add('hidden');
     $('preview-cap-auto').classList.add('hidden');
     renderLogoList(); renderGroups();
+    updateCropUI();
     updateAutoColorUI();
     updateRun();
     return;
@@ -190,6 +194,7 @@ async function prepareWatermark() {
   $('wm-notes').textContent = '处理中…';
   try {
     const r = await api('/api/prepare', { method: 'POST', body: fd });
+    if (generation !== prepareGeneration) return;
     state.watermarkId = r.id;
     state.logoSet = { id: r.id, logos: r.logos };
     if (state.editingIdx >= r.logos.length) state.editingIdx = 0;
@@ -212,6 +217,7 @@ async function prepareWatermark() {
     refreshPreview();
     updateRun();
   } catch (e) {
+    if (generation !== prepareGeneration) return;
     $('wm-notes').textContent = '✗ ' + e.message;
     state.watermarkId = null;
     state.logoSet = null;
@@ -431,6 +437,8 @@ function applyPresetData(meta) {
 // logo 文件入口（网页 input / 桌面壳原生对话框 / 方案恢复共用）
 function onWmFiles(files) {
   state.wmFiles = files;
+  state.watermarkId = null;
+  state.logoSet = null;
   const names = files.map((f) => f.name);
   $('wm-name').textContent = files.length
     ? (files.length > 1 ? `${files.length} 个文件：` : '') + (names.join('、').length > 60 ? names.join('、').slice(0, 60) + '…' : names.join('、'))
@@ -440,6 +448,49 @@ function onWmFiles(files) {
   state.editingIdx = 0;
   cropMode = false; dragStart = null;
   hideRect();
+  renderLogoList();
+  renderGroups();
+  updateCropUI();
+  prepareWatermark();
+}
+
+function removeWmFile(index) {
+  if (index < 0 || index >= state.wmFiles.length) return;
+  state.wmFiles.splice(index, 1);
+  state.crops.splice(index, 1);
+  state.watermarkId = null;
+  if (state.wmFiles.length && state.logoSet) {
+    state.logoSet = { ...state.logoSet, id: null, logos: state.logoSet.logos.filter((_, i) => i !== index) };
+  } else if (!state.wmFiles.length) {
+    state.logoSet = null;
+  }
+
+  // 移除 logo 时按新序号重映射每个分组，并保持比例对应原 logo。
+  state.groups = state.groups.map((g) => {
+    const entries = (g.logos || []).map((logoIndex, k) => ({
+      logoIndex,
+      ratio: g.ratios && g.ratios[k] || 1,
+    })).filter(({ logoIndex }) => logoIndex !== index)
+      .map(({ logoIndex, ratio }) => ({ logoIndex: logoIndex > index ? logoIndex - 1 : logoIndex, ratio }));
+    return { ...g, logos: entries.map((entry) => entry.logoIndex), ratios: entries.map((entry) => entry.ratio) };
+  }).filter((g) => g.logos.length);
+
+  if (state.wmFiles.length && !state.groups.length) {
+    state.groups = [defaultGroup(state.wmFiles.map((_, i) => i))];
+  }
+  if (state.editingIdx === index) state.editingIdx = Math.min(index, Math.max(0, state.wmFiles.length - 1));
+  else if (state.editingIdx > index) state.editingIdx -= 1;
+  if (!state.wmFiles.length) {
+    state.editingIdx = 0;
+    cropMode = false;
+    dragStart = null;
+    hideRect();
+  }
+
+  const names = state.wmFiles.map((f) => f.name);
+  $('wm-name').textContent = names.length
+    ? (names.length > 1 ? `${names.length} 个文件：` : '') + (names.join('、').length > 60 ? names.join('、').slice(0, 60) + '…' : names.join('、'))
+    : '未选择';
   renderLogoList();
   renderGroups();
   updateCropUI();
@@ -456,6 +507,7 @@ function renderLogoList() {
       <img src="${l.preview}" alt="">
       <div class="li-meta"><b>${esc(l.name.length > 14 ? l.name.slice(0, 13) + '…' : l.name)}</b>
         <span>${l.width}×${l.height}${l.monochrome ? ' · 纯黑白' : ' · 含彩色'}${state.crops[i] ? ' · ✂' : ''}</span></div>
+      <button type="button" class="li-remove" data-i="${i}" aria-label="移除 ${esc(l.name)}" title="移除此 logo">×</button>
     </div>`).join('');
   box.querySelectorAll('.logo-item').forEach((el) => el.addEventListener('click', () => {
     state.editingIdx = +el.dataset.i;
@@ -466,6 +518,10 @@ function renderLogoList() {
       if (state.crops[state.editingIdx]) drawRectPct(state.crops[state.editingIdx]); else hideRect();
     }
     updateCropUI();
+  }));
+  box.querySelectorAll('.li-remove').forEach((button) => button.addEventListener('click', (e) => {
+    e.stopPropagation();
+    removeWmFile(+button.dataset.i);
   }));
 }
 
@@ -1312,7 +1368,11 @@ function init() {
   }
   refreshWatchers();
 
-  $('wm-file').addEventListener('change', (e) => onWmFiles(Array.from(e.target.files || [])));
+  $('wm-file').addEventListener('change', (e) => {
+    const files = Array.from(e.target.files || []);
+    e.target.value = ''; // 允许移除后再次选择同一个文件
+    if (files.length) onWmFiles(files);
+  });
   if (native) {
     // 直接用 id 定位按钮：卡片区 DOM 顺序变化会让"取首元素"类选择器拿到错误目标
     $('wm-file-btn').addEventListener('click', async (e) => {
