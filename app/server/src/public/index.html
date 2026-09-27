@@ -189,7 +189,8 @@
     <!-- 输出设置 -->
     <div class="card">
       <h2>④ 输出设置</h2>
-      <!-- 格式/质量/裁剪都是「输出」参数，不属于 ② 的分组布局，故集中到这里 -->
+      <!-- 输出裁剪独占一行：它带一行提示（智能裁剪…），跟别的挤一行会把提示挤到隔壁格下面去。
+           裁剪在最前 —— 它决定画面，是这一步里最「上游」的选择。 -->
       <div class="row">
         <div class="field">
           <label>输出裁剪</label>
@@ -210,6 +211,15 @@
           </select>
           <div id="cropratio-hint" class="notes"></div>
         </div>
+      </div>
+      <!-- 输出质量 + 输出格式同排：质量滑杆与 JPEG 体积优先在左（要宽），格式下拉在右。
+           格式跟在质量后面 —— 「体积优先」这个开关本来就只对 JPEG 生效，两者挨在一起才读得通。 -->
+      <div class="row">
+        <div class="field" id="quality-wrap">
+          <label>输出质量 <b id="q-v">90</b></label>
+          <input type="range" id="opt-quality" min="50" max="100" value="90">
+          <label title="mozjpeg 编码：JPEG 体积小约 10-15%，但处理速度慢约 5 倍"><input type="checkbox" id="opt-mozjpeg"> JPEG 体积优先（更慢）</label>
+        </div>
         <div class="field">
           <label>输出格式</label>
           <select id="opt-format">
@@ -218,14 +228,6 @@
             <option value="jpeg">JPEG</option>
             <option value="webp">WebP</option>
           </select>
-        </div>
-      </div>
-      <!-- 输出质量单独一行：滑杆 + JPEG 体积优先都要宽度，跟上面两个下拉挤一行会互相压窄 -->
-      <div class="row">
-        <div class="field" id="quality-wrap">
-          <label>输出质量 <b id="q-v">90</b></label>
-          <input type="range" id="opt-quality" min="50" max="100" value="90">
-          <label title="mozjpeg 编码：JPEG 体积小约 10-15%，但处理速度慢约 5 倍"><input type="checkbox" id="opt-mozjpeg"> JPEG 体积优先（更慢）</label>
         </div>
       </div>
       <div class="row-inline wrap">
