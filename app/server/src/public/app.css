@@ -204,15 +204,17 @@ footer { text-align: center; color: var(--text-3); font-size: 12px; padding: 18p
 .gc-ctrl { gap: 14px; align-items: flex-start; margin-top: 6px; }
 .gc-ctrl .field { min-width: 150px; }
 .gc-ctrl .grid9 { min-width: 150px; }
-/* 九宫格与滑杆并排：九宫格 150px 固定左列，滑杆撑满右列。
-   并排时 .grow 只有 ~247px，而「位置(150) + 3 根滑杆(各 184px)」一行需 744px，
-   flex 换行会把四个控件压成阶梯竖排（实测 y=695/840/910/981，卡片高 412px）。
-   改网格后行数由滑杆个数决定，九宫格跨满这些行；右列宽 = 卡宽 - 150 - 间距，
-   窄窗下也有 ~370px，滑杆比原来的 180px 更长，拖动精度更好。 */
+/* 九宫格固定左列，其余参数（大小/边距/间距/比值/不透明度…）全部排在
+   九宫格正下方那一列，一个字段一行 —— 不并排、不换行。
+   左列定宽 150px 只放九宫格，右列撑满余宽给滑杆（窄窗下也有 ~370px）。
+   参数列用 grid-column:1/-1 跨满整行，所以滑杆拿的是整行宽度而非半行，
+   拖动精度比原来 180px 的固定宽度更好。 */
 .gc-ctrl { display: grid; grid-template-columns: 150px minmax(0, 1fr); align-items: start; gap: 8px 14px; }
 .gc-ctrl > .field { min-width: 0; margin: 0; }
-.gc-ctrl > .gc-pos-field { grid-column: 1; grid-row: 1 / span 3; }
-.gc-ctrl > .field:not(.gc-pos-field) { grid-column: 2; }
+/* 位置：左列首行 */
+.gc-ctrl > .gc-pos-field { grid-column: 1; grid-row: 1; }
+/* 其余参数：跨满整行，逐行往下排 */
+.gc-ctrl > .field:not(.gc-pos-field) { grid-column: 1 / -1; }
 /* width:100% 时 range 自身的默认 margin 会把 .field 撑宽 4px，导致 .gc-ctrl 横向溢出 */
 .gc-ctrl input[type="range"] { width: 100%; margin: 0; display: block; }
 .gc-ctrl .grid9 { min-width: 0; }
