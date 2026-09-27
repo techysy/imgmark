@@ -138,12 +138,83 @@
         </div>
       </div>
     </div>
+
+    <!-- ③ 相机参数水印：从每张图自己的 EXIF 读相机/镜头/曝光，渲染成一行文字水印。
+         与 logo 水印是「并列的第 N 组」，位置/大小跟普通分组一样配，可以只出文字不叠 logo。
+         字段与样式都是全局的一套 —— 同一批照片通常同一台相机，逐图调没意义。 -->
+    <div class="card">
+      <h2>③ 相机参数水印 <small>把相机品牌/镜头/曝光/日期写进画面，参数从每张照片的 EXIF 读</small></h2>
+      <div class="row">
+        <div class="field check" style="flex:1 1 100%">
+          <label title="勾选后把相机参数作为一组水印叠到图片上">
+            <input type="checkbox" id="opt-exif"> 叠加相机参数水印</label>
+          <div id="exif-note" class="notes">没有 EXIF 的照片会自动跳过这一组，不会留空水印</div>
+        </div>
+      </div>
+      <div id="exif-panel" class="hidden">
+        <!-- 输出哪些字段：勾选顺序即拼接顺序 -->
+        <div class="row">
+          <div class="field" style="flex:1 1 100%">
+            <label>输出内容</label>
+            <div id="exif-fields" class="check-grid"></div>
+          </div>
+        </div>
+        <div class="row">
+          <div class="field">
+            <label>文字颜色</label>
+            <div class="row-inline" style="gap:8px">
+              <input type="color" id="exif-color" value="#ffffff" title="文字颜色">
+              <select id="exif-weight">
+                <option value="bold" selected>粗体</option>
+                <option value="normal">常规</option>
+              </select>
+            </div>
+          </div>
+          <div class="field">
+            <label>分隔符</label>
+            <select id="exif-sep">
+              <option value=" · " selected>· （中点）</option>
+              <option value=" / ">/ （斜杠）</option>
+              <option value=" | ">| （竖线）</option>
+              <option value="  ">空格</option>
+            </select>
+          </div>
+        </div>
+        <div class="row">
+          <div class="field">
+            <label>前缀 <input type="text" id="exif-prefix" class="num" style="width:100%" placeholder="如 shot on " maxlength="40"></label>
+          </div>
+          <div class="field">
+            <label>后缀 <input type="text" id="exif-suffix" class="num" style="width:100%" placeholder="如  ©2026" maxlength="40"></label>
+          </div>
+        </div>
+        <!-- 位置/大小：与水印分组同义，但独立于分组，只作用于这一行文字 -->
+        <div class="row-inline gc-ctrl">
+          <div class="field"><label>位置</label>
+            <div class="grid9 gc-pos" id="exif-pos"></div>
+          </div>
+          <div class="field"><label>大小 <b id="exif-sizev">30</b>%</label>
+            <input type="range" id="exif-size" min="2" max="90" value="30"></div>
+          <div class="field"><label>边距 <b id="exif-mgv">3</b>%</label>
+            <input type="range" id="exif-mg" min="0" max="25" value="3"></div>
+          <div class="field"><label>不透明度 <b id="exif-opv">90</b></label>
+            <input type="range" id="exif-op" min="5" max="100" value="90"></div>
+        </div>
+        <div class="row">
+          <div class="field check">
+            <label title="按落点明暗自动换黑/白字，亮处用深色、暗处用浅色">
+              <input type="checkbox" id="exif-autocolor"> 亮度自适应换黑/白字</label>
+          </div>
+        </div>
+        <div class="notes">示例文案：<b id="exif-sample">—</b></div>
+      </div>
+    </div>
   </section>
 
   <section class="col">
-    <!-- ③ 图片来源 -->
+    <!-- ④ 图片来源 -->
     <div class="card">
-      <h2>③ 图片来源</h2>
+      <h2>④ 图片来源</h2>
       <div class="tabs">
         <button class="tab" data-mode="fnos">飞牛授权目录</button>
         <button class="tab" data-mode="local">本地路径</button>
@@ -188,7 +259,7 @@
 
     <!-- 输出设置 -->
     <div class="card">
-      <h2>④ 输出设置</h2>
+      <h2>⑤ 输出设置</h2>
       <!-- 输出裁剪独占一行：它带一行提示（智能裁剪…），跟别的挤一行会把提示挤到隔壁格下面去。
            裁剪在最前 —— 它决定画面，是这一步里最「上游」的选择。
            两个下拉：勾上「横竖分开设置」才各管一个方向，否则只有左边（横图）那个可用，
@@ -270,17 +341,17 @@
       </div>
     </div>
 
-    <!-- ⑤ 任务 -->
+    <!-- ⑥ 任务 -->
     <div class="card">
-      <h2>⑤ 任务进度</h2>
+      <h2>⑥ 任务进度</h2>
       <div class="progress"><div id="bar"></div></div>
       <div id="job-summary" class="muted">空闲</div>
       <div id="job-log" class="log"></div>
     </div>
 
-    <!-- ⑥ 文件夹监听 -->
+    <!-- ⑦ 文件夹监听 -->
     <div class="card">
-      <h2>⑥ 文件夹监听 <small>新图片落盘自动加水印 · 本地数据库校验不重复处理</small></h2>
+      <h2>⑦ 文件夹监听 <small>新图片落盘自动加水印 · 本地数据库校验不重复处理</small></h2>
       <div class="row-inline">
         <input type="text" id="watch-dir" placeholder="监听目录（绝对路径），如 C:\photos\inbox" class="path-input" style="flex:1;min-width:240px">
       </div>

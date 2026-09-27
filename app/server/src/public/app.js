@@ -321,13 +321,18 @@ async function savePreset() {
   const hint = $('preset-hint');
   const name = $('preset-name').value.trim();
   if (!name) { hint.textContent = '先填方案名称'; return; }
-  if (!state.logoSet || !state.groups.length) { hint.textContent = '当前没有可保存的配置（先加 logo 和分组）'; return; }
-  if (!state.wmFiles.length) { hint.textContent = '缺少 logo 原文件，无法保存'; return; }
+  const groups = groupsForPayload();
+  // 只开相机参数、没有 logo 也能存：那套方案里就只有文字水印这一组
+  const hasLogoGroup = groups.some((g) => !g.text);
+  if (!groups.length) { hint.textContent = '当前没有可保存的配置（先加 logo 和分组，或勾上相机参数水印）'; return; }
+  if (hasLogoGroup && (!state.logoSet || !state.wmFiles.length)) {
+    hint.textContent = '缺少 logo 原文件，无法保存'; return;
+  }
   hint.textContent = '保存中…';
   try {
     const fd = new FormData();
     for (const f of state.wmFiles) fd.append('logos', f);
-    fd.append('payload', JSON.stringify({ name, groups: JSON.parse(JSON.stringify(state.groups)), options: options() }));
+    fd.append('payload', JSON.stringify({ name, groups: JSON.parse(JSON.stringify(groups)), options: options() }));
     const p = await api('/api/presets', { method: 'POST', body: fd });
     presets = presets.filter((x) => x.id !== p.id); presets.unshift(p);
     selectedPresetId = p.id;
@@ -372,35 +377,54 @@ async function applyPreset(id) {
     hint.textContent = '✗ ' + e.message;
     return;
   }
+  // 纯相机参数方案没有 logo：不走 prepare 流程，直接套用分组与选项
+  if (!files.length) {
+    onWmFiles([]);
+    applyPresetData(meta);
+    hint.textContent = `已恢复 ✓ ${meta.summary ? meta.summary.text : ''}`;
+    return;
+  }
   onWmFiles(files); // 走真实准备流程，prepare 完成后再套用分组与选项
   const timer = setInterval(() => {
     if (!state.watermarkId || !state.logoSet) return;
     clearInterval(timer);
-    state.groups = JSON.parse(JSON.stringify(meta.data.groups))
-      .map((g) => ({ ...g, logos: (g.logos || []).filter((i) => i < state.logoSet.logos.length) }))
-      .filter((g) => g.logos.length);
-    if (!state.groups.length) state.groups = [defaultGroup(state.logoSet.logos.map((_, i) => i))];
-    state.groups.forEach((g) => { g.ratios = g.logos.map((_, k) => (g.ratios && g.ratios[k]) || 1); });
-    const o = meta.data.options || {};
-    if (o.format) $('opt-format').value = o.format;
-    if (o.quality) $('opt-quality').value = o.quality;
-    if ($('opt-mozjpeg')) $('opt-mozjpeg').checked = !!o.mozjpeg;
-    if (o.sizeBase) $('opt-sizebase').value = o.sizeBase;
-    if ($('opt-cropratio')) { $('opt-cropratio').value = o.cropRatio || ''; cropHintRefresh(); }
-    // 方案里带竖图比例 → 自动勾上「横竖分开设置」并把第二个下拉填好；
-    // 老方案（只有 cropRatio）保持不勾，行为与拆分前一致
-    if ($('opt-cropsplit')) {
-      $('opt-cropsplit').checked = !!o.cropRatioPort;
-      $('opt-cropratio-port').value = o.cropRatioPort || '';
-      $('cropratio-port-hint').textContent = o.cropRatioPort ? '智能裁剪（保留细节多的一侧）' : '';
-      updateCropSplitUI();
-    }
-    if (o.autoColor && !$('opt-autocolor').disabled) $('opt-autocolor').checked = true;
-    refreshDD(); // 程序改了原生 select，同步刷新自定义下拉的显示文字
-    renderLogoList(); renderGroups();
-    updateAutoColorUI(); refreshPreview(); updateRun();
-    hint.textContent = `已恢复 ✓ ${meta.summary ? meta.summary.text : ''}`;
+    applyPresetData(meta);
   }, 250);
+}
+
+/** 把方案里的分组与选项套用到界面（logo 已就绪时调用；无 logo 的纯相机参数方案也走这里） */
+function applyPresetData(meta) {
+  const hint = $('preset-hint');
+  const logoCount = state.logoSet ? state.logoSet.logos.length : 0;
+  const restored = JSON.parse(JSON.stringify(meta.data.groups || []));
+  // 相机参数那一组没有 logos，会被下面的 logo 过滤丢掉 —— 先摘出来单独还原到 UI
+  const textGroup = restored.find((g) => g && g.text && g.text.enabled) || null;
+  applyExifGroup(textGroup);
+  state.groups = restored
+    .filter((g) => !(g && g.text && g.text.enabled))
+    .map((g) => ({ ...g, logos: (g.logos || []).filter((i) => i < logoCount) }))
+    .filter((g) => g.logos.length);
+  if (!state.groups.length && logoCount) state.groups = [defaultGroup(state.logoSet.logos.map((_, i) => i))];
+  state.groups.forEach((g) => { g.ratios = g.logos.map((_, k) => (g.ratios && g.ratios[k]) || 1); });
+  const o = meta.data.options || {};
+  if (o.format) $('opt-format').value = o.format;
+  if (o.quality) $('opt-quality').value = o.quality;
+  if ($('opt-mozjpeg')) $('opt-mozjpeg').checked = !!o.mozjpeg;
+  if (o.sizeBase) $('opt-sizebase').value = o.sizeBase;
+  if ($('opt-cropratio')) { $('opt-cropratio').value = o.cropRatio || ''; cropHintRefresh(); }
+  // 方案里带竖图比例 → 自动勾上「横竖分开设置」并把第二个下拉填好；
+  // 老方案（只有 cropRatio）保持不勾，行为与拆分前一致
+  if ($('opt-cropsplit')) {
+    $('opt-cropsplit').checked = !!o.cropRatioPort;
+    $('opt-cropratio-port').value = o.cropRatioPort || '';
+    $('cropratio-port-hint').textContent = o.cropRatioPort ? '智能裁剪（保留细节多的一侧）' : '';
+    updateCropSplitUI();
+  }
+  if (o.autoColor && !$('opt-autocolor').disabled) $('opt-autocolor').checked = true;
+  refreshDD(); // 程序改了原生 select，同步刷新自定义下拉的显示文字
+  renderLogoList(); renderGroups();
+  updateAutoColorUI(); refreshPreview(); updateRun();
+  hint.textContent = `已恢复 ✓ ${meta.summary ? meta.summary.text : ''}`;
 }
 
 // logo 文件入口（网页 input / 桌面壳原生对话框 / 方案恢复共用）
@@ -557,6 +581,180 @@ function addGroup() {
   refreshPreview();
 }
 
+// ---------- 相机参数水印 ----------
+// 与水印分组并列，但配置只有一份（同一批照片通常一台相机），
+// 勾选后作为「额外的一组」追加到 groups 末尾交给服务端。
+const EXIF_DEFAULT_FIELDS = ['camera', 'lens', 'exposure', 'date'];
+
+const exifUI = {
+  // 字段元信息由服务端给（/api/exif-fields），避免前后端两份清单失配
+  meta: [],
+  selected: EXIF_DEFAULT_FIELDS.slice(),
+};
+
+async function loadExifFields() {
+  try {
+    const r = await api('/api/exif-fields');
+    exifUI.meta = Array.isArray(r.fields) ? r.fields : [];
+  } catch {
+    // 接口拿不到就退回默认清单，功能不至于不可用
+    exifUI.meta = EXIF_DEFAULT_FIELDS.map((k) => ({ key: k, label: k, hint: '' }));
+  }
+  renderExifFields();
+}
+
+function renderExifFields() {
+  const box = $('exif-fields');
+  if (!box) return;
+  box.innerHTML = exifUI.meta.map((f) => `
+    <label title="${esc(f.hint || '')}">
+      <input type="checkbox" data-ek="${esc(f.key)}" ${exifUI.selected.includes(f.key) ? 'checked' : ''}>
+      <span>${esc(f.label)}</span>
+      <span class="hint">${esc(f.hint || '')}</span>
+    </label>`).join('');
+  box.querySelectorAll('input[data-ek]').forEach((el) => {
+    el.addEventListener('change', () => {
+      const k = el.dataset.ek;
+      const i = exifUI.selected.indexOf(k);
+      if (el.checked && i < 0) exifUI.selected.push(k);
+      else if (!el.checked && i >= 0) exifUI.selected.splice(i, 1);
+      // 至少留一项，否则等于开着这个功能却什么都不输出
+      if (!exifUI.selected.length) { el.checked = true; exifUI.selected.push(k); }
+      syncExifSample();
+      refreshPreview();
+    });
+  });
+}
+
+/** 位置九宫格（与分组卡同款，但作用于文字这一组） */
+function renderExifPos() {
+  const box = $('exif-pos');
+  if (!box) return;
+  const cur = exifUI.pos || 'se';
+  box.innerHTML = Object.entries(POS_NAMES).map(([k, v]) =>
+    `<button type="button" data-epos="${k}" class="${cur === k ? 'on' : ''}" title="${v}">${v}</button>`).join('');
+  box.querySelectorAll('button[data-epos]').forEach((b) => {
+    b.addEventListener('click', () => {
+      exifUI.pos = b.dataset.epos;
+      box.querySelectorAll('button').forEach((x) => x.classList.toggle('on', x === b));
+      refreshPreview();
+    });
+  });
+}
+
+/** 用本地拼出的示例文案预览这一组会输出什么（真正的文字由服务端按每张图的 EXIF 生成） */
+function exifSampleText() {
+  const parts = exifUI.selected.map((k) => {
+    const m = exifUI.meta.find((x) => x.key === k);
+    return m && m.hint ? m.hint : '';
+  }).filter(Boolean);
+  if (!parts.length) return '—';
+  const sep = $('exif-sep') ? $('exif-sep').value : ' · ';
+  const pre = $('exif-prefix') ? $('exif-prefix').value : '';
+  const suf = $('exif-suffix') ? $('exif-suffix').value : '';
+  return `${pre}${parts.join(sep)}${suf}`;
+}
+function syncExifSample() {
+  const el = $('exif-sample');
+  if (el) el.textContent = exifSampleText();
+}
+
+/** 勾选状态 → 面板显隐；关掉时把这一组从 groups 里摘掉（由 exifGroupDef 决定是否追加） */
+function updateExifUI() {
+  const on = $('opt-exif').checked;
+  $('exif-panel').classList.toggle('hidden', !on);
+  $('exif-note').textContent = on
+    ? '没有 EXIF 的照片会自动跳过这一组，不会留空水印'
+    : '不勾选则不叠加；勾选后与水印分组并列，位置/大小独立设置';
+  syncExifSample();
+}
+
+/** 相机参数这一组的定义（未开启返回 null）；给 /api/process 与 /api/preview 用 */
+function exifGroupDef() {
+  if (!$('opt-exif') || !$('opt-exif').checked) return null;
+  const fields = exifUI.selected.slice();
+  if (!fields.length) return null;
+  const color = $('exif-color').value;
+  return {
+    text: {
+      enabled: true,
+      fields,
+      color,
+      fontWeight: $('exif-weight').value,
+      separator: $('exif-sep').value,
+      prefix: $('exif-prefix').value,
+      suffix: $('exif-suffix').value,
+    },
+    position: exifUI.pos || 'se',
+    sizePct: +$('exif-size').value,
+    marginPct: +$('exif-mg').value,
+    opacity: +$('exif-op').value,
+    autoColor: $('exif-autocolor').checked,
+  };
+}
+
+/** logo 分组 + 相机参数组：相机参数永远排在最后，位置由它自己的九宫格决定 */
+function groupsForPayload() {
+  const list = state.groups.map((g) => ({ ...g }));
+  const eg = exifGroupDef();
+  if (eg) list.push(eg);
+  return list;
+}
+
+/** 方案恢复：把存下来的相机参数组回填到 UI（传 null 表示这套方案没开这项） */
+function applyExifGroup(g) {
+  const on = !!(g && g.text && g.text.enabled);
+  $('opt-exif').checked = on;
+  if (!on) {
+    // 老方案没有这一项：清成默认值，别把上一次的配置留在界面上
+    exifUI.selected = EXIF_DEFAULT_FIELDS.slice();
+    exifUI.pos = 'se';
+    $('exif-color').value = '#ffffff';
+    $('exif-weight').value = 'bold';
+    $('exif-sep').value = ' · ';
+    $('exif-prefix').value = '';
+    $('exif-suffix').value = '';
+    $('exif-size').value = 30; $('exif-sizev').textContent = '30';
+    $('exif-mg').value = 3; $('exif-mgv').textContent = '3';
+    $('exif-op').value = 90; $('exif-opv').textContent = '90';
+    $('exif-autocolor').checked = false;
+  } else {
+    const t = g.text;
+    exifUI.selected = (Array.isArray(t.fields) ? t.fields : []).slice();
+    exifUI.pos = g.position || 'se';
+    if (t.color) $('exif-color').value = t.color;
+    if (t.fontWeight) $('exif-weight').value = t.fontWeight;
+    if (typeof t.separator === 'string') $('exif-sep').value = t.separator;
+    $('exif-prefix').value = t.prefix || '';
+    $('exif-suffix').value = t.suffix || '';
+    const set = (id, lv, v) => { $(id).value = v; $(lv).textContent = v; };
+    set('exif-size', 'exif-sizev', g.sizePct ?? 30);
+    set('exif-mg', 'exif-mgv', g.marginPct ?? 3);
+    set('exif-op', 'exif-opv', g.opacity ?? 90);
+    $('exif-autocolor').checked = !!g.autoColor;
+  }
+  renderExifFields();
+  renderExifPos();
+  if ($('exif-sep')) refreshDD();
+  updateExifUI();
+}
+
+function bindExifUI() {
+  if (!$('opt-exif')) return;
+  $('opt-exif').addEventListener('change', () => { updateExifUI(); refreshPreview(); });
+  ['exif-sep', 'exif-prefix', 'exif-suffix', 'exif-color', 'exif-weight'].forEach((id) => {
+    $(id).addEventListener('change', () => { syncExifSample(); refreshPreview(); });
+    $(id).addEventListener('input', syncExifSample);
+  });
+  $('exif-autocolor').addEventListener('change', refreshPreview);
+  // 滑杆：数字跟手 + 防抖重绘预览
+  [['exif-size', 'exif-sizev'], ['exif-mg', 'exif-mgv'], ['exif-op', 'exif-opv']].forEach(([sl, lb]) => {
+    $(sl).addEventListener('input', () => { $(lb).textContent = $(sl).value; refreshPreview(); });
+  });
+  renderExifPos();
+  updateExifUI();
+}
+
 // ---------- 框选裁剪 ----------
 const previewWrap = $('wm-preview-wrap');
 
@@ -665,11 +863,13 @@ function updateCropSplitUI() {
 
 // ---------- 样式预览（单张实时：任一分组参数变化都重新合成示例图） ----------
 async function doRefreshPreview() {
-  if (!state.watermarkId || !state.groups.length) return;
+  const groups = groupsForPayload();
+  const hasLogoGroup = groups.some((g) => !g.text);
+  if (!groups.length || (hasLogoGroup && !state.watermarkId)) return;
   try {
     const r = await api('/api/preview', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ watermarkId: state.watermarkId, options: options(), groups: state.groups, orient: previewOrient }),
+      body: JSON.stringify({ watermarkId: state.watermarkId, options: options(), groups: groupsForPayload(), orient: previewOrient }),
     });
     $('style-preview').src = r.preview;
     const auto = !!r.previewAuto;
@@ -877,7 +1077,9 @@ function currentSource() {
   return state.uploadCount ? { mode: 'upload' } : null;
 }
 function updateRun() {
-  const ok = !!state.watermarkId && !!state.groups.length && !!currentSource();
+  // 只勾了相机参数、一个 logo 都没传也能跑（groups 里至少会有那一组文字）
+  const exifOnly = !!exifGroupDef();
+  const ok = !!currentSource() && (!!state.watermarkId || exifOnly) && (state.groups.length > 0 || exifOnly);
   $('run').disabled = !ok;
   $('group-add').disabled = !state.logoSet; // 有 logo 才能建分组
   $('watch-create').disabled = !state.watermarkId; // 监听复用当前 logo/分组
@@ -921,7 +1123,7 @@ async function createWatcher() {
     await api('/api/watchers', { method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ inputDir: dir, outputDir: $('watch-outdir').value.trim(),
         recursive: $('watch-recursive').checked,
-        watermarkId: state.watermarkId, groups: state.groups, options: options() }) });
+        watermarkId: state.watermarkId, groups: groupsForPayload(), options: options() }) });
     $('watch-hint').textContent = '监听已建立 ✓ 新图片落盘将自动加水印';
     refreshWatchers();
   } catch (e) { $('watch-hint').textContent = '✗ ' + e.message; }
@@ -929,7 +1131,10 @@ async function createWatcher() {
 
 async function run() {
   const src = currentSource();
-  if (!src || !state.watermarkId) return;
+  const groups = groupsForPayload();
+  // 没传 logo、只开了相机参数也要能跑（groups 里只有那一组文字）
+  if (!src || !groups.length) return;
+  if (groups.some((g) => !g.text) && !state.watermarkId) return; // 有 logo 组但水印失效
   const overwrite = $('opt-overwrite').checked;
   if (overwrite && !window.confirm('⚠ 将直接覆盖原图片文件（不可恢复），确定继续？')) return;
 
@@ -939,7 +1144,7 @@ async function run() {
     inputDir: src.inputDir,
     uid: src.uid,
     options: options(),
-    groups: state.groups,
+    groups,
     skipProcessed: $('opt-skipdone').checked && !$('opt-overwrite').checked,
     recursive: $('opt-recursive').checked && src.mode !== 'local-files',
     overwrite,
@@ -1014,7 +1219,7 @@ function init() {
   slider('wm-tol', 'tol-v'); slider('opt-quality', 'q-v');
 
   // 原生 select 统一升级为自定义下拉（保留原生元素做数据源与事件目标）
-  ['wm-bg', 'opt-sizebase', 'opt-format', 'opt-cropratio', 'opt-cropratio-port'].forEach((id) => enhanceSelect($(id)));
+  ['wm-bg', 'opt-sizebase', 'opt-format', 'opt-cropratio', 'opt-cropratio-port', 'exif-sep', 'exif-weight'].forEach((id) => enhanceSelect($(id)));
   ['wm-tol', 'opt-quality'].forEach((id) => $(id).addEventListener('input', refreshPreview));
   bindPreviewOn('#opt-format', 'change');
   bindPreviewOn('#opt-sizebase', 'change');
@@ -1030,6 +1235,8 @@ function init() {
   });
   $('opt-format').addEventListener('change', () => { $('quality-wrap').style.opacity = ['jpeg', 'webp'].includes($('opt-format').value) ? 1 : .4; refreshPreview(); });
   $('group-add').addEventListener('click', addGroup);
+  bindExifUI();
+  loadExifFields(); // 字段清单来自服务端，回来后会重绘勾选区
   $('preset-save').addEventListener('click', savePreset);
   $('preset-del').addEventListener('click', delPreset);
   $('preset-toggle').addEventListener('click', (e) => { e.stopPropagation(); togglePresetMenu(); });

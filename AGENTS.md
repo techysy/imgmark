@@ -27,6 +27,9 @@ cd app/server && npm install && npm start
 - 处理默认**不覆盖原图**，输出到输出目录下 `原文件名_wm.原扩展名`（`suffix` 可改）；
   同批/同一监听内输出重名（如 a.jpg、a.png 都强制输出 JPEG）时后者为 `原文件名(2)_wm.扩展名`
 - `options.mozjpeg=true`：JPEG 体积小约 10-15%，但编码慢约 5 倍；默认 false（libjpeg-turbo）
+- `GET /api/exif-fields`：相机参数水印的可选字段清单（key/label/示例值），前端据此渲染勾选项
+- 裁剪比例支持方向前缀：`land@5:4` 只对横图生效、`port@4:5` 只对竖图生效，
+  不带前缀（`4:5`、`1:1`）两个方向都裁 —— 老方案里存的就是这种，行为与旧版一致
 
 ## 2. 任务 A：给文件夹批量加水印（最常用）
 
@@ -76,8 +79,37 @@ curl -s http://127.0.0.1:28110/api/jobs/<jobId>
 }]
 ```
 
+### 相机参数文字水印（group 的另一种形态）
+
+把 `text` 给上，这一组就不叠 logo，改叠**该图自己的 EXIF** 文字（相机/镜头/曝光/日期）。
+`text` 组不需要 logo 集，所以 `watermarkId` 可以整个不给 —— 即「只加相机参数、不加水印图」。
+
+```json
+[{
+  "text": {
+    "enabled": true,
+    "fields": ["camera", "lens", "exposure", "date"],  // 见 GET /api/exif-fields
+    "color": "#ffffff",       // #rrggbb
+    "fontWeight": "bold",     // bold | normal
+    "separator": " · ",       // 默认 " · "
+    "prefix": "shot on ",     // 可选，≤40 字
+    "suffix": ""              // 可选，≤40 字
+  },
+  "position": "se", "sizePct": 30, "marginPct": 3, "opacity": 90,
+  "autoColor": true           // 按落点明暗自动换黑/白字
+}]
+```
+
+- 字段可选：`camera`（机身）`lens`（镜头）`exposure`（焦距光圈快门 ISO）`date` `datetime`
+  `brand` `model` `software`；顺序即拼接顺序，取不到的字段**静默跳过**不留空占位
+- **没有 EXIF 的照片会自动跳过这一组**：原图字节不动（不重编码，不掉画质），不是画一行空白
+- `date` 与 `datetime` 同时勾选时只输出 `datetime`（避免同一时间出现两遍）
+- 文字渲染依赖系统字体；服务启动时会自检并在日志里警告（字体缺失时 libvips 不报错、只画空白）
+- 引擎可独立使用：`node -e "require('./src/core/exiftext').formatCameraText(exif, {fields:['camera']})"`
+
 - `options.sizeBase`：`long`（默认，同一相机横/竖构图水印实际像素大小一致）| `short` | `width`
-- `options.autoColor`：组内 logo 全部为纯黑白墨时，按每张图水印落点亮度**整组**自动换黑标/白标
+- `options.autoColor`：组内 logo 全部为纯黑白墨时，按每张图水印落点亮度**整组**自动换黑标/白标；
+  文字组没有备用变体，改为按同套字段换个墨色再渲一遍
 - 校验：`logos` 序号越界 → 500；分组数 1..8、每组 logo 数 1..8
 - 组内布局语义：先用 ratios/gapX/gapY 在内部拼出组合（ratio=1 → 高(h排)/宽(v排) 100px 基准），
   再整体缩放到 sizePct —— 所以改 ratios 改变的是组内相对大小与组合高宽比，组合总宽恒等于 sizePct

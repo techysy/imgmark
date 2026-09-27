@@ -13,6 +13,7 @@ const multer = require('multer');
 const sharp = require('sharp');
 
 const { prepareWatermark, mergeWatermarks, composeWatermark, composeGroups, buildGroupWatermark, analyzeInk, applyCrop, parseCropRatio, CROP_RATIOS, IMAGE_EXTS, WM_INPUT_EXTS, extOf } = require('./core/watermark');
+const { checkFontAvailable } = require('./core/textmark');
 const { runBatch } = require('./core/batch');
 const { ProcessDB } = require('./core/db');
 const { WatcherManager } = require('./core/watcher');
@@ -124,6 +125,8 @@ async function smallPreview(buffer, width = 320) {
 // ---- 基础路由 ----
 app.get('/api/health', (req, res) => res.json({ ok: true, app: APPNAME, dataDir: DATA_DIR }));
 app.get('/api/config', (req, res) => res.json({ ...loadConfig(), version: APP_VERSION }));
+// 相机参数水印的可选字段：让前端不必硬编码一份与 exiftext.FIELD_KEYS 可能失配的清单
+app.get('/api/exif-fields', (req, res) => res.json({ fields: exifFieldsMeta() }));
 app.use('/vendor', express.static(path.join(__dirname, '..', 'node_modules', '@trimjs', 'web-app', 'dist')));
 app.use(express.static(path.join(__dirname, 'public')));
 app.use('/api/fnos', createFnosRouter({ client: fnos, listImages: null }));
@@ -320,10 +323,55 @@ app.post('/api/prepare', upload.fields([
 });
 
 // ---- 分组模式：把前端 groups 配置解析成可合成的 groupDefs ----
+/** 相机参数文字水印的可选字段与样式（与 exiftext.FIELD_KEYS 对应，样式交给 textmark 渲染） */
+const TEXT_FIELD_KEYS = ['camera', 'lens', 'exposure', 'date', 'datetime', 'brand', 'model', 'software'];
+// 给前端渲染勾选项用：label 是界面文案，hint 是示例值（用户能一眼看出这勾是干嘛的）
+const TEXT_FIELD_LABELS = {
+  camera: ['相机', 'FUJIFILM X-E4'],
+  lens: ['镜头', 'XC15-45mmF3.5-5.6 OIS PZ'],
+  exposure: ['曝光', '35mm f/2.8 1/250s ISO400'],
+  date: ['日期', '2026-09-27 16:55'],
+  datetime: ['日期时间', '2026-09-27 16:55:00'],
+  brand: ['仅品牌', 'FUJIFILM'],
+  model: ['仅型号', 'X-E4'],
+  software: ['固件/软件', 'Digital Camera X-E4 Ver1.01'],
+};
+const exifFieldsMeta = () => TEXT_FIELD_KEYS.map((key) => ({
+  key, label: (TEXT_FIELD_LABELS[key] || [key])[0], hint: (TEXT_FIELD_LABELS[key] || ['', ''])[1],
+}));
+const TEXT_FONT_WEIGHTS = new Set(['normal', 'bold']);
+
+/** 把前端的文字水印配置规范化成 textSpec（fields + style），非法/空配置返回 null */
+function normTextSpec(raw) {
+  if (!raw || !raw.enabled) return null;
+  const fields = (Array.isArray(raw.fields) ? raw.fields : []).filter((f) => TEXT_FIELD_KEYS.includes(f));
+  if (!fields.length) return null;
+  const color = /^#[0-9a-f]{6}$/i.test(raw.color || '') ? raw.color : '#ffffff';
+  const bg = raw.bg && /^#[0-9a-f]{6}$/i.test(raw.bg) ? raw.bg : 'none';
+  const style = {
+    color, bg,
+    fontFamily: 'sans-serif',
+    fontWeight: TEXT_FONT_WEIGHTS.has(raw.fontWeight) ? raw.fontWeight : 'bold',
+    letterSpacing: clampNum(numOr(raw.letterSpacing, 0), -5, 40),
+    padding: bg === 'none' ? 0 : clampNum(numOr(raw.padding, 12), 0, 80),
+    stroke: raw.stroke && /^#[0-9a-f]{6}$/i.test(raw.stroke) ? raw.stroke : null,
+    strokeWidth: clampNum(numOr(raw.strokeWidth, 0), 0, 12),
+  };
+  return {
+    fields,
+    separator: typeof raw.separator === 'string' && raw.separator.length <= 4 ? raw.separator : ' · ',
+    prefix: typeof raw.prefix === 'string' ? raw.prefix.slice(0, 40) : '',
+    suffix: typeof raw.suffix === 'string' ? raw.suffix.slice(0, 40) : '',
+    style,
+  };
+}
+
 function normGroup(g) {
   const src = g || {};
   return {
     logos: (Array.isArray(src.logos) ? src.logos : []).map((i) => Math.max(0, Math.floor(Number(i) || 0))).slice(0, 8),
+    // 文字水印组：这组不叠 logo，改为叠「本图 EXIF」文字（相机/镜头/曝光/日期）
+    text: normTextSpec(src.text),
     position: POSITIONS.has(src.position) ? src.position : 'se',
     sizePct: clampNum(numOr(src.sizePct, 20), 2, 100),
     marginPct: clampNum(numOr(src.marginPct, 3), 0, 30),
@@ -341,6 +389,15 @@ async function resolveGroups(set, rawGroups, autoColor) {
   const defs = [];
   for (const raw of rawGroups.slice(0, 8)) {
     const g = normGroup(raw);
+    const opts = {
+      position: g.position, sizePct: g.sizePct, marginPct: g.marginPct,
+      offsetX: g.offsetX, offsetY: g.offsetY, opacity: g.opacity, autoColor,
+    };
+    // 文字组不引用 logo，也就不需要 logo 集 —— 每张图的文字在合成时按该图 EXIF 现场渲染
+    if (g.text) {
+      defs.push({ textSpec: g.text, options: opts });
+      continue;
+    }
     if (!g.logos.length) throw new Error('存在没有 logo 的分组');
     const picked = g.logos.map((i) => set.logos[i]).filter(Boolean);
     if (!picked.length) throw new Error('分组引用了不存在的 logo');
@@ -350,10 +407,7 @@ async function resolveGroups(set, rawGroups, autoColor) {
     defs.push({
       wmBuffer: (await buildGroupWatermark(baseList, g)).buffer,
       wmAltBuffer: useAlt ? (await buildGroupWatermark(altList, g)).buffer : null,
-      options: {
-        position: g.position, sizePct: g.sizePct, marginPct: g.marginPct,
-        offsetX: g.offsetX, offsetY: g.offsetY, opacity: g.opacity, autoColor,
-      },
+      options: opts,
     });
   }
   return defs;
@@ -385,6 +439,14 @@ async function getSampleImage(kind = 'light', orient = 'landscape') {
 
 // 预览图保持示例图原生分辨率（长边 960）：面板里 CSS 缩略显示，点击放大不糊
 const PREVIEW_MIME = { '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.webp': 'image/webp', '.avif': 'image/avif' };
+
+// 样式预览用的「典型相机参数」：示例图本身没有 EXIF，但文字水印要靠它才能渲出内容。
+// 取一台全画幅 + 一支变焦头的常见组合，长度接近实拍照片，便于判断排版是否合适
+const SAMPLE_EXIF = {
+  Make: 'SONY', Model: 'ILCE-7M4', LensModel: 'FE 24-70mm F2.8 GM II',
+  FocalLength: 35, FocalLengthIn35mmFilm: 35, FNumber: 2.8, ExposureTime: 0.004,
+  ISO: 400, DateTimeOriginal: '2026-09-27 16:55:00',
+};
 const previewDataUrl = ({ buffer, ext }) => `data:${PREVIEW_MIME[ext] || 'image/jpeg'};base64,${buffer.toString('base64')}`;
 
 app.post('/api/preview', express.json(), async (req, res) => {
@@ -400,17 +462,23 @@ app.post('/api/preview', express.json(), async (req, res) => {
     const groups = Array.isArray(req.body.groups) && req.body.groups.length ? req.body.groups : null;
     // 分组模式：多个分组一次性合成到示例图
     if (groups) {
+      const wantsLogo = groups.some((g) => !(g && g.text && g.text.enabled &&
+        Array.isArray(g.text.fields) && g.text.fields.length));
       const set = logoSets.get(req.body.watermarkId);
-      if (!set) return res.status(404).json({ error: 'logo 组不存在或服务已重启，请重新上传' });
+      if (wantsLogo && !set) return res.status(404).json({ error: 'logo 组不存在或服务已重启，请重新上传' });
       const auto = !!options.autoColor;
-      const groupDefs = await resolveGroups(set, groups, auto);
+      // 示例图没有 EXIF，文字水印会渲染成空；预览时注入一份「典型相机参数」，
+      // 让用户看到文字的实际排版与长度（真实处理时用的是每张图自己的 EXIF）
+      const groupDefs = (await resolveGroups(set || { logos: [] }, groups, auto))
+        .map((d) => (d.textSpec ? { ...d, previewExif: SAMPLE_EXIF } : d));
       const toPreviewG = async (kind) => {
         const composed = await composeGroups(await getSampleImage(kind, orient), groupDefs, { sizeBase: options.sizeBase });
         composed.buffer = await applyCrop(composed.buffer, { cropRatio });
         return previewDataUrl(composed);
       };
       const preview = await toPreviewG('light');
-      const previewAuto = auto && groupDefs.some((g) => g.wmAltBuffer) ? await toPreviewG('dark') : null;
+      // 文字组也能自动换色（composeGroups 里现场渲染反色变体），所以一并出暗底预览
+      const previewAuto = auto && groupDefs.some((g) => g.wmAltBuffer || g.textSpec) ? await toPreviewG('dark') : null;
       return res.json({ preview, previewAuto });
     }
     const wm = watermarks.get(req.body.watermarkId);
@@ -460,7 +528,11 @@ function presetSummary(p) {
   const groups = Array.isArray(p && p.data && p.data.groups) ? p.data.groups : [];
   const tags = [];
   const logoCount = groups.reduce((n, g) => n + ((g && Array.isArray(g.logos)) ? g.logos.length : 0), 0);
-  tags.push({ k: 'groups', label: `${groups.length} 组${logoCount ? ` · ${logoCount} logo` : ''}` });
+  const textGroups = groups.filter((g) => g && g.text && g.text.enabled).length;
+  // 相机参数水印是这一版的新能力，摘要里单独提一句，否则「1 组 · 0 logo」看着像配错了
+  const groupLabel = `${groups.length} 组${logoCount ? ` · ${logoCount} logo` : ''}`
+    + (textGroups ? ` · ${textGroups} 组相机参数` : '');
+  tags.push({ k: 'groups', label: groupLabel });
   // 比例标签（4:5）单独看只有数字，跟旁边的「4 组 · 2 logo」混在一起认不出是裁剪，
   // 故这里在标签前补一个「裁剪」词：4:5 + 「裁剪」→「裁剪 4:5」。
   // 横竖分开设置时两个比例各出一个标签，靠「横向 / 竖向」区分。
@@ -492,7 +564,9 @@ app.post('/api/presets', upload.fields([{ name: 'logos', maxCount: 20 }]), async
     if (!name) return res.status(400).json({ error: '缺少方案名称' });
     if (!Array.isArray(body.groups) || !body.groups.length) return res.status(400).json({ error: '方案缺少分组配置' });
     const logos = (req.files && req.files.logos) || [];
-    if (!logos.length) return res.status(400).json({ error: '方案缺少 logo 文件' });
+    // 只含相机参数文字水印的方案不带 logo，也是合法的
+    const needsLogo = body.groups.some((g) => !(g && g.text && g.text.enabled));
+    if (needsLogo && !logos.length) return res.status(400).json({ error: '方案缺少 logo 文件' });
     for (const f of logos) {
       const fext = extOf(f.originalname);
       if (!WM_INPUT_EXTS.has(fext)) return res.status(400).json({ error: `不支持的水印格式 ${fext || '(未知)'}：${f.originalname}` });
@@ -576,9 +650,12 @@ app.post('/api/process', uploadImages.array('files'), express.json(), async (req
     let groupDefs = null;
     let wm = null;
     if (Array.isArray(payload.groups) && payload.groups.length) {
+      // 全是文字水印组时不需要 logo 集：不传 watermarkId 也能跑（只叠相机参数，不叠 logo）
+      const wantsLogo = payload.groups.some((g) => !(g && g.text && g.text.enabled &&
+        Array.isArray(g.text.fields) && g.text.fields.length));
       const set = logoSets.get(payload.watermarkId);
-      if (!set) return res.status(404).json({ error: 'logo 组不存在或服务已重启，请重新上传' });
-      groupDefs = await resolveGroups(set, payload.groups, options.autoColor);
+      if (wantsLogo && !set) return res.status(404).json({ error: 'logo 组不存在或服务已重启，请重新上传' });
+      groupDefs = await resolveGroups(set || { logos: [] }, payload.groups, options.autoColor);
     } else {
       wm = watermarks.get(payload.watermarkId);
       if (!wm) return res.status(404).json({ error: '水印不存在或服务已重启，请重新上传' });
@@ -775,6 +852,11 @@ function start({ port = PORT, host = HOST, socketPath = process.env.SOCKET_PATH 
     const srv = app.listen(port, host, () => {
       console.log(`[imgmark] 监听 http://${host}:${port}  (数据目录 ${DATA_DIR})`);
       console.log(`[imgmark] fnOS 开放 API: ${fnos.isAvailable() ? '可用' : '不可用（本地模式：本地路径 / 上传图片）'}`);
+      // 相机参数水印要靠系统字体渲染文字。系统一个字体都没有时 libvips 不报错、
+      // 只是画出空白 —— 不主动探一次的话，用户会以为"功能坏了"
+      checkFontAvailable().then((r) => {
+        if (!r.ok) console.warn(`[imgmark] 警告: ${r.reason}；相机参数水印会输出空白，请安装字体`);
+      }).catch(() => {});
       if (socketPath) {
         try { fs.rmSync(socketPath, { force: true }); } catch {}
         app.listen(socketPath, () => console.log(`[imgmark] 网关 socket: ${socketPath}`));

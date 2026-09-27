@@ -1,6 +1,6 @@
 {
   "name": "imgmark",
-  "version": "0.7.5",
+  "version": "0.8.0",
   "description": "ImgMark 批量图片水印 — AI/SVG/PNG/JPG 水印源白底黑底自动去底转透明 PNG，多 logo 并排/逐个裁剪，飞牛 fnOS 授权目录支持",
   "main": "src/core/watermark.js",
   "exports": {
@@ -37,7 +37,9 @@
     "start": "node src/server.js",
     "test:dd": "node scripts/dd-smoke.js",
     "prepare": "node scripts/sync-readme.js",
-    "prepack": "node scripts/sync-readme.js"
+    "prepack": "node scripts/sync-readme.js",
+    "test:exif": "node scripts/exif-smoke.js",
+    "test": "node scripts/dd-smoke.js && node scripts/exif-smoke.js"
   },
   "repository": {
     "type": "git",

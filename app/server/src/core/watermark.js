@@ -10,6 +10,9 @@ const sharp = require('sharp');
 const { removeBackground } = require('./transparency');
 const { renderAiToPng } = require('../formats/ai');
 const { isBmp, bmpToPng, encodeBmp } = require('../formats/bmp');
+const { readExif } = require('./exif');
+const { formatCameraText } = require('./exiftext');
+const { renderTextWatermark } = require('./textmark');
 
 const IMAGE_EXTS = new Set(['.jpg', '.jpeg', '.png', '.webp', '.bmp', '.gif', '.tif', '.tiff', '.avif']);
 const WM_INPUT_EXTS = new Set(['.ai', '.svg', '.png', '.jpg', '.jpeg', '.webp', '.bmp', '.gif', '.tif', '.tiff', '.avif']);
@@ -284,6 +287,17 @@ async function composeWatermark(targetBuffer, wmBuffer, o = {}, wmAltBuffer = nu
   const W = oriented ? meta.height : meta.width;
   const H = oriented ? meta.width : meta.height;
 
+  // 文字水印：按本图 EXIF 现场渲染，之后与 logo 走同一条缩放/合成管线
+  let altBuffer = wmAltBuffer;
+  if (o.textSpec) {
+    const text = formatCameraText(await readExif(sharp, targetBuffer), o.textSpec);
+    if (!text) return encodeCompose(sharp(targetBuffer).rotate().withMetadata(), meta, { format, quality, mozjpeg });
+    wmBuffer = (await renderTextWatermark(text, o.textSpec.style || {})).buffer;
+    // 反色变体同样现场渲染（autoColor 要用）
+    const style = o.textSpec.style || {};
+    altBuffer = (await renderTextWatermark(text, { ...style, color: style.color === '#ffffff' ? '#000000' : '#ffffff' })).buffer;
+  }
+
   // 缩放水印（反色变体与主变体走同一条缩放/旋转管线，保证尺寸一致）
   const targetW = Math.max(8, Math.round(sizeBaseDim(W, H, sizeBase) * sizePct / 100));
   const buildWm = async (src) => {
@@ -299,7 +313,7 @@ async function composeWatermark(targetBuffer, wmBuffer, o = {}, wmAltBuffer = nu
 
   // 亮度自适应黑白：平铺按全图亮度，单点按水印落点矩形亮度，
   // 亮区域配深色墨、暗区域配浅色墨（分界 LUM_THRESHOLD）
-  if (o.autoColor && Buffer.isBuffer(wmAltBuffer)) {
+  if (o.autoColor && Buffer.isBuffer(altBuffer)) {
     let region = null;
     if (!tile) {
       const [x, y] = positionXY(position, W, H, wmW, wmH, margin);
@@ -308,10 +322,10 @@ async function composeWatermark(targetBuffer, wmBuffer, o = {}, wmAltBuffer = nu
       region = { left, top, width: Math.max(2, Math.min(wmW, W - left)), height: Math.max(2, Math.min(wmH, H - top)) };
     }
     const lum = await regionLuminance(targetBuffer, region);
-    const [lumBase, lumAlt] = await Promise.all([inkLuminance(wmBuffer), inkLuminance(wmAltBuffer)]);
+    const [lumBase, lumAlt] = await Promise.all([inkLuminance(wmBuffer), inkLuminance(altBuffer)]);
     const wantDark = lum > LUM_THRESHOLD;
     const baseIsDarker = lumBase <= lumAlt;
-    if (wantDark !== baseIsDarker) wmBuf = (await fitInside(await buildWm(wmAltBuffer), W, H)).buf; // 只在需要时才缩放反色变体
+    if (wantDark !== baseIsDarker) wmBuf = (await fitInside(await buildWm(altBuffer), W, H)).buf; // 只在需要时才缩放反色变体
   }
 
   // 透明度
@@ -419,7 +433,8 @@ function sizeBaseDim(W, H, sizeBase) {
 /**
  * 多分组合成：一次叠加所有分组的水印并编码输出（相比多次 composeWatermark 少几次编解码）。
  * @param {Buffer} targetBuffer
- * @param {Array<{wmBuffer:Buffer, wmAltBuffer?:Buffer, options:object}>} groupDefs
+ * @param {Array<{wmBuffer:Buffer, wmAltBuffer?:Buffer, textSpec?:object, options:object}>} groupDefs
+ *   textSpec: 给了就按「这张图的 EXIF」现场渲染文字水印（相机参数），忽略 wmBuffer
  *   options: position/sizePct/marginPct/offsetX/offsetY/opacity/autoColor
  * @param {object} o format/quality（输出编码，全局）+ sizeBase: 'long'|'short'|'width'（大小基准，默认 width）
  */
@@ -432,27 +447,55 @@ async function composeGroups(targetBuffer, groupDefs, o = {}) {
   const oriented = meta.orientation && meta.orientation >= 5;
   const W = oriented ? meta.height : meta.width;
   const H = oriented ? meta.width : meta.height;
+  // 文字水印要按「这张图」的 EXIF 渲染：同一批里每张图的相机参数都可能不同，
+  // 所以不能像 logo 那样在提交任务前预先建好 —— 这里按需解析一次，多组共用。
+  // 样式预览的示例图没有 EXIF，靠 group 上的 previewExif 注入一份「典型相机参数」
+  let exifCache;
+  const exifOf = async () => {
+    if (exifCache === undefined) exifCache = await readExif(sharp, targetBuffer);
+    return exifCache;
+  };
+  const exifFor = async (g) => (g.previewExif || await exifOf());
   const baseDim = sizeBaseDim(W, H, sizeBase);
   const entries = [];
   for (const g of groupDefs) {
     const go = g.options || {};
     const targetW = Math.max(8, Math.round(baseDim * clampNum(go.sizePct ?? 20, 2, 100) / 100));
+    // 文字水印：按本图 EXIF 渲染 → 变成 wmBuffer，之后与 logo 走完全相同的定位/缩放/透明度逻辑
+    let wmSource = g.wmBuffer;
+    if (g.textSpec) {
+      const text = formatCameraText(await exifFor(g), g.textSpec);
+      wmSource = text ? (await renderTextWatermark(text, g.textSpec.style || {})).buffer : null;
+    }
+    if (!wmSource) continue; // 这张图没有可用的相机信息 → 这一组整体跳过，不留空水印
     const buildWm = async (src) => fitInside(await sharp(src).resize({ width: targetW }).png().toBuffer(), W, H);
-    const built = await buildWm(g.wmBuffer);
+    const built = await buildWm(wmSource);
     let wmBuf = built.buf;
     const wmW = built.width, wmH = built.height;
-    // 亮度自适应黑白：分组内所有 logo 都有反色变体时，整组按落点亮度二选一
-    if (go.autoColor && Buffer.isBuffer(g.wmAltBuffer)) {
+    // 亮度自适应黑白：整组按落点亮度二选一。
+    //   logo 组用 prepare 阶段备好的反色变体；
+    //   文字组没有备用变体，就在这儿按同一套字段换个墨色再渲一遍（文字量很小，开销可忽略）
+    if (go.autoColor) {
       const margin = Math.round(Math.min(W, H) * clampNum(go.marginPct ?? 3, 0, 30) / 100);
       const [gx, gy] = positionXY(go.position || 'se', W, H, wmW, wmH, margin);
       const left = Math.max(0, Math.min(W - 2, Math.round(gx + (go.offsetX || 0))));
       const top = Math.max(0, Math.min(H - 2, Math.round(gy + (go.offsetY || 0))));
       const region = { left, top, width: Math.max(2, Math.min(wmW, W - left)), height: Math.max(2, Math.min(wmH, H - top)) };
       const lum = await regionLuminance(targetBuffer, region);
-      const [lumBase, lumAlt] = await Promise.all([inkLuminance(g.wmBuffer), inkLuminance(g.wmAltBuffer)]);
       const wantDark = lum > LUM_THRESHOLD;
-      const baseIsDarker = lumBase <= lumAlt;
-      if (wantDark !== baseIsDarker) wmBuf = (await buildWm(g.wmAltBuffer)).buf;
+      let altSource = g.wmAltBuffer;
+      if (g.textSpec) {
+        const style = g.textSpec.style || {};
+        // 「亮底要深墨」：主变体已按用户选的墨色渲染，反色变体就换成对侧
+        const text = formatCameraText(await exifFor(g), g.textSpec);
+        const flipped = { ...style, color: wantDark ? '#000000' : '#ffffff' };
+        altSource = text ? (await renderTextWatermark(text, flipped)).buffer : null;
+      }
+      if (Buffer.isBuffer(altSource) && Buffer.isBuffer(wmSource)) {
+        const [lumBase, lumAlt] = await Promise.all([inkLuminance(wmSource), inkLuminance(altSource)]);
+        const baseIsDarker = lumBase <= lumAlt;
+        if (wantDark !== baseIsDarker) wmBuf = (await buildWm(altSource)).buf;
+      }
     }
     wmBuf = await scaledAlphaOpacity(wmBuf, Math.max(1, Math.min(100, go.opacity ?? 80)));
     const margin = Math.round(Math.min(W, H) * clampNum(go.marginPct ?? 3, 0, 30) / 100);
@@ -462,6 +505,14 @@ async function composeGroups(targetBuffer, groupDefs, o = {}) {
       left: clampNum(Math.round(x + (go.offsetX || 0)), 0, W - wmW),
       top: clampNum(Math.round(y + (go.offsetY || 0)), 0, H - wmH),
     });
+  }
+  // 一组都没叠上（例如全是文字组、而这张图没有 EXIF）→ 原样返回，
+  // 不要白跑一次有损编码：没水印的图再压一遍纯属掉画质。
+  // ext 要跟 encodeCompose 在 format=auto 下的结果一致，否则会被当成换格式而重命名
+  if (!entries.length) {
+    const f = (format === 'auto' ? (meta.format || 'png') : format);
+    const ext = f === 'jpeg' || f === 'jpg' ? '.jpg' : '.' + f;
+    return { buffer: targetBuffer, ext, skipped: true };
   }
   const base = sharp(targetBuffer).rotate().withMetadata();
   base.composite(entries);
