@@ -35,14 +35,21 @@
   <section class="col">
     <!-- ⓪ 方案 -->
     <div class="card">
-      <div class="row-inline wrap" style="gap:8px">
-        <b>方案</b>
-        <select id="preset-select" style="max-width:220px"><option value="">选择已保存方案…</option></select>
-        <input type="text" id="preset-name" placeholder="方案名称" class="path-input" style="width:110px">
+      <h2>⓪ 方案 <small>logo 原文件与全部分组参数保存在程序数据目录，换浏览器/清缓存/重启后一键恢复</small></h2>
+      <div class="preset-bar">
+        <div class="preset-picker">
+          <button id="preset-toggle" class="btn preset-toggle" aria-expanded="false">
+            <span id="preset-current" class="pt-name">选择已保存方案…</span>
+            <span class="pt-caret"></span>
+          </button>
+          <div id="preset-menu" class="preset-menu hidden" role="listbox"></div>
+        </div>
+        <input type="text" id="preset-name" placeholder="方案名称" class="path-input" style="width:120px">
         <button id="preset-save" class="btn tiny">保存当前</button>
-        <button id="preset-del" class="btn tiny ghost">删除</button>
-        <span id="preset-hint" class="muted">logo 原文件与全部分组参数保存在程序数据目录，换浏览器/清缓存/重启后一键恢复</span>
+        <button id="preset-del" class="btn tiny ghost">删除选中</button>
       </div>
+      <div id="preset-detail" class="preset-detail hidden"></div>
+      <div id="preset-hint" class="notes">下拉可浏览全部方案的参数摘要；选中即加载</div>
     </div>
 
     <!-- ① 水印文件 -->
@@ -138,6 +145,23 @@
           <label>质量 <b id="q-v">90</b></label>
           <input type="range" id="opt-quality" min="50" max="100" value="90">
           <label title="mozjpeg 编码：JPEG 体积小约 10-15%，但处理速度慢约 5 倍"><input type="checkbox" id="opt-mozjpeg"> JPEG 体积优先（更慢）</label>
+        </div>
+        <div class="field">
+          <label>输出裁剪</label>
+          <select id="opt-cropratio">
+            <option value="">不裁剪（保持原比例）</option>
+            <option value="1:1">1:1 正方形</option>
+            <option value="4:5">4:5 竖版</option>
+            <option value="3:4">3:4 竖版</option>
+            <option value="2:3">2:3 竖版</option>
+            <option value="9:16">9:16 竖屏/Stories</option>
+            <option value="5:4">5:4 横版</option>
+            <option value="4:3">4:3 横版</option>
+            <option value="3:2">3:2 横版</option>
+            <option value="16:9">16:9 宽屏</option>
+            <option value="21:9">21:9 超宽/影院</option>
+          </select>
+          <div id="cropratio-hint" class="notes"></div>
         </div>
       </div>
     </div>

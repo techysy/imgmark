@@ -12,7 +12,7 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { IMAGE_EXTS, extOf, composeWatermark, composeGroups } = require('./watermark');
+const { IMAGE_EXTS, extOf, composeWatermark, composeGroups, cropOutput } = require('./watermark');
 const { outPathFor, expectedExt, isInside, pathKey } = require('./batch');
 const { writeFileAtomic } = require('./db');
 
@@ -194,6 +194,7 @@ class WatcherManager {
       const composed = t.groups
         ? await composeGroups(buf, t.groups, t.options)
         : await composeWatermark(buf, t.watermark, t.options, t.watermarkAlt);
+      if (t.options && t.options.cropRatio) composed.buffer = await cropOutput(composed.buffer, t.options.cropRatio);
       target = w.cfg.overwrite ? full : await this._freeTarget(w, full, composed.ext);
       await fs.promises.mkdir(path.dirname(target), { recursive: true });
       await fs.promises.writeFile(target, composed.buffer);

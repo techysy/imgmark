@@ -48,6 +48,123 @@ async function api(path, opts) {
 const debounce = (fn, ms) => { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; };
 function esc(s) { return String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
 
+// ---------- 自定义下拉（统一替换原生 select） ----------
+// 原生 <select> 保留在 DOM 中作为数据源与 change 事件目标：外部读 .value / 绑定 change 的代码完全不变，
+// 只在它旁边渲染一层自定义按钮 + 菜单，并负责触底向上弹、右侧空间不足时右对齐。
+const ddRegistry = new Set(); // 所有已增强的 select，用于全局关闭 / 重绘
+
+function ddLabelOf(sel) {
+  const opt = sel.options[sel.selectedIndex];
+  return opt ? opt.textContent : '';
+}
+
+function enhanceSelect(sel) {
+  if (!sel || sel.dataset.ddDone === '1') return sel;
+  sel.dataset.ddDone = '1';
+  sel.classList.add('dd-native'); // 视觉隐藏但保留可访问性与表单语义
+
+  const wrap = document.createElement('div');
+  wrap.className = 'dd';
+  // 原生 select 已在 DOM 里，把它挪进 wrapper 保证位置对应
+  sel.parentNode.insertBefore(wrap, sel);
+  wrap.appendChild(sel);
+
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'dd-btn';
+  btn.setAttribute('aria-haspopup', 'listbox');
+  btn.setAttribute('aria-expanded', 'false');
+  btn.innerHTML = `<span class="dd-label"></span><span class="dd-caret"></span>`;
+
+  const menu = document.createElement('div');
+  menu.className = 'dd-menu hidden';
+  menu.setAttribute('role', 'listbox');
+
+  wrap.appendChild(btn);
+  wrap.appendChild(menu);
+
+  const instance = { sel, wrap, btn, menu, close: () => closeDD(instance), render: () => renderDD(instance) };
+  ddRegistry.add(instance);
+
+  function renderDD(self) {
+    self.btn.querySelector('.dd-label').textContent = ddLabelOf(self.sel);
+    self.menu.innerHTML = Array.from(self.sel.options).map((o, i) =>
+      `<button type="button" class="dd-item ${i === self.sel.selectedIndex ? 'on' : ''}" role="option"
+        aria-selected="${i === self.sel.selectedIndex}" data-i="${i}">${esc(o.textContent)}</button>`).join('');
+    self.menu.querySelectorAll('.dd-item').forEach((el) => el.addEventListener('click', () => {
+      pickDD(self, +el.dataset.i);
+    }));
+  }
+
+  function pickDD(self, i) {
+    if (i === self.sel.selectedIndex) { closeDD(self); return; }
+    self.sel.selectedIndex = i;
+    // 先关闭：change 可能触发 renderGroups() 重建 DOM，导致本实例失效
+    closeDD(self);
+    // 触发原生 change，让既有业务逻辑（预览刷新/格式联动/裁剪提示等）照常执行
+    self.sel.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+  instance.destroy = () => { ddRegistry.delete(instance); };
+
+  function openDD(self) {
+    closeAllDD(self);
+    renderDD(self);
+    self.menu.classList.remove('hidden', 'up', 'down', 'right');
+    self.btn.classList.add('open');
+    self.btn.setAttribute('aria-expanded', 'true');
+
+    // 触底避让：下方放不下就向上弹；默认向下
+    const r = self.btn.getBoundingClientRect();
+    const menuH = Math.min(self.menu.scrollHeight, 300);
+    const spaceBelow = window.innerHeight - r.bottom - 12;
+    const spaceAbove = r.top - 12;
+    if (spaceBelow < menuH && spaceAbove > spaceBelow) self.menu.classList.add('up');
+    else self.menu.classList.add('down');
+
+    // 右侧空间不足则右对齐，避免横向溢出
+    if (r.left + self.menu.offsetWidth > window.innerWidth - 8) self.menu.classList.add('right');
+  }
+
+  function closeDD(self) {
+    self.menu.classList.add('hidden');
+    self.btn.classList.remove('open');
+    self.btn.setAttribute('aria-expanded', 'false');
+  }
+
+  instance.open = () => {
+    if (instance.menu.classList.contains('hidden')) openDD(instance); else closeDD(instance);
+  };
+  btn.addEventListener('click', (e) => { e.stopPropagation(); instance.open(); });
+  // 原生 select 被程序改动（如恢复方案）时同步显示
+  sel.addEventListener('change', () => { if (instance.menu.classList.contains('hidden')) renderDD(instance); });
+
+  renderDD(instance);
+  return sel;
+}
+
+function closeAllDD(except) {
+  for (const inst of ddRegistry) if (inst !== except) inst.close();
+}
+// 容器被 innerHTML 重建前调用：回收其内部的自定义下拉实例（DOM 即将消失，仅需清理注册表）
+function destroyDDWithin(container) {
+  if (!container) return;
+  for (const inst of [...ddRegistry]) {
+    if (container.contains(inst.sel)) inst.destroy();
+  }
+}
+// 外部（恢复方案等）改完原生 select 后调用，刷新显示文字
+function refreshDD(sel) {
+  for (const inst of ddRegistry) if (inst.sel === sel || !sel) inst.render();
+}
+
+// 全局关闭：点击组件外 / Esc
+document.addEventListener('click', (e) => {
+  if (!e.target.closest || !e.target.closest('.dd')) closeAllDD();
+});
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeAllDD(); });
+window.addEventListener('resize', () => closeAllDD());
+
+
 // ---------- 水印准备（split：每个 logo 独立去底；布局在 ② 分组里配置） ----------
 async function prepareWatermark() {
   state.watermarkId = null;
@@ -114,17 +231,90 @@ const logoOf = (i) => (state.logoSet ? state.logoSet.logos[i] : null);
 const logoSource = (i) => { const l = logoOf(i); return l && l.sourcePreview ? l.sourcePreview : null; };
 
 // ---------- 方案（服务端持久化：参数与 logo 文件都存到程序数据目录，换浏览器/清缓存不丢） ----------
-let presets = []; // [{id,name,time,files:[...]}]，由 /api/presets 拉取
+let presets = [];         // [{id,name,time,files,data,summary}]，由 /api/presets 拉取
+let selectedPresetId = ''; // 当前在下拉/详情里选中的方案 id（仅 UI 状态）
+
 async function loadPresets() {
   try { presets = await api('/api/presets'); } catch { presets = []; }
-  renderPresetSelect();
+  if (selectedPresetId && !presets.some((p) => p.id === selectedPresetId)) selectedPresetId = '';
+  renderPresetMenu();
+  renderPresetDetail();
 }
 
-function renderPresetSelect() {
-  const sel = $('preset-select');
-  if (!sel) return;
-  sel.innerHTML = '<option value="">选择已保存方案…</option>' +
-    presets.map((p) => `<option value="${esc(p.id)}">${esc(p.name)}（${new Date(p.time).toLocaleString()}）</option>`).join('');
+/** 摘要标签 HTML（服务端 presetSummary 产出的 tags） */
+function presetTagsHtml(p, limit = 0) {
+  const tags = (p.summary && p.summary.tags) || [];
+  const shown = limit ? tags.slice(0, limit) : tags;
+  return shown.map((t) => `<span class="tag pt-tag pt-tag-${esc(t.k)}">${esc(t.label)}</span>`).join('');
+}
+
+function renderPresetMenu() {
+  const menu = $('preset-menu');
+  const cur = $('preset-current');
+  if (!menu) return;
+  if (!presets.length) {
+    menu.innerHTML = '<div class="pt-empty muted">还没有保存的方案：填名称后点「保存当前」</div>';
+  } else {
+    menu.innerHTML = presets.map((p) => `
+      <button type="button" class="pt-item ${p.id === selectedPresetId ? 'on' : ''}" data-id="${esc(p.id)}" role="option" aria-selected="${p.id === selectedPresetId}">
+        <div class="pt-item-head">
+          <b class="pt-item-name">${esc(p.name)}</b>
+          <span class="pt-item-time">${new Date(p.time).toLocaleString()}</span>
+        </div>
+        <div class="pt-item-tags">${presetTagsHtml(p)}</div>
+        <div class="pt-item-files muted">${p.files.length} 个 logo：${esc(p.files.map((f) => f.name).join('、').slice(0, 60))}${p.files.map((f) => f.name).join('、').length > 60 ? '…' : ''}</div>
+      </button>`).join('');
+    menu.querySelectorAll('.pt-item').forEach((el) => el.addEventListener('click', () => {
+      const id = el.dataset.id;
+      selectedPresetId = id;
+      closePresetMenu();
+      renderPresetMenu();
+      renderPresetDetail();
+      applyPreset(id);
+    }));
+  }
+  const sel = presets.find((p) => p.id === selectedPresetId);
+  if (cur) cur.textContent = sel ? sel.name : '选择已保存方案…';
+}
+
+function renderPresetDetail() {
+  const box = $('preset-detail');
+  if (!box) return;
+  const p = presets.find((x) => x.id === selectedPresetId);
+  if (!p) { box.classList.add('hidden'); box.innerHTML = ''; return; }
+  const s = p.summary || {};
+  box.classList.remove('hidden');
+  box.innerHTML = `
+    <div class="pd-head">
+      <b>${esc(p.name)}</b>
+      <span class="muted">${new Date(p.time).toLocaleString()}</span>
+    </div>
+    <div class="pd-tags">${presetTagsHtml(p)}</div>
+    <div class="pd-files muted">logo 文件（${p.files.length}）：${esc(p.files.map((f) => f.name).join('、'))}</div>
+    <div class="pd-actions">
+      <button class="btn tiny" id="preset-reload">重新加载</button>
+      <button class="btn tiny ghost" id="preset-use-name">用此名称覆盖保存</button>
+    </div>`;
+  const reload = $('preset-reload');
+  if (reload) reload.addEventListener('click', () => applyPreset(p.id));
+  const useName = $('preset-use-name');
+  if (useName) useName.addEventListener('click', () => { $('preset-name').value = p.name; });
+}
+
+function openPresetMenu() {
+  $('preset-menu').classList.remove('hidden');
+  $('preset-toggle').setAttribute('aria-expanded', 'true');
+  $('preset-toggle').classList.add('open');
+}
+function closePresetMenu() {
+  const m = $('preset-menu');
+  if (m) m.classList.add('hidden');
+  const t = $('preset-toggle');
+  if (t) { t.setAttribute('aria-expanded', 'false'); t.classList.remove('open'); }
+}
+function togglePresetMenu() {
+  const m = $('preset-menu');
+  if (m && m.classList.contains('hidden')) { renderPresetMenu(); openPresetMenu(); } else closePresetMenu();
 }
 
 async function savePreset() {
@@ -140,22 +330,26 @@ async function savePreset() {
     fd.append('payload', JSON.stringify({ name, groups: JSON.parse(JSON.stringify(state.groups)), options: options() }));
     const p = await api('/api/presets', { method: 'POST', body: fd });
     presets = presets.filter((x) => x.id !== p.id); presets.unshift(p);
-    renderPresetSelect();
-    $('preset-select').value = p.id;
-    hint.textContent = '已保存 ✓（logo 文件已拷贝到程序数据目录，与分组参数一并持久）';
+    selectedPresetId = p.id;
+    renderPresetMenu();
+    renderPresetDetail();
+    hint.textContent = `已保存 ✓ ${p.summary ? p.summary.text : ''}`;
   } catch (e) {
     hint.textContent = '✗ 保存失败：' + e.message;
   }
 }
 
 async function delPreset() {
-  const id = $('preset-select').value;
-  if (!id) { $('preset-hint').textContent = '先在左侧选择要删除的方案'; return; }
+  const id = selectedPresetId || '';
+  if (!id) { $('preset-hint').textContent = '先在下拉里选中要删除的方案'; return; }
+  const p = presets.find((x) => x.id === id);
   try {
     await api('/api/presets/' + encodeURIComponent(id), { method: 'DELETE' });
-    presets = presets.filter((p) => p.id !== id);
-    renderPresetSelect();
-    $('preset-hint').textContent = '已删除';
+    presets = presets.filter((x) => x.id !== id);
+    selectedPresetId = '';
+    renderPresetMenu();
+    renderPresetDetail();
+    $('preset-hint').textContent = `已删除${p ? `：${p.name}` : ''}`;
   } catch (e) {
     $('preset-hint').textContent = '✗ ' + e.message;
   }
@@ -192,10 +386,12 @@ async function applyPreset(id) {
     if (o.quality) $('opt-quality').value = o.quality;
     if ($('opt-mozjpeg')) $('opt-mozjpeg').checked = !!o.mozjpeg;
     if (o.sizeBase) $('opt-sizebase').value = o.sizeBase;
+    if ($('opt-cropratio')) $('opt-cropratio').value = o.cropRatio || '';
     if (o.autoColor && !$('opt-autocolor').disabled) $('opt-autocolor').checked = true;
+    refreshDD(); // 程序改了原生 select，同步刷新自定义下拉的显示文字
     renderLogoList(); renderGroups();
     updateAutoColorUI(); refreshPreview(); updateRun();
-    hint.textContent = '已恢复 ✓';
+    hint.textContent = `已恢复 ✓ ${meta.summary ? meta.summary.text : ''}`;
   }, 250);
 }
 
@@ -246,6 +442,7 @@ const POS_NAMES = { nw: '左上', n: '上', ne: '右上', w: '左', c: '中', e:
 function renderGroups() {
   updateAutoColorUI(); // 分组变动会改变哪些组能自动换色
   const box = $('groups-box');
+  destroyDDWithin(box); // 重建前回收旧的自定义下拉实例，避免注册表累积
   if (!state.groups.length) {
     box.innerHTML = '<div class="muted">还没有分组：点「＋ 添加分组」，每组可放 1 个或多个 logo</div>';
     return;
@@ -336,6 +533,8 @@ function bindGroupEvents() {
       if (lbl) lbl.textContent = (+el.value).toFixed(2);
       refreshPreview();
     }));
+    // 动态生成的「排列」下拉也走统一的自定义下拉组件
+    if (dir) enhanceSelect(dir);
   });
 }
 
@@ -500,6 +699,7 @@ function options() {
     mozjpeg: !!($('opt-mozjpeg') && $('opt-mozjpeg').checked),
     sizeBase: $('opt-sizebase') ? $('opt-sizebase').value : 'long',
     autoColor: !$('opt-autocolor').disabled && $('opt-autocolor').checked,
+    cropRatio: $('opt-cropratio') ? $('opt-cropratio').value || null : null,
   };
 }
 function bindPreviewOn(selector, ev = 'input') {
@@ -777,15 +977,31 @@ function init() {
   // 全局滑杆联动（布局滑杆在各分组卡片内自绑定）
   const slider = (bar, label) => { const b = $(bar); if (b) b.addEventListener('input', () => { $(label).textContent = b.value; }); };
   slider('wm-tol', 'tol-v'); slider('opt-quality', 'q-v');
+
+  // 原生 select 统一升级为自定义下拉（保留原生元素做数据源与事件目标）
+  ['wm-bg', 'opt-sizebase', 'opt-format', 'opt-cropratio'].forEach((id) => enhanceSelect($(id)));
   ['wm-tol', 'opt-quality'].forEach((id) => $(id).addEventListener('input', refreshPreview));
   bindPreviewOn('#opt-format', 'change');
   bindPreviewOn('#opt-sizebase', 'change');
+  bindPreviewOn('#opt-cropratio', 'change');
   $('opt-autocolor').addEventListener('change', refreshPreview);
+  $('opt-cropratio').addEventListener('change', () => {
+    const v = $('opt-cropratio').value;
+    $('cropratio-hint').textContent = v ? '按亮度分析智能选择裁剪区域（保留细节更丰富的一侧）' : '';
+  });
   $('opt-format').addEventListener('change', () => { $('quality-wrap').style.opacity = ['jpeg', 'webp'].includes($('opt-format').value) ? 1 : .4; refreshPreview(); });
   $('group-add').addEventListener('click', addGroup);
   $('preset-save').addEventListener('click', savePreset);
   $('preset-del').addEventListener('click', delPreset);
-  $('preset-select').addEventListener('change', (e) => { if (e.target.value) applyPreset(e.target.value); });
+  $('preset-toggle').addEventListener('click', (e) => { e.stopPropagation(); togglePresetMenu(); });
+  // 点击菜单外部 / Esc 关闭
+  document.addEventListener('click', (e) => {
+    if (!$('preset-menu') || $('preset-menu').classList.contains('hidden')) return;
+    if (!e.target.closest('.preset-picker')) closePresetMenu();
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !$('preset-menu').classList.contains('hidden')) closePresetMenu();
+  });
   loadPresets();
   $('watch-create').addEventListener('click', createWatcher);
   $('watch-refresh').addEventListener('click', refreshWatchers);

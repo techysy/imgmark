@@ -508,4 +508,111 @@ async function mergeWatermarks(preparedList, o = {}) {
   return { buffer, width: totalW, height: H, notes };
 }
 
-module.exports = { prepareWatermark, mergeWatermarks, composeWatermark, composeGroups, buildGroupWatermark, analyzeInk, IMAGE_EXTS, WM_INPUT_EXTS, extOf };
+/**
+ * 输出裁剪：按指定宽高比裁剪已合成的图片，通过亮度分析智能选择裁剪区域。
+ * 分析上/下（或左/右）半区亮度方差，方差大的区域更可能包含主体/细节，裁剪时尽量保留。
+ */
+const CROP_RATIOS = {
+  '1:1':   [1, 1],
+  '4:5':   [4, 5],
+  '5:4':   [5, 4],
+  '3:4':   [3, 4],
+  '4:3':   [4, 3],
+  '2:3':   [2, 3],
+  '3:2':   [3, 2],
+  '9:16':  [9, 16],
+  '16:9':  [16, 9],
+  '21:9':  [21, 9],
+};
+
+async function cropOutput(buffer, ratio) {
+  const [rw, rh] = CROP_RATIOS[ratio] || [0, 0];
+  if (!rw || !rh) return buffer;
+
+  const meta = await sharp(buffer).metadata();
+  const oriented = meta.orientation && meta.orientation >= 5;
+  const W = oriented ? meta.height : meta.width;
+  const H = oriented ? meta.width : meta.height;
+  const targetAR = rw / rh;
+  const srcAR = W / H;
+
+  if (Math.abs(targetAR - srcAR) < 0.01) return buffer;
+
+  let cropW, cropH, cropLeft, cropTop;
+
+  if (targetAR > srcAR) {
+    cropW = W;
+    cropH = Math.round(W / targetAR);
+    cropLeft = 0;
+    cropTop = await smartOffset(buffer, W, H, cropW, cropH, 'vertical');
+  } else {
+    cropH = H;
+    cropW = Math.round(H * targetAR);
+    cropTop = 0;
+    cropLeft = await smartOffset(buffer, W, H, cropW, cropH, 'horizontal');
+  }
+
+  cropW = Math.min(cropW, W);
+  cropH = Math.min(cropH, H);
+  cropLeft = Math.max(0, Math.min(cropLeft, W - cropW));
+  cropTop = Math.max(0, Math.min(cropTop, H - cropH));
+
+  return sharp(buffer).rotate()
+    .extract({ left: cropLeft, top: cropTop, width: cropW, height: cropH })
+    .withMetadata({ orientation: undefined })
+    .toBuffer();
+}
+
+async function smartOffset(buffer, W, H, cropW, cropH, axis) {
+  const thumbSize = 64;
+  const { data } = await sharp(buffer).rotate()
+    .resize(thumbSize, thumbSize, { fit: 'fill' }).greyscale().raw()
+    .toBuffer({ resolveWithObject: true });
+
+  if (axis === 'vertical') {
+    const excess = H - cropH;
+    const half = Math.floor(thumbSize / 2);
+    let varTop = 0, varBot = 0;
+    const avg = (start, end) => {
+      let s = 0, n = 0;
+      for (let y = start; y < end; y++)
+        for (let x = 0; x < thumbSize; x++) { s += data[y * thumbSize + x]; n++; }
+      return n ? s / n : 128;
+    };
+    const variance = (start, end, mean) => {
+      let s = 0, n = 0;
+      for (let y = start; y < end; y++)
+        for (let x = 0; x < thumbSize; x++) { const d = data[y * thumbSize + x] - mean; s += d * d; n++; }
+      return n ? s / n : 0;
+    };
+    const mTop = avg(0, half), mBot = avg(half, thumbSize);
+    varTop = variance(0, half, mTop);
+    varBot = variance(half, thumbSize, mBot);
+    if (varTop > varBot * 1.3) return 0;
+    if (varBot > varTop * 1.3) return excess;
+    return Math.round(excess / 2);
+  }
+
+  const excess = W - cropW;
+  const half = Math.floor(thumbSize / 2);
+  const avg = (start, end) => {
+    let s = 0, n = 0;
+    for (let y = 0; y < thumbSize; y++)
+      for (let x = start; x < end; x++) { s += data[y * thumbSize + x]; n++; }
+    return n ? s / n : 128;
+  };
+  const variance = (start, end, mean) => {
+    let s = 0, n = 0;
+    for (let y = 0; y < thumbSize; y++)
+      for (let x = start; x < end; x++) { const d = data[y * thumbSize + x] - mean; s += d * d; n++; }
+    return n ? s / n : 0;
+  };
+  const mLeft = avg(0, half), mRight = avg(half, thumbSize);
+  const varLeft = variance(0, half, mLeft);
+  const varRight = variance(half, thumbSize, mRight);
+  if (varLeft > varRight * 1.3) return 0;
+  if (varRight > varLeft * 1.3) return excess;
+  return Math.round(excess / 2);
+}
+
+module.exports = { prepareWatermark, mergeWatermarks, composeWatermark, composeGroups, buildGroupWatermark, analyzeInk, cropOutput, CROP_RATIOS, IMAGE_EXTS, WM_INPUT_EXTS, extOf };

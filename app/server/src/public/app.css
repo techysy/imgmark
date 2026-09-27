@@ -191,3 +191,71 @@ footer { text-align: center; color: var(--text-3); font-size: 12px; padding: 18p
 .watch-item .tag { font-size: 11px; padding: 1px 8px; border-radius: 10px;
   background: color-mix(in srgb, var(--ok) 12%, transparent); color: var(--ok); flex-shrink: 0; }
 .watch-item.paused .tag { background: var(--warn-soft, rgba(245,158,11,.12)); color: #d97706; }
+
+/* ---- 方案管理器（下拉卡片菜单 + 选中详情） ---- */
+.preset-bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.preset-picker { position: relative; flex: 1 1 260px; min-width: 220px; max-width: 360px; }
+.preset-toggle { width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 7px 10px; border: 1px solid var(--border); border-radius: 9px; background: var(--card);
+  color: var(--txt); cursor: pointer; text-align: left; transition: border-color .15s, background .15s; }
+.preset-toggle:hover { border-color: var(--border-strong); background: var(--hover); }
+.preset-toggle.open { border-color: var(--pri); }
+.preset-toggle .pt-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.preset-toggle .pt-caret { width: 0; height: 0; flex-shrink: 0; border-left: 5px solid transparent;
+  border-right: 5px solid transparent; border-top: 6px solid var(--text-3); transition: transform .15s; }
+.preset-toggle.open .pt-caret { transform: rotate(180deg); }
+
+.preset-menu { position: absolute; z-index: 40; top: calc(100% + 6px); left: 0; right: 0; max-height: 340px; overflow-y: auto;
+  background: var(--card); border: 1px solid var(--border); border-radius: 11px; padding: 6px;
+  box-shadow: 0 12px 32px rgba(0,0,0,.16); display: flex; flex-direction: column; gap: 4px; }
+.pt-empty { padding: 10px 8px; }
+.pt-item { display: flex; flex-direction: column; gap: 4px; width: 100%; text-align: left; cursor: pointer;
+  padding: 8px 10px; border: 1px solid transparent; border-radius: 9px; background: var(--surface-2); color: var(--txt); }
+.pt-item:hover { background: var(--hover); border-color: var(--border-subtle); }
+.pt-item.on { border-color: var(--pri); background: color-mix(in srgb, var(--pri) 8%, transparent); }
+.pt-item-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.pt-item-name { font-size: 13px; font-weight: 650; }
+.pt-item-time { font-size: 11px; color: var(--text-3); flex-shrink: 0; }
+.pt-item-tags { display: flex; flex-wrap: wrap; gap: 4px; }
+.pt-item-files { font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.pt-tag { font-size: 10.5px; padding: 1px 7px; border-radius: 9px; white-space: nowrap;
+  background: color-mix(in srgb, var(--pri) 12%, transparent); color: var(--pri-dk); }
+.pt-tag-crop { background: color-mix(in srgb, #8b5cf6 14%, transparent); color: #7c3aed; }
+.pt-tag-autocolor { background: color-mix(in srgb, #f59e0b 16%, transparent); color: #b45309; }
+.pt-tag-quality, .pt-tag-sizebase { background: var(--tertiary); color: var(--muted); }
+html[data-theme="dark"] .pt-tag-crop { color: #c4b5fd; }
+html[data-theme="dark"] .pt-tag-autocolor { color: #fcd34d; }
+
+.preset-detail { margin-top: 8px; border: 1px solid var(--border-subtle); border-radius: 10px;
+  padding: 9px 11px; background: var(--surface-2); display: flex; flex-direction: column; gap: 5px; }
+.pd-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.pd-tags { display: flex; flex-wrap: wrap; gap: 4px; }
+.pd-files { font-size: 11px; word-break: break-all; }
+.pd-actions { display: flex; gap: 6px; margin-top: 2px; }
+
+/* ---- 自定义下拉（替换原生 select：统一视觉 + 触底向上弹） ---- */
+/* 原生 select 保留在 DOM 里作为数据源与事件目标，仅视觉隐藏 */
+select.dd-native { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; margin: 0; }
+.dd { position: relative; display: block; }
+.dd-btn { width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 6px 8px; border: 1px solid var(--border); border-radius: 8px; background: var(--card);
+  color: var(--txt); cursor: pointer; text-align: left; transition: border-color .15s, background .15s; }
+.dd-btn:hover { border-color: var(--border-strong); background: var(--hover); }
+.dd-btn.open { border-color: var(--pri); }
+.dd-btn .dd-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dd-btn .dd-caret { width: 0; height: 0; flex-shrink: 0; border-left: 5px solid transparent;
+  border-right: 5px solid transparent; border-top: 6px solid var(--text-3); transition: transform .15s; }
+.dd-btn.open .dd-caret { transform: rotate(180deg); }
+.dd-menu { position: absolute; z-index: 60; left: 0; min-width: 100%; max-height: 300px; overflow-y: auto;
+  background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 5px;
+  box-shadow: 0 12px 32px rgba(0,0,0,.16); display: flex; flex-direction: column; gap: 3px; }
+/* 向上弹（触底避让）时由 JS 加 .up，锚定到按钮上沿 */
+.dd-menu.up { top: auto; bottom: calc(100% + 6px); }
+.dd-menu.down { top: calc(100% + 6px); bottom: auto; }
+/* 横向右对齐（右侧空间不足时由 JS 加 .right） */
+.dd-menu.right { left: auto; right: 0; }
+.dd-item { width: 100%; text-align: left; cursor: pointer; padding: 7px 9px; border: 1px solid transparent;
+  border-radius: 7px; background: transparent; color: var(--txt); white-space: nowrap; font-size: 13px; }
+.dd-item:hover { background: var(--hover); }
+.dd-item.on { background: color-mix(in srgb, var(--pri) 10%, transparent); color: var(--pri-dk); font-weight: 650; }

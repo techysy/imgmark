@@ -35,6 +35,7 @@
   ],
   "scripts": {
     "start": "node src/server.js",
+    "test:dd": "node scripts/dd-smoke.js",
     "prepare": "node scripts/sync-readme.js",
     "prepack": "node scripts/sync-readme.js"
   },
@@ -55,5 +56,8 @@
     "multer": "^2.4.0",
     "pdfjs-dist": "^4.10.38",
     "sharp": "^0.33.5"
+  },
+  "devDependencies": {
+    "jsdom": "^26.0.0"
   }
 }

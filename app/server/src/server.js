@@ -12,7 +12,7 @@ const express = require('express');
 const multer = require('multer');
 const sharp = require('sharp');
 
-const { prepareWatermark, mergeWatermarks, composeWatermark, composeGroups, buildGroupWatermark, analyzeInk, IMAGE_EXTS, WM_INPUT_EXTS, extOf } = require('./core/watermark');
+const { prepareWatermark, mergeWatermarks, composeWatermark, composeGroups, buildGroupWatermark, analyzeInk, cropOutput, CROP_RATIOS, IMAGE_EXTS, WM_INPUT_EXTS, extOf } = require('./core/watermark');
 const { runBatch } = require('./core/batch');
 const { ProcessDB } = require('./core/db');
 const { WatcherManager } = require('./core/watcher');
@@ -391,6 +391,7 @@ app.post('/api/preview', express.json(), async (req, res) => {
   try {
     const options = req.body.options || {};
     const orient = req.body.orient === 'portrait' ? 'portrait' : 'landscape'; // 示例图方向（仅预览用，不影响处理）
+    const cropRatio = CROP_RATIOS[options.cropRatio] ? options.cropRatio : null;
     const groups = Array.isArray(req.body.groups) && req.body.groups.length ? req.body.groups : null;
     // 分组模式：多个分组一次性合成到示例图
     if (groups) {
@@ -398,8 +399,11 @@ app.post('/api/preview', express.json(), async (req, res) => {
       if (!set) return res.status(404).json({ error: 'logo 组不存在或服务已重启，请重新上传' });
       const auto = !!options.autoColor;
       const groupDefs = await resolveGroups(set, groups, auto);
-      const toPreviewG = async (kind) =>
-        previewDataUrl(await composeGroups(await getSampleImage(kind, orient), groupDefs, { sizeBase: options.sizeBase }));
+      const toPreviewG = async (kind) => {
+        const composed = await composeGroups(await getSampleImage(kind, orient), groupDefs, { sizeBase: options.sizeBase });
+        if (cropRatio) composed.buffer = await cropOutput(composed.buffer, cropRatio);
+        return previewDataUrl(composed);
+      };
       const preview = await toPreviewG('light');
       const previewAuto = auto && groupDefs.some((g) => g.wmAltBuffer) ? await toPreviewG('dark') : null;
       return res.json({ preview, previewAuto });
@@ -407,8 +411,11 @@ app.post('/api/preview', express.json(), async (req, res) => {
     const wm = watermarks.get(req.body.watermarkId);
     if (!wm) return res.status(404).json({ error: '水印不存在或服务已重启，请重新上传' });
     const altBuf = options.autoColor && wm.altPath ? fs.readFileSync(wm.altPath) : null;
-    const toPreview = async (sample) =>
-      previewDataUrl(await composeWatermark(await getSampleImage(sample, orient), fs.readFileSync(wm.path), options, altBuf));
+    const toPreview = async (sample) => {
+      const composed = await composeWatermark(await getSampleImage(sample, orient), fs.readFileSync(wm.path), options, altBuf);
+      if (cropRatio) composed.buffer = await cropOutput(composed.buffer, cropRatio);
+      return previewDataUrl(composed);
+    };
     const preview = await toPreview('light');
     // 亮度自适应开启时附暗底预览，直观看到"暗图自动换白标"
     const previewAuto = altBuf ? await toPreview('dark') : null;
@@ -425,7 +432,31 @@ const PRESET_DIR = path.join(DATA_DIR, 'presets');
 fs.mkdirSync(PRESET_DIR, { recursive: true });
 function loadPresets() { try { return JSON.parse(fs.readFileSync(PRESET_FILE, 'utf8')); } catch { return {}; } }
 function savePresets(map) { fs.writeFileSync(PRESET_FILE, JSON.stringify(map, null, 2)); }
-const presetBrief = (id, p) => ({ id, name: p.name, time: p.time, files: p.files.map((f) => ({ name: f.name })), data: p.data });
+
+// 方案摘要：从已存 options/groups 推导出人类可读的关键参数，供前端下拉与详情卡片展示
+const CROP_LABEL = {
+  '1:1': '1:1 正方', '4:5': '4:5 竖版', '5:4': '5:4 横版', '3:4': '3:4 竖版', '4:3': '4:3 横版',
+  '2:3': '2:3 竖版', '3:2': '3:2 横版', '9:16': '9:16 竖屏', '16:9': '16:9 宽屏', '21:9': '21:9 超宽',
+};
+const FORMAT_LABEL = { auto: '保持原格式', png: 'PNG', jpeg: 'JPEG', webp: 'WebP' };
+const SIZEBASE_LABEL = { long: '长边', short: '短边', width: '图宽' };
+function presetSummary(p) {
+  const o = (p && p.data && p.data.options) || {};
+  const groups = Array.isArray(p && p.data && p.data.groups) ? p.data.groups : [];
+  const tags = [];
+  const logoCount = groups.reduce((n, g) => n + ((g && Array.isArray(g.logos)) ? g.logos.length : 0), 0);
+  tags.push({ k: 'groups', label: `${groups.length} 组${logoCount ? ` · ${logoCount} logo` : ''}` });
+  if (o.cropRatio && CROP_LABEL[o.cropRatio]) tags.push({ k: 'crop', label: `裁剪 ${CROP_LABEL[o.cropRatio]}` });
+  if (o.format && o.format !== 'auto') tags.push({ k: 'format', label: FORMAT_LABEL[o.format] || o.format });
+  else tags.push({ k: 'format', label: '保持原格式' });
+  if (o.quality && ['jpeg', 'webp'].includes(o.format)) tags.push({ k: 'quality', label: `质量 ${o.quality}` });
+  if (o.sizeBase && SIZEBASE_LABEL[o.sizeBase]) tags.push({ k: 'sizebase', label: `基准 ${SIZEBASE_LABEL[o.sizeBase]}` });
+  if (o.autoColor) tags.push({ k: 'autocolor', label: '亮度自适应' });
+  const text = tags.map((t) => t.label).join(' · ');
+  return { tags, text, groups: groups.length, logos: logoCount, cropRatio: o.cropRatio || null, format: o.format || 'auto' };
+}
+
+const presetBrief = (id, p) => ({ id, name: p.name, time: p.time, files: p.files.map((f) => ({ name: f.name })), data: p.data, summary: presetSummary(p) });
 
 app.get('/api/presets', (req, res) => {
   const map = loadPresets();
@@ -502,6 +533,7 @@ function parseOptions(raw) {
     format: ['auto', 'png', 'jpeg', 'webp'].includes(o.format) ? o.format : 'auto',
     quality: Math.max(50, Math.min(100, numOr(o.quality, 90))),
     mozjpeg: !!o.mozjpeg, // JPEG 体积优先（小 10-15%，编码慢约 5 倍）
+    cropRatio: CROP_RATIOS[o.cropRatio] ? o.cropRatio : null,
   };
 }
 
