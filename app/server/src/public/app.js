@@ -987,7 +987,9 @@ function init() {
   $('opt-autocolor').addEventListener('change', refreshPreview);
   $('opt-cropratio').addEventListener('change', () => {
     const v = $('opt-cropratio').value;
-    $('cropratio-hint').textContent = v ? '按亮度分析智能选择裁剪区域（保留细节更丰富的一侧）' : '';
+    // 文案刻意压到 14 字以内：168px 容器一行只放得下 14 字（实测），换行会让
+    // .field 高度从 77 涨到 96px，在输出设置行里造成纵向跳动。改文案前先量宽度
+    $('cropratio-hint').textContent = v ? '智能裁剪（保留细节多的一侧）' : '';
   });
   $('opt-format').addEventListener('change', () => { $('quality-wrap').style.opacity = ['jpeg', 'webp'].includes($('opt-format').value) ? 1 : .4; refreshPreview(); });
   $('group-add').addEventListener('click', addGroup);
