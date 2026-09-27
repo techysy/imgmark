@@ -52,8 +52,11 @@ main { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; padding: 12px 2
 /* 左列宽度 = 卡片宽度（--gc-w），不用 auto：.grow 里面是 330px 的卡片 + 更宽的 .gc-ctrl，
    flex-basis:auto 会按内容 max-content 撑到整个行宽，于是 + 预览 + gap 超出行宽 → 预览被换行。
    显式绑到 --gc-w 后，左列就是卡片那么宽，预览才拿得到剩下的空间。 */
-.g-row > .grow { flex: 0 0 var(--gc-w, 330px); min-width: 0; }
-.g-row > .preview-box { flex: 1 1 200px; min-width: 200px; }
+/* 55:45 —— 左列 55%、预览 45%（gap 14 从总宽扣，故实际是 299 : 245）。
+   用 flex-basis 0 + grow 55/45：两列都从 0 开始按比例分配，卡片不会因为
+   内容 max-content 更宽而抢占份额（这正是之前预览被挤换行的原因）。 */
+.g-row > .grow { flex: 55 1 0; min-width: 0; }
+.g-row > .preview-box { flex: 45 1 0; min-width: 200px; }
 
 /* ---- 卡片 ---- */
 .card { background: var(--card); border: 1px solid var(--border-subtle); border-radius: var(--radius); padding: 14px 16px; }
@@ -127,11 +130,12 @@ input[type="checkbox"] { accent-color: var(--pri); }
 .preview-cap { font-size: 11px; color: var(--text-3); display: block; margin-top: 3px; }
 #preview-orient { justify-content: center; margin-bottom: 8px; }
 #preview-orient .tab { padding: 3px 12px; font-size: 12px; }
-/* ② 右列的窄预览：窄列装不下两个并排的示例切换按钮，改为上下堆叠；
-   图按列宽自适应（点击仍可放大看原尺寸） */
+/* ② 右列的窄预览：横图/竖图两个按钮并排一行、各占一半宽（等分用 flex:1 1 0，
+   这样按钮宽度跟随预览列宽，不再随文字长短一宽一窄）；按钮文字压到一行不换行，
+   列再窄也只是挤，不会变成上下堆叠。图按列宽自适应（点击仍可放大看原尺寸）。 */
 .g-row > .preview-box img { max-width: 100%; }
-.g-row > .preview-box #preview-orient { flex-direction: column; gap: 4px; }
-.g-row > .preview-box #preview-orient .tab { width: 100%; }
+.g-row > .preview-box #preview-orient { flex-wrap: nowrap; gap: 4px; }
+.g-row > .preview-box #preview-orient .tab { flex: 1 1 0; width: auto; min-width: 0; white-space: nowrap; padding: 3px 4px; }
 
 
 /* ---- 预览放大（lightBox：点击示例图看原尺寸） ---- */
