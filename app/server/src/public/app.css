@@ -191,8 +191,12 @@ footer { text-align: center; color: var(--text-3); font-size: 12px; padding: 18p
 .li-meta span { color: var(--muted); }
 
 /* ---- 分组卡片 ---- */
+/* 卡片宽度由 --gc-w 统一决定（= 九宫格/滑杆列宽 220 + 卡片左右 padding 24 = 244）。
+   多个分组的字段数不同（单 logo 4 个、多 logo 9 个），若用 max-content 让卡片各自
+   贴合内容，两个分组就会一宽一窄、左边对齐右边参差。定宽后所有分组等宽，
+   列宽也正好和九宫格对齐，不再被 .grow 拉满整列。 */
 .group-card { border: 1px solid var(--border-subtle); border-radius: 12px; padding: 10px 12px; margin-bottom: 10px;
-  background: var(--surface-2); }
+  background: var(--surface-2); width: var(--gc-w, 244px); max-width: 100%; }
 .gc-head { gap: 10px; align-items: center; }
 .gc-logos { display: flex; gap: 4px; flex-wrap: wrap; }
 .gc-logo { display: inline-flex; align-items: center; gap: 3px; padding: 2px 6px 2px 2px;
@@ -205,7 +209,10 @@ footer { text-align: center; color: var(--text-3); font-size: 12px; padding: 18p
 .gc-ctrl .field { min-width: 150px; }
 .gc-ctrl .grid9 { min-width: 150px; }
 /* 九宫格在上、参数在下，同一列左对齐。列宽 220px：九宫格三格各 70px 见方，
-   滑杆也拿到 220px（比全局 180px 宽，拖动够用），且不会撑满分组的整卡宽度。 */
+   滑杆也拿到 220px（比全局 180px 宽，拖动够用），且不会撑满分组的整卡宽度。
+   卡片宽度 --gc-w 由它推导：220 列宽 + 卡片左右 padding 12×2 = 244，
+   改列宽只需改这一处 --gc-w 与上面的 220px 两处保持同步。 */
+:root { --gc-w: 244px; }
 .gc-ctrl { display: grid; grid-template-columns: 220px; align-items: start; gap: 8px; }
 .gc-ctrl > .field { min-width: 0; margin: 0; }
 /* width:100% 时 range 自身的默认 margin 会把 .field 撑宽 4px，导致 .gc-ctrl 横向溢出 */
