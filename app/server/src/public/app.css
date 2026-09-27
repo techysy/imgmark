@@ -44,9 +44,12 @@ header .status { font-size: 12px; color: var(--muted); display: flex; gap: 7px; 
 main { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; padding: 12px 22px 30px; max-width: 1240px; margin: 0 auto; }
 @media (max-width: 980px) { main { grid-template-columns: 1fr; } }
 .col { display: flex; flex-direction: column; gap: 14px; }
-/* ② 的「分组控件 + 预览图」竖排：并排时 .grow 只有 ~247px，装不下
-   九宫格(150) + 滑杆，控件会被 flex 换行挤成阶梯竖排。竖排后拿到整卡宽。 */
-.g-stack { display: flex; flex-direction: column; gap: 14px; }
+/* ② 左列分组控件、右列样式预览。预览点击可放大，不需要大，固定在 160px；
+   左列因此稳定拿到 558-160-14 ≈ 384px，九宫格(150) + 滑杆列 ~196px。
+   （不分栏时左列只有 247px，控件会被 flex 换行挤成阶梯竖排。） */
+.g-row { align-items: flex-start; }
+.g-row > .grow { flex: 1 1 auto; min-width: 0; }
+.g-row > .preview-box { flex: 0 0 160px; width: 160px; min-width: 0; }
 
 /* ---- 卡片 ---- */
 .card { background: var(--card); border: 1px solid var(--border-subtle); border-radius: var(--radius); padding: 14px 16px; }
@@ -120,6 +123,11 @@ input[type="checkbox"] { accent-color: var(--pri); }
 .preview-cap { font-size: 11px; color: var(--text-3); display: block; margin-top: 3px; }
 #preview-orient { justify-content: center; margin-bottom: 8px; }
 #preview-orient .tab { padding: 3px 12px; font-size: 12px; }
+/* ② 右列的窄预览：窄列装不下两个并排的示例切换按钮，改为上下堆叠；
+   图按列宽自适应（点击仍可放大看原尺寸） */
+.g-row > .preview-box img { max-width: 100%; }
+.g-row > .preview-box #preview-orient { flex-direction: column; gap: 4px; }
+.g-row > .preview-box #preview-orient .tab { width: 100%; }
 
 /* ---- 预览放大（lightBox：点击示例图看原尺寸） ---- */
 #lightbox { position: fixed; inset: 0; z-index: 80; background: rgba(8, 10, 14, .78);
