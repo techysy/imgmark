@@ -48,57 +48,6 @@ async function api(path, opts) {
 const debounce = (fn, ms) => { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; };
 function esc(s) { return String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
 
-// ---------- 可拖拽列宽（localStorage 记忆） ----------
-function saveColW(key, v) { try { localStorage.setItem(key, String(Math.round(v))); } catch { /* 隐私模式忽略 */ } }
-function loadColW(key) { const v = parseFloat(localStorage.getItem(key)); return Number.isFinite(v) ? v : null; }
-
-// ② 分组 / 预览 分隔条：拖动改预览列宽。
-// 预览列宽 = 整行宽 - 卡片宽 - 分隔条 - gap，所以卡片宽（--gc-w）保持不变，
-// 只让预览区变大变小；夹在 [200, 520] 内，避免拖成 0 宽或吃掉整个卡片区。
-function setupGroupSplit() {
-  const bar = $('g-split');
-  const row = bar && bar.parentElement;
-  const preview = row && row.querySelector('.preview-box');
-  const grow = row && row.querySelector('.grow');
-  if (!bar || !row || !preview || !grow) return;
-
-  const MIN = 200, MAX = 520;
-  const apply = (targetW) => {
-    const gap = parseFloat(getComputedStyle(row).columnGap) || 0;
-    // 预览列只能蚕食「整行宽 - 卡片宽 - 两根 gap - 分隔条」，留一格 gap 给右侧留白
-    const maxByRow = row.clientWidth - grow.offsetWidth - bar.offsetWidth - gap * 2;
-    const w = Math.max(MIN, Math.min(MAX, maxByRow, targetW));
-    preview.style.flex = `0 0 ${Math.round(w)}px`;
-    return w;
-  };
-
-  const saved = loadColW('imgmark_gcol');
-  if (saved) apply(saved);
-  // 窗口变窄时重新夹一次，避免之前拖宽的预览把卡片挤出容器
-  let rt; addEventListener('resize', () => { clearTimeout(rt); rt = setTimeout(() => apply(preview.offsetWidth), 120); });
-
-  let startX = 0, startW = 0;
-  const onMove = (e) => apply(startW - (e.clientX - startX));
-  const onUp = () => {
-    bar.classList.remove('dragging'); document.body.classList.remove('col-resizing');
-    document.removeEventListener('pointermove', onMove); document.removeEventListener('pointerup', onUp);
-    saveColW('imgmark_gcol', preview.offsetWidth);
-  };
-  bar.addEventListener('pointerdown', (e) => {
-    e.preventDefault();
-    startX = e.clientX; startW = preview.offsetWidth;
-    bar.classList.add('dragging'); document.body.classList.add('col-resizing');
-    document.addEventListener('pointermove', onMove); document.addEventListener('pointerup', onUp);
-  });
-  // 键盘可达：← / → 各调 20px
-  bar.addEventListener('keydown', (e) => {
-    const step = e.key === 'ArrowLeft' ? 20 : e.key === 'ArrowRight' ? -20 : 0;
-    if (!step) return;
-    e.preventDefault();
-    saveColW('imgmark_gcol', apply(preview.offsetWidth + step));
-  });
-}
-
 // ---------- 自定义下拉（统一替换原生 select） ----------
 // 原生 <select> 保留在 DOM 中作为数据源与 change 事件目标：外部读 .value / 绑定 change 的代码完全不变，
 // 只在它旁边渲染一层自定义按钮 + 菜单，并负责触底向上弹、右侧空间不足时右对齐。
@@ -501,6 +450,8 @@ function renderGroups() {
   const logos = state.logoSet ? state.logoSet.logos : [];
   box.innerHTML = state.groups.map((g, gi) => {
     const multi = g.logos.length > 1;
+    // 只剩一个分组时不显示删除：最少保留 1 组，删掉最后一张卡会让整个分组区变空
+    const canDel = state.groups.length > 1;
     return `
     <div class="group-card" data-gi="${gi}">
       <div class="row-inline gc-head">
@@ -510,9 +461,8 @@ function renderGroups() {
             <input type="checkbox" data-li="${li}" ${g.logos.includes(li) ? 'checked' : ''}>
             <img src="${l.preview}" alt=""><span>${li + 1}</span>
           </label>`).join('')}</span>
-        <button class="btn tiny gc-del" data-gi="${gi}">✕ 删除分组</button>
       </div>
-      <div class="row-inline wrap gc-ctrl">
+      <div class="row-inline gc-ctrl">
         <div class="field"><label>位置</label>
           <div class="grid9 gc-pos">${Object.entries(POS_NAMES).map(([k, v]) =>
             `<button data-pos="${k}" class="${g.position === k ? 'on' : ''}" title="${v}">${v}</button>`).join('')}</div>
@@ -538,6 +488,7 @@ function renderGroups() {
         <div class="field"><label>不透明度 <b class="gc-ov">${g.opacity}</b></label>
           <input type="range" class="gc-op" min="5" max="100" value="${g.opacity}"></div>
       </div>
+      ${canDel ? `<button class="btn tiny gc-del" data-gi="${gi}">✕ 删除分组</button>` : ''}
     </div>`;
   }).join('');
   bindGroupEvents();
@@ -548,7 +499,9 @@ function bindGroupEvents() {
   box.querySelectorAll('.group-card').forEach((card) => {
     const gi = +card.dataset.gi;
     const g = state.groups[gi];
-    card.querySelector('.gc-del').addEventListener('click', () => {
+    // 只剩一个分组时没有删除按钮（见 renderGroups 的 canDel）
+    const del = card.querySelector('.gc-del');
+    if (del) del.addEventListener('click', () => {
       state.groups.splice(gi, 1);
       renderGroups(); refreshPreview();
     });
@@ -1044,7 +997,6 @@ function init() {
   });
   $('opt-format').addEventListener('change', () => { $('quality-wrap').style.opacity = ['jpeg', 'webp'].includes($('opt-format').value) ? 1 : .4; refreshPreview(); });
   $('group-add').addEventListener('click', addGroup);
-  setupGroupSplit(); // ② 分组/预览 之间的拖拽分隔条
   $('preset-save').addEventListener('click', savePreset);
   $('preset-del').addEventListener('click', delPreset);
   $('preset-toggle').addEventListener('click', (e) => { e.stopPropagation(); togglePresetMenu(); });

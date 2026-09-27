@@ -45,13 +45,15 @@ main { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; padding: 12px 2
 @media (max-width: 980px) { main { grid-template-columns: 1fr; } }
 .col { display: flex; flex-direction: column; gap: 14px; }
 /* ② 分组卡只占内容宽度（--gc-w），剩下的宽度由预览列自动填满。
-   注意：这里不能用 flex-grow 按 6:4 分——左列内容只有 244px 宽，多出来的
+   注意：这里不能用 flex-grow 按 6:4 分——左列内容只有卡片那么宽，多出来的
    空间会被 flex 均分给两列，于是「卡片右边缘 → 预览图左边缘」之间空出几十像素。
-   改成「左列按内容收缩 + 右列 flex:1 吃掉全部剩余」后，预览左边缘始终紧贴卡片。
-   （想改变两者比例请直接拖拽卡片与预览之间的分隔条，见 .g-split。） */
+   改成「左列按内容收缩 + 右列 flex:1 吃掉全部剩余」后，预览左边缘始终紧贴卡片。 */
 .g-row { align-items: flex-start; }
-.g-row > .grow { flex: 0 1 auto; min-width: 0; }
-.g-row > .preview-box { flex: 1 1 260px; min-width: 200px; }
+/* 左列宽度 = 卡片宽度（--gc-w），不用 auto：.grow 里面是 330px 的卡片 + 更宽的 .gc-ctrl，
+   flex-basis:auto 会按内容 max-content 撑到整个行宽，于是 + 预览 + gap 超出行宽 → 预览被换行。
+   显式绑到 --gc-w 后，左列就是卡片那么宽，预览才拿得到剩下的空间。 */
+.g-row > .grow { flex: 0 0 var(--gc-w, 330px); min-width: 0; }
+.g-row > .preview-box { flex: 1 1 200px; min-width: 200px; }
 
 /* ---- 卡片 ---- */
 .card { background: var(--card); border: 1px solid var(--border-subtle); border-radius: var(--radius); padding: 14px 16px; }
@@ -131,13 +133,6 @@ input[type="checkbox"] { accent-color: var(--pri); }
 .g-row > .preview-box #preview-orient { flex-direction: column; gap: 4px; }
 .g-row > .preview-box #preview-orient .tab { width: 100%; }
 
-/* ---- ② 分组 / 预览 之间的拖拽分隔条 ----
-   预览列宽 = 整行宽 - 卡片宽 - 分隔条(5) - gap(14)，区间 [200, 520]。
-   拖动只改预览列宽，卡片宽由 --gc-w 决定，所以卡片永不被压窄。 */
-.g-split { flex: 0 0 5px; align-self: stretch; min-height: 96px; cursor: col-resize;
-  border-radius: 3px; background: var(--border-subtle); }
-.g-split:hover, .g-split.dragging { background: var(--pri); }
-body.col-resizing { cursor: col-resize; user-select: none; }
 
 /* ---- 预览放大（lightBox：点击示例图看原尺寸） ---- */
 #lightbox { position: fixed; inset: 0; z-index: 80; background: rgba(8, 10, 14, .78);
@@ -201,13 +196,16 @@ footer { text-align: center; color: var(--text-3); font-size: 12px; padding: 18p
 .li-meta span { color: var(--muted); }
 
 /* ---- 分组卡片 ---- */
-/* 卡片宽度由 --gc-w 统一决定（= 九宫格/滑杆列宽 220 + 卡片左右 padding 24 = 244）。
-   多个分组的字段数不同（单 logo 4 个、多 logo 9 个），若用 max-content 让卡片各自
-   贴合内容，两个分组就会一宽一窄、左边对齐右边参差。定宽后所有分组等宽，
-   列宽也正好和九宫格对齐，不再被 .grow 拉满整列。 */
+/* 卡片宽度统一走 --gc-w（不用 max-content：多个分组字段数不同，max-content 会一宽一窄）。
+   330 是实测出来的卡点，三个条件同时成立（行宽按 1240 页宽下的 558px 算）：
+     · 3 个 logo 选项一行：需 ≥ 323（chip 77px ×3 + 「分组 N」+ gap；删除按钮在卡底，不占这行）
+     · 预览不被挤掉：558 − 2×gap(28) − 330 = 200px，正好是 .preview-box 的 min-width
+     · 同排不换行：三者相加 ≤ 558
+   330 是「3 chips 一行」的上限，同时也是预览的下限，两头刚好卡住。
+   改这个值前三个都重算一遍：超过 330 预览就换到卡片下一行，低于 323 logo 就折两行。 */
 .group-card { border: 1px solid var(--border-subtle); border-radius: 12px; padding: 10px 12px; margin-bottom: 10px;
-  background: var(--surface-2); width: var(--gc-w, 244px); max-width: 100%; }
-.gc-head { gap: 10px; align-items: center; }
+  background: var(--surface-2); width: var(--gc-w, 330px); max-width: 100%; }
+.gc-head { gap: 10px; align-items: center; flex-wrap: wrap; }
 .gc-logos { display: flex; gap: 4px; flex-wrap: wrap; }
 .gc-logo { display: inline-flex; align-items: center; gap: 3px; padding: 2px 6px 2px 2px;
   border: 1px solid var(--border-subtle); border-radius: 8px; cursor: pointer; background: var(--card); }
@@ -215,14 +213,16 @@ footer { text-align: center; color: var(--text-3); font-size: 12px; padding: 18p
 .gc-logo img { height: 24px; width: 34px; object-fit: contain; border-radius: 4px;
   background: conic-gradient(var(--chk1) 25%, var(--chk2) 0 50%, var(--chk1) 0 75%, var(--chk2) 0) 0 0/8px 8px; }
 .gc-logo input { width: 13px; height: 13px; }
-.gc-ctrl { gap: 14px; align-items: flex-start; margin-top: 6px; }
+/* 删除分组固定独占一行：logo 选项再多也只影响上面的字段行，
+   不会把删除按钮挤到 logo 列表后面去（否则它位置随 logo 数量漂移，很难找）。 */
+.gc-del { width: 100%; margin-top: 6px; }
 .gc-ctrl .field { min-width: 150px; }
 .gc-ctrl .grid9 { min-width: 150px; }
-/* 九宫格在上、参数在下，同一列左对齐。列宽 220px：九宫格三格各 70px 见方，
-   滑杆也拿到 220px（比全局 180px 宽，拖动够用），且不会撑满分组的整卡宽度。
-   卡片宽度 --gc-w 由它推导：220 列宽 + 卡片左右 padding 12×2 = 244，
-   改列宽只需改这一处 --gc-w 与上面的 220px 两处保持同步。 */
-:root { --gc-w: 244px; }
+/* 九宫格在上、参数在下，同一列左对齐。列宽 220px：九宫格三格各 30px 见方
+   （.gc-ctrl .grid9 里另设），滑杆也拿到 220px（比全局 180px 宽，拖动够用），
+   且不会撑满分组的整卡宽度 —— 卡片比列宽出的一大截留给首行的 logo 选项。
+   --gc-w 与这里的 220px 是两处独立取值，改列宽不必同步改卡片宽。 */
+:root { --gc-w: 330px; }
 .gc-ctrl { display: grid; grid-template-columns: 220px; align-items: start; gap: 8px; }
 .gc-ctrl > .field { min-width: 0; margin: 0; }
 /* width:100% 时 range 自身的默认 margin 会把 .field 撑宽 4px，导致 .gc-ctrl 横向溢出 */

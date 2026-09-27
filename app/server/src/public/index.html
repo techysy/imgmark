@@ -105,16 +105,13 @@
     <!-- ② 水印分组 -->
     <div class="card">
       <h2>② 水印分组 <small>每组独立定位/大小/间距，可放 1 个或多个 logo，参数即改即预览</small></h2>
-      <!-- 分组卡在左（固定 244px，见 --gc-w）、样式预览在右。
-           左列按内容收缩、右列吃掉全部剩余宽度，两者之间不留空隙；
-           中间的分隔条可拖拽，用来按需调整预览区大小（预览点击仍可放大看原尺寸）。 -->
+      <!-- 分组卡在左（宽度见 --gc-w）、样式预览在右。
+           左列按内容收缩、右列吃掉全部剩余宽度，两者之间不留空隙。 -->
       <div class="row g-row">
         <div class="grow">
           <div id="groups-box"></div>
           <button id="group-add" class="btn" disabled>＋ 添加分组</button>
         </div>
-        <div class="g-split" id="g-split" role="separator" aria-orientation="vertical"
-             aria-label="拖动调整预览区宽度" tabindex="0" title="拖动调整预览区宽度"></div>
         <div class="preview-box">
           <div class="tabs" id="preview-orient">
             <button type="button" class="tab on" data-orient="landscape">横图示例</button>
