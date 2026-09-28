@@ -509,9 +509,11 @@ const exifFieldsMeta = () => TEXT_FIELD_KEYS.map((key) => ({
 }));
 const TEXT_FONT_WEIGHTS = new Set(['normal', 'bold']);
 
-/** 把前端的文字水印配置规范化成 textSpec（fields + style），非法/空配置返回 null */
+/** 把前端的文字水印配置规范化成 textSpec（enabled + fields + style），非法/空配置返回 null。
+ *  归一化产物会落盘（方案 / 监听配置）并再次经过这里，所以输出形状必须能被自己的输入契约接受：
+ *  enabled 只有显式 false 才算关，缺省视为开；产物带 enabled:true，前端按 enabled 恢复 UI 时也有值 */
 function normTextSpec(raw) {
-  if (!raw || !raw.enabled) return null;
+  if (!raw || raw.enabled === false) return null;
   const fields = [...new Set((Array.isArray(raw.fields) ? raw.fields : []).filter((f) => TEXT_FIELD_KEYS.includes(f)))].slice(0, TEXT_FIELD_KEYS.length);
   if (!fields.length) return null;
   const color = /^#[0-9a-f]{6}$/i.test(raw.color || '') ? raw.color : '#ffffff';
@@ -526,6 +528,7 @@ function normTextSpec(raw) {
     strokeWidth: clampNum(numOr(raw.strokeWidth, 0), 0, 12),
   };
   return {
+    enabled: true,
     fields,
     separator: typeof raw.separator === 'string' && raw.separator.length <= 4 ? raw.separator : ' · ',
     prefix: typeof raw.prefix === 'string' ? raw.prefix.slice(0, 40) : '',
@@ -662,8 +665,7 @@ app.post('/api/preview', express.json(), async (req, res) => {
       : (options.frame ? [] : null);
     // 分组模式：多个分组一次性合成到示例图
     if (groups) {
-      const wantsLogo = groups.some((g) => !(g && g.text && g.text.enabled &&
-        Array.isArray(g.text.fields) && g.text.fields.length));
+      const wantsLogo = groups.some((g) => !normTextSpec(g && g.text));
       const set = logoSets.get(body.watermarkId);
       if (wantsLogo && !set) return res.status(404).json({ error: 'logo 组不存在或服务已重启，请重新上传' });
       const auto = !!options.autoColor;
@@ -739,7 +741,7 @@ function presetSummary(p) {
   const groups = Array.isArray(p && p.data && p.data.groups) ? p.data.groups : [];
   const tags = [];
   const logoCount = groups.reduce((n, g) => n + ((g && Array.isArray(g.logos)) ? g.logos.length : 0), 0);
-  const textGroups = groups.filter((g) => g && g.text && g.text.enabled).length;
+  const textGroups = groups.filter((g) => normTextSpec(g && g.text)).length;
   // 相机参数水印是这一版的新能力，摘要里单独提一句，否则「1 组 · 0 logo」看着像配错了
   const groupLabel = `${groups.length} 组${logoCount ? ` · ${logoCount} logo` : ''}`
     + (textGroups ? ` · ${textGroups} 组相机参数` : '');
@@ -937,8 +939,7 @@ app.post('/api/process', reserveProcessSlot, requestContentLengthLimit(256 * 102
     let wm = null;
     if (Array.isArray(payload.groups) && payload.groups.length) {
       // 全是文字水印组时不需要 logo 集：不传 watermarkId 也能跑（只叠相机参数，不叠 logo）
-      const wantsLogo = payload.groups.some((g) => !(g && g.text && g.text.enabled &&
-        Array.isArray(g.text.fields) && g.text.fields.length));
+      const wantsLogo = payload.groups.some((g) => !normTextSpec(g && g.text));
       const set = logoSets.get(payload.watermarkId);
       if (wantsLogo && !set) return res.status(404).json({ error: 'logo 组不存在或服务已重启，请重新上传' });
       groupDefs = await resolveGroups(set || { logos: [] }, payload.groups, options.autoColor);

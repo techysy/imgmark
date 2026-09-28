@@ -104,8 +104,14 @@ class WatcherManager {
     }
     w.scanTimer = setInterval(() => this._scan(w), cfg.scanIntervalMs);
     if (fromRestore) {
-      this._resolve(w).then((t) => {
-        if (!t) { w.status = 'paused'; w.lastError = '服务重启后水印已失效，请重新创建监听'; }
+      // 恢复发生在服务模块加载的早期：分组归一化依赖的常量（TEXT_FIELD_KEYS 等）还没初始化，
+      // 同步解析会拿到 TDZ 异常、被 _resolve 吞成「水印已失效」——
+      // 推迟到本轮宏任务（模块初始化已结束）再解析
+      setImmediate(() => {
+        if (w.stopped) return;
+        this._resolve(w).then((t) => {
+          if (!t && !w.stopped) { w.status = 'paused'; w.lastError = '服务重启后水印已失效，请重新创建监听'; }
+        });
       });
     }
     this.watchers.set(cfg.id, w);
@@ -235,7 +241,8 @@ class WatcherManager {
 
   async _resolve(w) {
     if (w.target) return w.target;
-    try { w.target = (await this.resolveTarget(w)) || null; } catch { w.target = null; }
+    try { w.target = (await this.resolveTarget(w)) || null; }
+    catch (e) { w.target = null; console.error(`[watcher] 水印解析失败（${w.cfg.id}）:`, e.message); }
     return w.target;
   }
 }

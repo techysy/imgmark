@@ -398,16 +398,21 @@ async function applyPreset(id) {
   }, 250);
 }
 
+/** 相机参数组判定：enabled 显式 false 才算关（老方案数据里可能没有 enabled，别把它当成没配） */
+function isTextGroup(g) {
+  return !!(g && g.text && g.text.enabled !== false && Array.isArray(g.text.fields) && g.text.fields.length);
+}
+
 /** 把方案里的分组与选项套用到界面（logo 已就绪时调用；无 logo 的纯相机参数方案也走这里） */
 function applyPresetData(meta) {
   const hint = $('preset-hint');
   const logoCount = state.logoSet ? state.logoSet.logos.length : 0;
   const restored = JSON.parse(JSON.stringify(meta.data.groups || []));
   // 相机参数那一组没有 logos，会被下面的 logo 过滤丢掉 —— 先摘出来单独还原到 UI
-  const textGroup = restored.find((g) => g && g.text && g.text.enabled) || null;
+  const textGroup = restored.find((g) => isTextGroup(g)) || null;
   applyExifGroup(textGroup);
   state.groups = restored
-    .filter((g) => !(g && g.text && g.text.enabled))
+    .filter((g) => !isTextGroup(g))
     .map((g) => ({ ...g, logos: (g.logos || []).filter((i) => i < logoCount) }))
     .filter((g) => g.logos.length);
   if (!state.groups.length && logoCount) state.groups = [defaultGroup(state.logoSet.logos.map((_, i) => i))];
@@ -760,7 +765,7 @@ function groupsForPayload() {
 
 /** 方案恢复：把存下来的相机参数组回填到 UI（传 null 表示这套方案没开这项） */
 function applyExifGroup(g) {
-  const on = !!(g && g.text && g.text.enabled);
+  const on = isTextGroup(g);
   $('opt-exif').checked = on;
   if (!on) {
     // 老方案没有这一项：清成默认值，别把上一次的配置留在界面上
