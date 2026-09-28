@@ -374,21 +374,34 @@ async function loadTarget(buffer) {
   return { buffer: png, meta: { ...meta, format: 'bmp' } };
 }
 
+/** format → 输出扩展名。encodeCompose 与「没有可合成内容时原样返回」共用，两边必须一致 */
+function extForFormat(f) {
+  switch (f) {
+    case 'jpeg': case 'jpg': return '.jpg';
+    case 'avif': case 'heif': return '.avif'; // sharp 把 AVIF 输入报告为 heif
+    case 'tiff': return '.tiff';
+    case 'gif': return '.gif';
+    case 'bmp': return '.bmp';
+    default: return '.png';
+  }
+}
+
 async function encodeCompose(base, meta, { format = 'auto', quality = 90, mozjpeg = false }) {
   const fmt = format === 'auto' ? (meta.format || 'png') : format;
-  let out, ext;
+  const ext = extForFormat(fmt);
+  let out;
   switch (fmt) {
     // mozjpeg 体积小约 10-15%，但编码慢约 5 倍（24MP 约 570ms vs 90ms），默认用 libjpeg-turbo
-    case 'jpeg': case 'jpg': out = base.jpeg({ quality, mozjpeg: !!mozjpeg }); ext = '.jpg'; break;
-    case 'webp': out = base.webp({ quality }); ext = '.webp'; break;
-    case 'avif': case 'heif': out = base.avif({ quality }); ext = '.avif'; break; // sharp 把 AVIF 输入报告为 heif
-    case 'tiff': out = base.tiff(); ext = '.tiff'; break;
-    case 'gif': out = base.gif(); ext = '.gif'; break;
+    case 'jpeg': case 'jpg': out = base.jpeg({ quality, mozjpeg: !!mozjpeg }); break;
+    case 'webp': out = base.webp({ quality }); break;
+    case 'avif': case 'heif': out = base.avif({ quality }); break;
+    case 'tiff': out = base.tiff(); break;
+    case 'gif': out = base.gif(); break;
     case 'bmp': { // sharp 不能写 BMP，取 raw 自行编码
       const { data, info } = await base.raw().toBuffer({ resolveWithObject: true });
       return { buffer: encodeBmp(data, info.width, info.height, info.channels), ext: '.bmp' };
     }
-    default: out = base.png({ compressionLevel: 6 }); ext = '.png'; // 照片类内容上 6 比 9 快约 2 倍且不更大
+    default: out = base.png({ compressionLevel: 6 }); // 照片类内容上 6 比 9 快约 2 倍且不更大
   }
   return { buffer: await out.toBuffer(), ext };
 }
@@ -568,13 +581,14 @@ async function composeGroups(targetBuffer, groupDefs, o = {}) {
       top: clampNum(Math.round(y + (go.offsetY || 0)), 0, H - wmH),
     }, frame));
   }
-  // 一组都没叠上（例如全是文字组、而这张图没有 EXIF）→ 原样返回，
+  // 一组都没叠上（例如全是文字组、而这张图没有 EXIF）→ 能原样返回就原样返回，
   // 不要白跑一次有损编码：没水印的图再压一遍纯属掉画质。
-  // ext 要跟 encodeCompose 在 format=auto 下的结果一致，否则会被当成换格式而重命名
-  if (!entries.length && !frame) {
-    const f = (format === 'auto' ? (meta.format || 'png') : format);
-    const ext = f === 'jpeg' || f === 'jpg' ? '.jpg' : '.' + f;
-    return { buffer: targetBuffer, ext, skipped: true };
+  // 但调用方强制了不同输出格式时必须照办（否则 PNG 字节被写成 .jpg 更糟）；
+  // ext 与 encodeCompose 的输出一致，跳过时也没有「换格式而重命名」的问题
+  const srcExt = extForFormat(meta.format || 'png');
+  const outExt = extForFormat(format === 'auto' ? (meta.format || 'png') : format);
+  if (!entries.length && !frame && outExt === srcExt) {
+    return { buffer: targetBuffer, ext: srcExt, skipped: true };
   }
   const base = frame
     ? sharp(targetBuffer).withMetadata()      // 边框产物已摆正，再 rotate 会按 EXIF 二次旋转
@@ -668,24 +682,30 @@ function sourceIsPortrait(meta) {
  *   options.cropRatioPort —— 仅当勾了「横竖分开设置」才有值，只作用于竖图
  * 竖图会优先用 cropRatioPort；没配置或对竖图不生效时，回落到 cropRatio
  * （落在不带前缀的比例上 → 仍然裁剪，所以「不勾分开设置」的行为与旧版一致）。
+ * options.format/quality/mozjpeg —— 裁剪必然重编码，用与合成同一套编码参数写回，
+ * 否则质量滑杆 / mozjpeg 会被 sharp 默认值（JPEG q80、AVIF q50）悄悄盖掉。
  */
 async function applyCrop(buffer, opts) {
   const o = opts || {};
   if (!o.cropRatio && !o.cropRatioPort) return buffer;
-  const meta = await sharp(buffer).metadata();
-  if (sourceIsPortrait(meta) && o.cropRatioPort) {
-    // 竖图专用的那个比例若对竖图不生效（理论上不会，选项都是 port@ 开头），
-    // 就不裁剪 —— 不要悄悄改用横图的比例裁掉一张竖图
-    return cropOutput(buffer, o.cropRatioPort, meta);
-  }
-  return cropOutput(buffer, o.cropRatio, meta);
+  // 与合成管线同一条解码路：BMP 由内置编解码器转 PNG 进 sharp，meta.format 仍记为 bmp
+  const { buffer: work, meta } = await loadTarget(buffer);
+  const enc = {
+    format: o.format || 'auto',
+    quality: Number.isFinite(+o.quality) ? Math.max(50, Math.min(100, +o.quality)) : 90,
+    mozjpeg: !!o.mozjpeg,
+  };
+  const ratio = sourceIsPortrait(meta) && o.cropRatioPort ? o.cropRatioPort : o.cropRatio;
+  const out = await cropOutput(work, ratio, meta, enc);
+  // 没裁动时 cropOutput 原样交回 work —— 此时要把没转过格式的原始字节还回去
+  return out === work ? buffer : out;
 }
 
-async function cropOutput(buffer, ratio, metaIn) {
+async function cropOutput(buffer, ratio, metaIn, enc = {}) {
   const spec = parseCropRatio(ratio);
   if (!spec) return buffer;
 
-  const meta = metaIn || await sharp(buffer).metadata();
+  const meta = metaIn || (await loadTarget(buffer)).meta;
   const oriented = meta.orientation && meta.orientation >= 5;
   const W = oriented ? meta.height : meta.width;
   if (spec.scope !== 'any' && spec.scope !== (sourceIsPortrait(meta) ? 'port' : 'land')) {
@@ -719,10 +739,15 @@ async function cropOutput(buffer, ratio, metaIn) {
   cropLeft = Math.max(0, Math.min(cropLeft, W - cropW));
   cropTop = Math.max(0, Math.min(cropTop, H - cropH));
 
-  return sharp(buffer).rotate()
-    .extract({ left: cropLeft, top: cropTop, width: cropW, height: cropH })
-    .withMetadata({ orientation: undefined })
-    .toBuffer();
+  // 裁剪改了像素，输出必须重编码 —— 走 encodeCompose 与合成共用同一套格式/质量规则
+  const { buffer: out } = await encodeCompose(
+    sharp(buffer).rotate()
+      .extract({ left: cropLeft, top: cropTop, width: cropW, height: cropH })
+      .withMetadata({ orientation: undefined }),
+    meta,
+    enc,
+  );
+  return out;
 }
 
 async function smartOffset(buffer, W, H, cropW, cropH, axis) {
