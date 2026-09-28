@@ -36,7 +36,8 @@ function normBrand(make) {
   // 逐个剥而不是一次匹配：后缀可能叠着出现（COMPANY, LTD. 连着来）
   let s = String(make).trim();
   for (let i = 0; i < 3; i++) {
-    const t = s.replace(/\s*[,，]?\s*(corporation|corp\.?|company|inc\.?|ltd\.?|limited|co\.?|gmbh|ag|k\.?k\.?|s\.?a\.?s\.?|pty\.?\s*ltd\.?)\s*$/i, '').trim();
+    // 后缀前面必须真有分隔（空格/逗号）：写成可空边界会把 TELCO 这类词尾当成 "CO" 剥掉
+    const t = s.replace(/[\s,，]+(corporation|corp\.?|company|inc\.?|ltd\.?|limited|co\.?|gmbh|ag|k\.?k\.?|s\.?a\.?s\.?|pty\.?\s*ltd\.?)\s*$/i, '').trim();
     if (t === s) break;
     s = t;
   }

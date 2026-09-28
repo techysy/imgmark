@@ -296,16 +296,7 @@ async function composeWatermark(targetBuffer, wmBuffer, o = {}, wmAltBuffer = nu
   const W = oriented ? meta.height : meta.width;
   const H = oriented ? meta.width : meta.height;
 
-  // 文字水印：按本图 EXIF 现场渲染，之后与 logo 走同一条缩放/合成管线
-  let altBuffer = wmAltBuffer;
-  if (o.textSpec) {
-    const text = formatCameraText(await readExif(sharp, targetBuffer), o.textSpec);
-    if (!text) return encodeCompose(sharp(targetBuffer).rotate().withMetadata(), meta, { format, quality, mozjpeg });
-    wmBuffer = (await renderTextWatermark(text, o.textSpec.style || {})).buffer;
-    // 反色变体同样现场渲染（autoColor 要用）
-    const style = o.textSpec.style || {};
-    altBuffer = (await renderTextWatermark(text, { ...style, color: style.color === '#ffffff' ? '#000000' : '#ffffff' })).buffer;
-  }
+  // （相机参数文字水印只走 composeGroups 的 textSpec 路径，这里不再保留第二套实现）
 
   // 缩放水印（反色变体与主变体走同一条缩放/旋转管线，保证尺寸一致）
   const targetW = Math.max(8, Math.round(sizeBaseDim(W, H, sizeBase) * sizePct / 100));
@@ -322,7 +313,7 @@ async function composeWatermark(targetBuffer, wmBuffer, o = {}, wmAltBuffer = nu
 
   // 亮度自适应黑白：平铺按全图亮度，单点按水印落点矩形亮度，
   // 亮区域配深色墨、暗区域配浅色墨（分界 LUM_THRESHOLD）
-  if (o.autoColor && Buffer.isBuffer(altBuffer)) {
+  if (o.autoColor && Buffer.isBuffer(wmAltBuffer)) {
     let region = null;
     if (!tile) {
       const [x, y] = positionXY(position, W, H, wmW, wmH, margin);
@@ -331,10 +322,10 @@ async function composeWatermark(targetBuffer, wmBuffer, o = {}, wmAltBuffer = nu
       region = { left, top, width: Math.max(2, Math.min(wmW, W - left)), height: Math.max(2, Math.min(wmH, H - top)) };
     }
     const lum = await regionLuminance(targetBuffer, region);
-    const [lumBase, lumAlt] = await Promise.all([inkLuminance(wmBuffer), inkLuminance(altBuffer)]);
+    const [lumBase, lumAlt] = await Promise.all([inkLuminance(wmBuffer), inkLuminance(wmAltBuffer)]);
     const wantDark = lum > LUM_THRESHOLD;
     const baseIsDarker = lumBase <= lumAlt;
-    if (wantDark !== baseIsDarker) wmBuf = (await fitInside(await buildWm(altBuffer), W, H)).buf; // 只在需要时才缩放反色变体
+    if (wantDark !== baseIsDarker) wmBuf = (await fitInside(await buildWm(wmAltBuffer), W, H)).buf; // 只在需要时才缩放反色变体
   }
 
   // 透明度
@@ -555,7 +546,14 @@ async function composeGroups(targetBuffer, groupDefs, o = {}) {
       const [gx, gy] = positionXY(go.position || 'se', W, H, wmW, wmH, margin);
       const left = Math.max(0, Math.min(W - 2, Math.round(gx + (go.offsetX || 0))));
       const top = Math.max(0, Math.min(H - 2, Math.round(gy + (go.offsetY || 0))));
-      const region = { left, top, width: Math.max(2, Math.min(wmW, W - left)), height: Math.max(2, Math.min(wmH, H - top)) };
+      // 采样坐标在「画布」上：套了边框时照片矩形相对画布有 padLeft/padTop 偏移，得加回去，
+      // 否则采到的是留白/错位区域的亮度，黑白标会选反
+      const region = {
+        left: left + (frame ? frame.padLeft : 0),
+        top: top + (frame ? frame.padTop : 0),
+        width: Math.max(2, Math.min(wmW, W - left)),
+        height: Math.max(2, Math.min(wmH, H - top)),
+      };
       const lum = await regionLuminance(targetBuffer, region);
       const wantDark = lum > LUM_THRESHOLD;
       let altSource = g.wmAltBuffer;

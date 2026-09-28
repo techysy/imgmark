@@ -113,7 +113,9 @@ async function checkFontAvailable(fontFamily = 'sans-serif') {
     // 用一个一定有字形、且笔画密度不低的字符；同时验证非 ASCII 路径
     const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="80" height="40">`
       + `<text x="4" y="30" font-family="${escXml(fontFamily)}" font-size="30" fill="#000">Aα</text></svg>`;
-    const { data } = await sharp(Buffer.from(svg)).ensureAlpha().greyscale().raw()
+    // 必须先压平到白底再数墨：透明背景的像素灰度是 0，直接数会把「什么都没画」
+    // 误判成满页墨迹，自检永远通过 —— 而它要抓的恰恰就是这种全透明输出
+    const { data } = await sharp(Buffer.from(svg)).flatten({ background: '#ffffff' }).greyscale().raw()
       .toBuffer({ resolveWithObject: true });
     let ink = 0;
     for (let i = 0; i < data.length; i++) if (data[i] < 240) ink++;
