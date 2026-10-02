@@ -10,7 +10,7 @@ const assert = require('assert');
 const { spawn, spawnSync } = require('child_process');
 const sharp = require(path.join(__dirname, '..', 'app', 'server', 'node_modules', 'sharp'));
 
-const { prepareWatermark, mergeWatermarks, composeWatermark, composeGroups, applyCrop, applyResize } = require('../app/server/src/core/watermark');
+const { prepareWatermark, mergeWatermarks, composeWatermark, composeGroups, applyResize } = require('../app/server/src/core/watermark');
 const { runBatch, expectedExt, isInside } = require('../app/server/src/core/batch');
 
 const ROOT = path.join(__dirname, '..');
@@ -600,8 +600,8 @@ async function main() {
     assert(fs.existsSync(path.join(out, 'a_wm.jpg')) && fs.existsSync(path.join(out, 'a(2)_wm.jpg')), `输出: ${fs.readdirSync(out)}`);
   });
 
-  // ---------- [9] 输出裁剪（cropRatio）：条带方差选区 + 水印保留 ----------
-  console.log('\n[9] 输出裁剪：智能选区 / 水印不被裁掉 / 编码参数贯通');
+  // ---------- [9] 输出裁剪（cropRatio）：在加水印之前生效，水印按最终画面定位 ----------
+  console.log('\n[9] 输出裁剪：先裁后叠 / 智能选区 / 位置贴最终画面');
   // 800×400：左半随机噪声（细节多）、右半平坦灰 —— 1:1 裁剪应保留左半
   const cropTarget = Buffer.alloc(800 * 400 * 3);
   for (let y = 0; y < 400; y++) {
@@ -622,42 +622,48 @@ async function main() {
     }
     return n;
   };
-  await t('输出裁剪：对比将被裁掉的条带方差，保留细节多的一侧', async () => {
-    const out = await applyCrop(cropBasePng, { cropRatio: '1:1', format: 'png' });
-    const meta = await sharp(out).metadata();
+  await t('输出裁剪：方差偏好保留细节多的一侧（在无水印原图上分析）', async () => {
+    const { buffer } = await composeWatermark(cropBasePng, wmSvg.buffer,
+      { cropRatio: '1:1', format: 'png', position: 'nw', sizePct: 15, marginPct: 2 });
+    const meta = await sharp(buffer).metadata();
     assert.strictEqual(meta.width, 400);
     assert.strictEqual(meta.height, 400);
-    // 保留的应是噪声左半：右下角若为平坦灰区（方差≈0）则说明裁错了边
-    const { data, info } = await sharp(out).raw().toBuffer({ resolveWithObject: true });
+    // 保留的应是噪声左半：右半若为平坦灰（方差≈0）则说明裁错了边
+    const { data, info } = await sharp(buffer).raw().toBuffer({ resolveWithObject: true });
     let s = 0, s2 = 0, n = 0;
-    for (let y = 200; y < 400; y++) for (let x = 200; x < 400; x++) {
+    for (let y = 100; y < 300; y++) for (let x = 250; x < 350; x++) {
       const v = data[(y * info.width + x) * info.channels];
       s += v; s2 += v * v; n++;
     }
     const mean = s / n;
     assert(s2 / n - mean * mean > 400, `保留区应为噪声（方差 ${(s2 / n - mean * mean).toFixed(0)}）`);
+    // 水印按最终画面定位在 nw：应贴输出左上角
+    const red = await redCount(buffer, [0, 0, 200, 200]);
+    assert(red > 30, `水印应贴最终画面左上角（红色像素 ${red}）`);
   });
-  await t('输出裁剪：方差偏好与水印保留冲突时，完整保留水印', async () => {
-    const { buffer, ext, wmRects } = await composeWatermark(cropBasePng, wmSvg.buffer,
-      { position: 'se', sizePct: 20, marginPct: 2, format: 'png' });
-    assert.strictEqual(ext, '.png');
-    assert(Array.isArray(wmRects) && wmRects.length === 1 && wmRects[0].width > 0, '应回传水印落点矩形');
-    // 左半方差大本想保左，但水印在右下 —— 窗口必须整体挪过去罩住水印
-    const out = await applyCrop(buffer, { cropRatio: '1:1', format: 'png' }, wmRects);
-    const meta = await sharp(out).metadata();
+  await t('水印位置按裁剪后的最终画面计算（回归：先叠标再裁剪的错位）', async () => {
+    // 旧顺序（先叠 se 再裁剪）会把水印留在原图右下，裁剪窗罩左半后它整块落在窗外
+    const { buffer } = await composeWatermark(cropBasePng, wmSvg.buffer,
+      { cropRatio: '1:1', format: 'png', position: 'se', sizePct: 20, marginPct: 2 });
+    const meta = await sharp(buffer).metadata();
     assert.strictEqual(meta.width, 400);
     assert.strictEqual(meta.height, 400);
-    const red = await redCount(out, [200, 200, 400, 400]);
-    assert(red > 100, `裁剪结果应完整包含水印（右下区红色像素 ${red}）`);
+    const redCorner = await redCount(buffer, [330, 330, 400, 400]);
+    assert(redCorner > 30, `水印应贴最终画面右下角（角落红色像素 ${redCorner}）`);
   });
-  await t('输出裁剪：无水印约束时居中/方差偏好照旧；分组合成同样回传落点', async () => {
-    // 同一构图但没有 wmRects：回到方差偏好，保留左半（不含水印，无红色）
-    const noWm = await applyCrop(cropBasePng, { cropRatio: '1:1', format: 'png' });
-    assert.strictEqual((await redCount(noWm, [0, 0, 400, 400])), 0, '左半不应出现水印红');
-    const { wmRects } = await composeGroups(cropBasePng,
+  await t('方向前缀不适用时原样输出；分组合成同样先裁后叠', async () => {
+    const { buffer } = await composeWatermark(cropBasePng, wmSvg.buffer,
+      { cropRatio: 'port@4:5', format: 'png', position: 'se', sizePct: 10 });
+    const m = await sharp(buffer).metadata();
+    assert.strictEqual(m.width, 800);
+    assert.strictEqual(m.height, 400);
+    const { buffer: gBuf } = await composeGroups(cropBasePng,
       [{ wmBuffer: wmSvg.buffer, options: { position: 'se', sizePct: 20, marginPct: 2 } }],
-      { format: 'png' });
-    assert(Array.isArray(wmRects) && wmRects.length === 1, '分组合成应回传水印落点矩形');
+      { cropRatio: '1:1', format: 'png' });
+    const gm = await sharp(gBuf).metadata();
+    assert.strictEqual(gm.width, 400);
+    assert.strictEqual(gm.height, 400);
+    assert((await redCount(gBuf, [200, 200, 400, 400])) > 30, '分组水印应贴最终画面右下角');
   });
 
   // ---------- [9b] 输出缩放（maxLongEdge）：裁剪后等比缩小，只缩不放 ----------

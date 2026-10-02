@@ -12,7 +12,7 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { IMAGE_EXTS, extOf, composeWatermark, composeGroups, applyCrop, applyResize } = require('./watermark');
+const { IMAGE_EXTS, extOf, composeWatermark, composeGroups, applyResize } = require('./watermark');
 const { outPathFor, expectedExt, isInside, pathKey, assertOutputTarget } = require('./batch');
 const { writeFileAtomic } = require('./db');
 
@@ -203,7 +203,7 @@ class WatcherManager {
       const composed = t.groups
         ? await composeGroups(buf, t.groups, t.options)
         : await composeWatermark(buf, t.watermark, t.options, t.watermarkAlt);
-      composed.buffer = await applyResize(await applyCrop(composed.buffer, t.options, composed.wmRects), t.options);
+      composed.buffer = await applyResize(composed.buffer, t.options);
       target = w.cfg.overwrite ? full : await this._freeTarget(w, full, composed.ext);
       await fs.promises.mkdir(path.dirname(target), { recursive: true });
       if (!w.cfg.overwrite) await assertOutputTarget(target, w.cfg.outputDir);

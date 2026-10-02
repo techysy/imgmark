@@ -12,7 +12,7 @@ const express = require('express');
 const multer = require('multer');
 const sharp = require('sharp');
 
-const { prepareWatermark, mergeWatermarks, composeWatermark, composeGroups, buildGroupWatermark, analyzeInk, applyCrop, applyResize, parseCropRatio, CROP_RATIOS, IMAGE_EXTS, WM_INPUT_EXTS, extOf } = require('./core/watermark');
+const { prepareWatermark, mergeWatermarks, composeWatermark, composeGroups, buildGroupWatermark, analyzeInk, applyResize, parseCropRatio, CROP_RATIOS, IMAGE_EXTS, WM_INPUT_EXTS, extOf } = require('./core/watermark');
 const { checkFontAvailable } = require('./core/textmark');
 const { formatCameraText } = require('./core/exiftext');
 const { runBatch, isInside, normalizeSuffix } = require('./core/batch');
@@ -651,12 +651,7 @@ app.post('/api/preview', express.json(), async (req, res) => {
     const options = body.options || {};
     if (body.groups != null && !Array.isArray(body.groups)) return res.status(400).json({ error: 'groups 必须为数组' });
     const orient = body.orient === 'portrait' ? 'portrait' : 'landscape'; // 示例图方向（仅预览用，不影响处理）
-    // 示例图方向决定用哪个裁剪比例：竖图示例看 cropRatioPort（勾了「横竖分开设置」时），
-    // 否则一律用 cropRatio —— 与批量处理里 applyCrop 的选法保持一致，
-    // 这样预览看到的就是实际会裁出来的画面。
-    const cropRatio = orient === 'portrait'
-      ? (options.cropRatioPort || options.cropRatio || null)
-      : (options.cropRatio || null);
+    // 裁剪比例由合成引擎内部按示例图方向挑选（cropRatioPort 只对竖图生效），预览即最终画面
     // 带了边框就必须走分组那条路：边框要先把画布撑大，再让水印位置按「照片矩形」换算，
     // 老的单水印合成里没有这一步。纯边框（无分组）也归这条路，否则会被下面
     // 「水印不存在」挡掉 —— 而批量处理早就允许只加边框了，两边行为得一致。
@@ -683,10 +678,10 @@ app.post('/api/preview', express.json(), async (req, res) => {
       } : null;
       const toPreviewG = async (kind) => {
         const composed = await composeGroups(await getSampleImage(kind, orient), groupDefs,
-          { sizeBase: options.sizeBase, frame: previewFrame });
-        // 预览同样走 裁剪→缩放：用户设置长边上限后能直接看到输出大小
-        composed.buffer = await applyResize(
-          await applyCrop(composed.buffer, { cropRatio }, composed.wmRects), options);
+          { sizeBase: options.sizeBase, frame: previewFrame,
+            cropRatio: options.cropRatio, cropRatioPort: options.cropRatioPort });
+        // 预览与批量同一条管线：裁剪在合成内部（水印前）生效，最后只做长边收敛
+        composed.buffer = await applyResize(composed.buffer, options);
         return previewDataUrl(composed);
       };
       const preview = await toPreviewG('light');
@@ -700,8 +695,7 @@ app.post('/api/preview', express.json(), async (req, res) => {
     const altBuf = options.autoColor && wm.altPath ? fs.readFileSync(wm.altPath) : null;
     const toPreview = async (sample) => {
       const composed = await composeWatermark(await getSampleImage(sample, orient), wmBuffer, options, altBuf);
-      composed.buffer = await applyResize(
-        await applyCrop(composed.buffer, { cropRatio }, composed.wmRects), options);
+      composed.buffer = await applyResize(composed.buffer, options);
       return previewDataUrl(composed);
     };
     const preview = await toPreview('light');

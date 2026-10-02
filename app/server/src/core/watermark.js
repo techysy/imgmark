@@ -3,7 +3,7 @@
  * 水印准备 + 合成引擎。
  *
  * prepareWatermark: AI/SVG/PNG/JPG/WebP… → 统一转成"去底透明 PNG"水印
- * composeWatermark: 把透明水印合成到目标图上（九宫格定位/平铺/透明度/缩放/旋转）
+ * composeWatermark: 把透明水印合成到目标图上（输出裁剪先于水印；九宫格定位/平铺/透明度/缩放/旋转）
  */
 const path = require('path');
 const sharp = require('sharp');
@@ -279,9 +279,9 @@ async function fitInside(buf, W, H) {
  *   format: auto|png|jpeg|webp（auto 保持原格式）
  *   quality: jpeg/webp 质量（默认 90）
  *   autoColor: 亮度自适应黑白（需第 4 参提供反色变体，否则忽略）
+ *   cropRatio / cropRatioPort: 输出裁剪（在加水印前生效，水印按裁剪后的最终画面定位）
  * @param {Buffer} [wmAltBuffer] 反色变体（analyzeInk 生成）；autoColor 开启时按落点区域亮度二选一
- * @returns {{buffer, ext, wmRects?:Array<{left,top,width,height}>}} wmRects = 水印落点矩形
- *   （相对合成后画布，已按 EXIF 摆正）；平铺满图时不给。输出裁剪据此避免把水印裁掉
+ * @returns {{buffer, ext}}
  */
 async function composeWatermark(targetBuffer, wmBuffer, o = {}, wmAltBuffer = null) {
   const {
@@ -294,10 +294,18 @@ async function composeWatermark(targetBuffer, wmBuffer, o = {}, wmAltBuffer = nu
   targetBuffer = src.buffer;
   const meta = src.meta;
   const oriented = meta.orientation && meta.orientation >= 5; // 5-8 需交换宽高
-  const W = oriented ? meta.height : meta.width;
-  const H = oriented ? meta.width : meta.height;
+  let W = oriented ? meta.height : meta.width;
+  let H = oriented ? meta.width : meta.height;
 
   // （相机参数文字水印只走 composeGroups 的 textSpec 路径，这里不再保留第二套实现）
+
+  // 输出裁剪在加水印之前生效：水印位置/亮度采样都按裁剪后的最终画面计算
+  const cropRect = (o.cropRatio || o.cropRatioPort) ? await cropWindow(targetBuffer, meta, o) : null;
+  if (cropRect) {
+    W = cropRect.width; H = cropRect.height;
+  }
+  // 亮度采样发生在未裁剪的源图上：最终画面坐标 → 源图坐标
+  const toSource = (r) => (r && cropRect ? { ...r, left: r.left + cropRect.left, top: r.top + cropRect.top } : r);
 
   // 缩放水印（反色变体与主变体走同一条缩放/旋转管线，保证尺寸一致）
   const targetW = Math.max(8, Math.round(sizeBaseDim(W, H, sizeBase) * sizePct / 100));
@@ -315,14 +323,22 @@ async function composeWatermark(targetBuffer, wmBuffer, o = {}, wmAltBuffer = nu
   // 亮度自适应黑白：平铺按全图亮度，单点按水印落点矩形亮度，
   // 亮区域配深色墨、暗区域配浅色墨（分界 LUM_THRESHOLD）
   if (o.autoColor && Buffer.isBuffer(wmAltBuffer)) {
-    let region = null;
+    // 采样区域：单点按水印落点（最终画面坐标 → 源图坐标）；平铺按全图，
+    // 有裁剪时取裁剪窗（已是源图坐标，不必再偏移），避免被裁掉的部分带偏黑白判断
+    let sampleRect = null;
     if (!tile) {
       const [x, y] = positionXY(position, W, H, wmW, wmH, margin);
       const left = clampNum(Math.round(x + offsetX), 0, W - 2);
       const top = clampNum(Math.round(y + offsetY), 0, H - 2);
-      region = { left, top, width: Math.max(2, Math.min(wmW, W - left)), height: Math.max(2, Math.min(wmH, H - top)) };
+      sampleRect = toSource({
+        left, top,
+        width: Math.max(2, Math.min(wmW, W - left)),
+        height: Math.max(2, Math.min(wmH, H - top)),
+      });
+    } else if (cropRect) {
+      sampleRect = { ...cropRect };
     }
-    const lum = await regionLuminance(targetBuffer, region);
+    const lum = await regionLuminance(targetBuffer, sampleRect);
     const [lumBase, lumAlt] = await Promise.all([inkLuminance(wmBuffer), inkLuminance(wmAltBuffer)]);
     const wantDark = lum > LUM_THRESHOLD;
     const baseIsDarker = lumBase <= lumAlt;
@@ -332,9 +348,10 @@ async function composeWatermark(targetBuffer, wmBuffer, o = {}, wmAltBuffer = nu
   // 透明度
   wmBuf = await scaledAlphaOpacity(wmBuf, Math.max(1, Math.min(100, opacity)));
 
-  const base = sharp(targetBuffer).rotate().withMetadata(); // 自动按 EXIF 摆正 + 保留 EXIF/ICC 等元数据
+  const base = sharp(targetBuffer).rotate();
+  if (cropRect) base.extract({ left: cropRect.left, top: cropRect.top, width: cropRect.width, height: cropRect.height });
+  base.withMetadata(); // 自动按 EXIF 摆正 + 裁剪 + 保留 EXIF/ICC 等元数据
 
-  let wmRects = null;
   if (tile) {
     const gap = Math.max(0, Math.round(wmW * tileGapPct / 100));
     base.composite([await renderTileOverlay(wmBuf, wmW, wmH, W, H, gap)]);
@@ -344,11 +361,9 @@ async function composeWatermark(targetBuffer, wmBuffer, o = {}, wmAltBuffer = nu
     const left = clampNum(Math.round(x + offsetX), 0, W - wmW);
     const top = clampNum(Math.round(y + offsetY), 0, H - wmH);
     base.composite([{ input: wmBuf, left, top }]);
-    wmRects = [{ left, top, width: wmW, height: wmH }];
   }
 
-  const result = await encodeCompose(base, meta, { format, quality, mozjpeg });
-  return wmRects ? { ...result, wmRects } : result;
+  return encodeCompose(base, meta, { format, quality, mozjpeg });
 }
 
 /** 合成结果编码（保持原格式/指定格式 + 质量）。composeWatermark / composeGroups 共用 */
@@ -475,6 +490,7 @@ function offsetEntry(entry, frame) {
  *   textSpec: 给了就按「这张图的 EXIF」现场渲染文字水印（相机参数），忽略 wmBuffer
  *   options: position/sizePct/marginPct/offsetX/offsetY/opacity/autoColor
  * @param {object} o format/quality（输出编码，全局）+ sizeBase: 'long'|'short'|'width'（大小基准，默认 width）
+ *   cropRatio / cropRatioPort: 输出裁剪（在加水印/边框之前生效，水印按裁剪后的最终画面定位）
  *   frame: {style, lines, bg, color, subColor, align} —— 给了就先把画布撑大套边框，
  *          水印全部按「照片那块矩形」定位（否则会落进留白里）
  */
@@ -490,6 +506,10 @@ async function composeGroups(targetBuffer, groupDefs, o = {}) {
   const src = await loadTarget(targetBuffer);
   targetBuffer = src.buffer;
   const meta = src.meta;
+
+  // 输出裁剪在加水印/边框之前生效：水印按裁剪后的最终画面计算。
+  // 边框路径物理裁剪（边框要拿裁剪后的照片撑画布）；无边框时裁剪进合成管线，不落中间编码
+  const cropRect = (o.cropRatio || o.cropRatioPort) ? await cropWindow(targetBuffer, meta, o) : null;
 
   // 边框：先撑大画布，之后所有水印都相对照片区域定位
   let frame = null;
@@ -508,7 +528,12 @@ async function composeGroups(targetBuffer, groupDefs, o = {}) {
       }
     }
     if (!frameOpts.skip) {
-      const fr = await applyFrame(targetBuffer, frameOpts);
+      const frameInput = cropRect
+        ? await sharp(targetBuffer).rotate()
+            .extract({ left: cropRect.left, top: cropRect.top, width: cropRect.width, height: cropRect.height })
+            .png().toBuffer()
+        : targetBuffer;
+      const fr = await applyFrame(frameInput, frameOpts);
       frame = { padLeft: fr.cropRect.left, padTop: fr.cropRect.top, photoW: fr.cropRect.width, photoH: fr.cropRect.height };
       targetBuffer = fr.buffer;
       // targetBuffer 变成了 PNG（中间产物，无所谓），但 meta.format 必须保留原格式 ——
@@ -517,8 +542,11 @@ async function composeGroups(targetBuffer, groupDefs, o = {}) {
   }
 
   const oriented = !frame && meta.orientation && meta.orientation >= 5;
-  const W = frame ? frame.photoW : (oriented ? meta.height : meta.width);
-  const H = frame ? frame.photoH : (oriented ? meta.width : meta.height);
+  let W = frame ? frame.photoW : (oriented ? meta.height : meta.width);
+  let H = frame ? frame.photoH : (oriented ? meta.width : meta.height);
+  if (!frame && cropRect) {
+    W = cropRect.width; H = cropRect.height;
+  }
   // 文字水印要按「这张图」的 EXIF 渲染：同一批里每张图的相机参数都可能不同，
   // 所以不能像 logo 那样在提交任务前预先建好 —— 这里按需解析一次，多组共用。
   // 样式预览的示例图没有 EXIF，靠 group 上的 previewExif 注入一份「典型相机参数」
@@ -530,7 +558,6 @@ async function composeGroups(targetBuffer, groupDefs, o = {}) {
   const exifFor = async (g) => (g.previewExif || await exifOf());
   const baseDim = sizeBaseDim(W, H, sizeBase);
   const entries = [];
-  const wmRects = []; // 各组水印落点（相对最终画布），输出裁剪时优先完整保留
   for (const g of groupDefs) {
     const go = g.options || {};
     const targetW = Math.max(8, Math.round(baseDim * clampNum(go.sizePct ?? 20, 2, 100) / 100));
@@ -554,10 +581,10 @@ async function composeGroups(targetBuffer, groupDefs, o = {}) {
       const left = Math.max(0, Math.min(W - 2, Math.round(gx + (go.offsetX || 0))));
       const top = Math.max(0, Math.min(H - 2, Math.round(gy + (go.offsetY || 0))));
       // 采样坐标在「画布」上：套了边框时照片矩形相对画布有 padLeft/padTop 偏移，得加回去，
-      // 否则采到的是留白/错位区域的亮度，黑白标会选反
+      // 否则采到的是留白/错位区域的亮度，黑白标会选反；未套边框但裁剪时同理加回裁剪偏移
       const region = {
-        left: left + (frame ? frame.padLeft : 0),
-        top: top + (frame ? frame.padTop : 0),
+        left: left + (frame ? frame.padLeft : (cropRect ? cropRect.left : 0)),
+        top: top + (frame ? frame.padTop : (cropRect ? cropRect.top : 0)),
         width: Math.max(2, Math.min(wmW, W - left)),
         height: Math.max(2, Math.min(wmH, H - top)),
       };
@@ -583,7 +610,6 @@ async function composeGroups(targetBuffer, groupDefs, o = {}) {
     const left = clampNum(Math.round(x + (go.offsetX || 0)), 0, W - wmW);
     const top = clampNum(Math.round(y + (go.offsetY || 0)), 0, H - wmH);
     entries.push(offsetEntry({ input: wmBuf, left, top }, frame));
-    wmRects.push(offsetEntry({ left, top, width: wmW, height: wmH }, frame));
   }
   // 一组都没叠上（例如全是文字组、而这张图没有 EXIF）→ 能原样返回就原样返回，
   // 不要白跑一次有损编码：没水印的图再压一遍纯属掉画质。
@@ -591,15 +617,20 @@ async function composeGroups(targetBuffer, groupDefs, o = {}) {
   // ext 与 encodeCompose 的输出一致，跳过时也没有「换格式而重命名」的问题
   const srcExt = extForFormat(meta.format || 'png');
   const outExt = extForFormat(format === 'auto' ? (meta.format || 'png') : format);
-  if (!entries.length && !frame && outExt === srcExt) {
+  // 裁剪激活时不能走「原样返回」：即使没画任何水印，输出也必须是裁剪后的画面
+  if (!entries.length && !frame && !cropRect && outExt === srcExt) {
     return { buffer: targetBuffer, ext: srcExt, skipped: true };
   }
-  const base = frame
-    ? sharp(targetBuffer).withMetadata()      // 边框产物已摆正，再 rotate 会按 EXIF 二次旋转
-    : sharp(targetBuffer).rotate().withMetadata();
-  base.composite(entries);
-  const result = await encodeCompose(base, meta, { format, quality, mozjpeg });
-  return wmRects.length ? { ...result, wmRects } : result;
+  let base;
+  if (frame) {
+    base = sharp(targetBuffer).withMetadata(); // 边框产物已摆正，再 rotate 会按 EXIF 二次旋转
+  } else {
+    base = sharp(targetBuffer).rotate();
+    if (cropRect) base.extract({ left: cropRect.left, top: cropRect.top, width: cropRect.width, height: cropRect.height });
+    base.withMetadata();
+  }
+  if (entries.length) base.composite(entries);
+  return encodeCompose(base, meta, { format, quality, mozjpeg });
 }
 
 /**
@@ -682,78 +713,45 @@ function sourceIsPortrait(meta) {
 }
 
 /**
- * 按 options 里的裁剪配置处理一张已合成的图。
+ * 计算输出裁剪窗口（相对「按 EXIF 摆正后」的源图坐标），供合成管线在**加水印前**取景。
  *   options.cropRatio     —— 横图用的比例（不带 land@/port@ 前缀时两个方向都套用）
  *   options.cropRatioPort —— 仅当勾了「横竖分开设置」才有值，只作用于竖图
- * 竖图会优先用 cropRatioPort；没配置或对竖图不生效时，回落到 cropRatio
- * （落在不带前缀的比例上 → 仍然裁剪，所以「不勾分开设置」的行为与旧版一致）。
- * options.format/quality/mozjpeg —— 裁剪必然重编码，用与合成同一套编码参数写回，
- * 否则质量滑杆 / mozjpeg 会被 sharp 默认值（JPEG q80、AVIF q50）悄悄盖掉。
- * wmRects —— composeWatermark/composeGroups 回传的水印落点矩形，选保留区域时优先完整保留。
+ * 竖图会优先用 cropRatioPort；带 land@/port@ 前缀的比例对不适用方向时返回 null；
+ * 目标比例与原图一致（差 <1%）视为无需裁剪。选区在无水印的原图上做亮度方差分析，
+ * 保留细节多的一侧 —— 先裁后叠，水印位置即最终画面位置，预览与输出一致。
  */
-async function applyCrop(buffer, opts, wmRects = null) {
-  const o = opts || {};
-  if (!o.cropRatio && !o.cropRatioPort) return buffer;
-  // 与合成管线同一条解码路：BMP 由内置编解码器转 PNG 进 sharp，meta.format 仍记为 bmp
-  const { buffer: work, meta } = await loadTarget(buffer);
-  const enc = {
-    format: o.format || 'auto',
-    quality: Number.isFinite(+o.quality) ? Math.max(50, Math.min(100, +o.quality)) : 90,
-    mozjpeg: !!o.mozjpeg,
-  };
+async function cropWindow(buffer, meta, o) {
   const ratio = sourceIsPortrait(meta) && o.cropRatioPort ? o.cropRatioPort : o.cropRatio;
-  const out = await cropOutput(work, ratio, meta, enc, wmRects);
-  // 没裁动时 cropOutput 原样交回 work —— 此时要把没转过格式的原始字节还回去
-  return out === work ? buffer : out;
-}
-
-async function cropOutput(buffer, ratio, metaIn, enc = {}, wmRects = null) {
   const spec = parseCropRatio(ratio);
-  if (!spec) return buffer;
+  if (!spec) return null;
+  if (spec.scope !== 'any' && spec.scope !== (sourceIsPortrait(meta) ? 'port' : 'land')) return null;
+  if (!spec.rw || !spec.rh) return null;
 
-  const meta = metaIn || (await loadTarget(buffer)).meta;
   const oriented = meta.orientation && meta.orientation >= 5;
   const W = oriented ? meta.height : meta.width;
-  if (spec.scope !== 'any' && spec.scope !== (sourceIsPortrait(meta) ? 'port' : 'land')) {
-    return buffer;
-  }
-  const { rw, rh } = spec;
-  if (!rw || !rh) return buffer;
-
   const H = oriented ? meta.width : meta.height;
-  const targetAR = rw / rh;
+  const targetAR = spec.rw / spec.rh;
   const srcAR = W / H;
-
-  if (Math.abs(targetAR - srcAR) < 0.01) return buffer;
+  if (Math.abs(targetAR - srcAR) < 0.01) return null;
 
   let cropW, cropH, cropLeft, cropTop;
-
   if (targetAR > srcAR) {
     cropW = W;
     cropH = Math.round(W / targetAR);
     cropLeft = 0;
-    cropTop = await smartOffset(buffer, W, H, cropW, cropH, 'vertical', wmRects);
+    cropTop = await smartOffset(buffer, W, H, cropW, cropH, 'vertical');
   } else {
     cropH = H;
     cropW = Math.round(H * targetAR);
     cropTop = 0;
-    cropLeft = await smartOffset(buffer, W, H, cropW, cropH, 'horizontal', wmRects);
+    cropLeft = await smartOffset(buffer, W, H, cropW, cropH, 'horizontal');
   }
-
-  cropW = Math.min(cropW, W);
-  cropH = Math.min(cropH, H);
-  cropLeft = Math.max(0, Math.min(cropLeft, W - cropW));
-  cropTop = Math.max(0, Math.min(cropTop, H - cropH));
-
-  // 裁剪改了像素，输出必须重编码 —— 走 encodeCompose 与合成共用同一套格式/质量规则
-  const { buffer: out } = await encodeCompose(
-    sharp(buffer).rotate()
-      .extract({ left: cropLeft, top: cropTop, width: cropW, height: cropH })
-      .withMetadata({ orientation: undefined }),
-    meta,
-    enc,
-  );
-  return out;
+  return {
+    left: Math.max(0, Math.min(cropLeft, W - cropW)),
+    top: Math.max(0, Math.min(cropTop, H - cropH)),
+    width: Math.min(cropW, W),
+    height: Math.min(cropH, H),
+  };
 }
 
 /**
@@ -761,10 +759,9 @@ async function cropOutput(buffer, ratio, metaIn, enc = {}, wmRects = null) {
  * 裁掉细节更少的一侧；两侧差异都不显著（未达 1.3 倍）时居中。
  * 条带边界按原图尺寸等比映射到 64×64 缩略图（fit:'fill' 是均匀压缩，行/列线性对应），
  * 比较的对象是真正会被丢弃的部分，而不是与裁剪无关的整幅半区。
- * keepRects：水印落点矩形（同轴坐标）。窗口装得下时，把方差偏好 clamp 进
- * 「完整保留水印」的偏移区间 —— 裁剪不能把刚叠上去的水印切掉一半。
+ * 在加水印之前的原图上分析，方差不会被水印墨迹带偏。
  */
-async function smartOffset(buffer, W, H, cropW, cropH, axis, keepRects = null) {
+async function smartOffset(buffer, W, H, cropW, cropH, axis) {
   const T = 64;
   const vertical = axis === 'vertical';
   const total = vertical ? H : W;
@@ -789,33 +786,15 @@ async function smartOffset(buffer, W, H, cropW, cropH, axis, keepRects = null) {
   const varA = vertical ? variance(0, span, 0, T) : variance(0, T, 0, span);
   const varB = vertical ? variance(T - span, T, 0, T) : variance(0, T, T - span, T);
 
-  // 水印保留约束：所有落点矩形的包围盒完整落入裁剪窗口的偏移区间 [lo, hi]
-  let lo = 0, hi = excess;
-  if (Array.isArray(keepRects) && keepRects.length) {
-    let boxFrom = Infinity, boxTo = -Infinity;
-    for (const r of keepRects) {
-      const from = vertical ? r.top : r.left;
-      const to = vertical ? r.top + r.height : r.left + r.width;
-      boxFrom = Math.min(boxFrom, from);
-      boxTo = Math.max(boxTo, to);
-    }
-    if (boxTo - boxFrom <= cropLen) {
-      lo = Math.max(0, boxTo - cropLen);
-      hi = Math.min(excess, boxFrom);
-    }
-  }
-
-  let pref;
-  if (varA > varB * 1.3) pref = 0;        // 起始边细节多 → 从结束边裁
-  else if (varB > varA * 1.3) pref = excess; // 结束边细节多 → 从起始边裁
-  else pref = Math.round(excess / 2);
-  return Math.max(lo, Math.min(hi, pref));
+  if (varA > varB * 1.3) return 0;        // 起始边细节多 → 从结束边裁
+  if (varB > varA * 1.3) return excess;   // 结束边细节多 → 从起始边裁
+  return Math.round(excess / 2);
 }
 
 /**
  * 输出缩放：长边超过 maxLongEdge 的图等比缩小（只缩不放）。
  * 在裁剪之后执行 —— 先定画面比例，再把像素收敛到目标长边，水印随画面一起缩。
- * 没超限（或没配置）时原样返回原始字节：与 applyCrop 的跳过路径同款，
+ * 没超限（或没配置）时原样返回原始字节：与合成管线的跳过路径同款，
  * 不需要重编码的图绝不白跑一次有损编码。EXIF/ICC 保留，orientation 已被 rotate 摆正。
  */
 async function applyResize(buffer, opts) {
@@ -845,4 +824,4 @@ async function applyResize(buffer, opts) {
   return out;
 }
 
-module.exports = { prepareWatermark, mergeWatermarks, composeWatermark, composeGroups, buildGroupWatermark, analyzeInk, cropOutput, applyCrop, applyResize, parseCropRatio, CROP_RATIOS, IMAGE_EXTS, WM_INPUT_EXTS, extOf };
+module.exports = { prepareWatermark, mergeWatermarks, composeWatermark, composeGroups, buildGroupWatermark, analyzeInk, applyResize, parseCropRatio, CROP_RATIOS, IMAGE_EXTS, WM_INPUT_EXTS, extOf };
