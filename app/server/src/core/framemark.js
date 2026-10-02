@@ -84,7 +84,11 @@ async function applyFrame(srcBuffer, o = {}) {
 
   const padPct = o.padPct != null ? o.padPct : preset.pad;
   const botPct = o.bottomPct != null ? o.bottomPct : preset.bottom;
-  const pad = Math.round(short * clampNum(padPct, 0, 0.3));
+  let pad = Math.round(short * clampNum(padPct, 0, 0.3));
+  // inset 的装裱细线是一层 (src+2)×(src+2) 的描边、贴在 pad-1 —— pad<2 时层比画布还大，
+  // sharp 会拒绝合成（Image to composite must have same dimensions or smaller）。
+  // inset 本义就是「四周留白 + 内缩细线」，pad 不足 2px 时补到 2px
+  if (style === 'inset' && border) pad = Math.max(pad, 2);
   const bot = Math.round(short * clampNum(botPct, 0, 0.4));
 
   const outW = srcW + pad * 2;

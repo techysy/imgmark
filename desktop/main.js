@@ -144,7 +144,7 @@ function createTray() {
 
 // ---- 原生对话框（强化文件/文件夹选择能力）----
 const IMAGE_EXTS = ['jpg', 'jpeg', 'png', 'webp', 'bmp', 'gif', 'tif', 'tiff', 'avif'];
-const WM_EXTS = ['ai', 'svg', 'png', 'jpg', 'jpeg', 'webp', 'bmp', 'gif', 'tif', 'tiff'];
+const WM_EXTS = ['ai', 'svg', 'png', 'jpg', 'jpeg', 'webp', 'bmp', 'gif', 'tif', 'tiff', 'avif'];
 
 ipcMain.handle('pick-images', async () => {
   const r = await dialog.showOpenDialog(win, {

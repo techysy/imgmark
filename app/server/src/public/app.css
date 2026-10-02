@@ -23,9 +23,10 @@ button, input, select { font-family: inherit; font-size: inherit; color: inherit
 .hidden { display: none !important; }
 .muted { color: var(--muted); font-size: 12px; }
 
-/* ---- header（CreditDaddy .head 风格：品牌左、工具右） ---- */
+/* ---- header（CreditDaddy .head 风格：品牌左、工具右） ----
+   与导航/内容区同轴：同收 980px 居中，三段左右边缘对齐 */
 header { display: flex; align-items: center; justify-content: space-between; gap: 12px;
-  max-width: 1240px; margin: 0 auto; padding: 16px 22px 4px; }
+  max-width: 980px; margin: 0 auto; padding: 16px 22px 4px; }
 .brand { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .brand .logo-emoji { font-size: 26px; line-height: 1; }
 .brand .title { font-family: "Avenir Next", Avenir, "Segoe UI Variable Display", "Segoe UI", sans-serif;
@@ -41,29 +42,33 @@ header .status { font-size: 12px; color: var(--muted); display: flex; gap: 7px; 
 .icon-btn:hover { background: var(--active); color: var(--txt); }
 .icon-btn svg { width: 15px; height: 15px; }
 
-main { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; padding: 12px 22px 30px; max-width: 1240px; margin: 0 auto; }
-@media (max-width: 980px) { main { grid-template-columns: 1fr; } }
-.col { display: flex; flex-direction: column; gap: 14px; }
-/* ② 分组卡只占内容宽度（--gc-w），剩下的宽度由预览列自动填满。
-   注意：这里不能用 flex-grow 按 6:4 分——左列内容只有卡片那么宽，多出来的
-   空间会被 flex 均分给两列，于是「卡片右边缘 → 预览图左边缘」之间空出几十像素。
-   改成「左列按内容收缩 + 右列 flex:1 吃掉全部剩余」后，预览左边缘始终紧贴卡片。 */
+/* ---- 顶部视图导航（CreditDaddy .nav 同款：胶囊按钮 + 角标） ----
+   三个视图 DOM 常驻、.view 只做显隐 —— 各视图的表单状态、预览与事件绑定原样保留。
+   胶囊宽度随内容收缩（CreditDaddy 同款 fit-content），不做全宽；
+   左边缘对齐居中的内容列（980px）：窄屏退到 22px 与 main 边距一致。
+   内容收敛到 980px：正好是旧双栏布局塌成单列的断点宽度，
+   宽屏上输入框不至于拉满 1200px，分组卡(330) + 预览(≥200)的 55:45 行也装得下。 */
+.nav { display: flex; gap: 4px; padding: 4px; width: fit-content; max-width: calc(100% - 44px);
+  margin: 10px 0 0 max(22px, calc((100% - 980px) / 2));
+  background: var(--card); border: 1px solid var(--border-subtle); border-radius: 12px; overflow-x: auto; }
+.nav button { display: inline-flex; align-items: center; gap: 6px; border: none; background: transparent;
+  color: var(--muted); font-size: 13px; font-weight: 600; padding: 7px 14px; border-radius: 9px; cursor: pointer;
+  white-space: nowrap; transition: background .15s, color .15s; }
+.nav button:hover { color: var(--txt); background: var(--hover); }
+.nav button.active { background: var(--btn-bg); color: var(--btn-fg); }
+.nav .cnt { font-size: 11px; font-weight: 600; padding: 1px 6px; border-radius: 999px;
+  background: var(--tertiary); color: var(--text-3); font-variant-numeric: tabular-nums; }
+.nav button.active .cnt { background: rgba(255,255,255,.18); color: inherit; }
+html[data-theme="dark"] .nav button.active .cnt { background: rgba(0,0,0,.12); }
+
+main { display: grid; grid-template-columns: 1fr; gap: 14px; padding: 12px 22px 30px; max-width: 1240px; margin: 0 auto; }
+.view { display: none; flex-direction: column; gap: 14px; }
+.view.active { display: flex; max-width: 980px; width: 100%; margin: 0 auto; }
+/* ② 分组行：g-row 只装分组列（分组卡 330px + 「添加分组」按钮沉到列底）。
+   预览已提为 ① 卡片 style-split 的右列，不再与本行同排（分栏样式见 .preview-box 一节）。 */
 .g-row { align-items: flex-start; }
-/* 左列宽度 = 卡片宽度（--gc-w），不用 auto：.grow 里面是 330px 的卡片 + 更宽的 .gc-ctrl，
-   flex-basis:auto 会按内容 max-content 撑到整个行宽，于是 + 预览 + gap 超出行宽 → 预览被换行。
-   显式绑到 --gc-w 后，左列就是卡片那么宽，预览才拿得到剩下的空间。 */
-/* 55:45 —— 左列 55%、预览 45%（gap 14 从总宽扣，故实际是 299 : 245）。
-   用 flex-basis 0 + grow 55/45：两列都从 0 开始按比例分配，卡片不会因为
-   内容 max-content 更宽而抢占份额（这正是之前预览被挤换行的原因）。 */
-/* ② 的分组列：没分组时只有「添加分组」一个按钮，而右列预览有 221px 高。
-   两列都是 align-self:flex-start，行高由最高的预览决定，按钮就被压在行首 ——
-   卡片下方因此出现 190px 空白。这里让左列撑满行高、按钮沉到行底，
-   「＋ 添加分组」正好落在预览图底边那一行，空白消失。
-   auto margin 只在 free space > 0 时生效（即未换行、行内有富余高度时），
-   窗口窄到预览换行后两列等宽等高，行为退回原样，不会把按钮推远。 */
 .g-row > .grow { flex: 55 1 0; min-width: 0; display: flex; flex-direction: column; }
-.g-row > .grow > #group-add { margin-top: auto; }
-.g-row > .preview-box { flex: 45 1 0; min-width: 200px; }
+.g-row > .grow > #group-add { margin-top: auto; align-self: flex-start; }
 /* ② 卡片里其余的 55:45 行（亮度自适应 / 大小基准）见下方 .row.g-row > .field ——
    那条要写在「.row > .field 定宽」之后才生效，故不在这一块。 */
 
@@ -175,15 +180,18 @@ input[type="checkbox"] { accent-color: var(--pri); }
 .preview-cap { font-size: 11px; color: var(--text-3); display: block; margin-top: 3px; }
 #preview-orient { justify-content: center; margin-bottom: 8px; }
 #preview-orient .tab { padding: 3px 12px; font-size: 12px; }
-/* ② 右列的窄预览：横图/竖图两个按钮并排一行、各占一半宽（等分用 flex:1 1 0，
-   这样按钮宽度跟随预览列宽，不再随文字长短一宽一窄）；按钮文字压到一行不换行，
-   列再窄也只是挤，不会变成上下堆叠。图按列宽自适应（点击仍可放大看原尺寸）。
-   注意：右列比左列矮（左列是分组卡），align-items 默认拉伸会把 9 宫格拉高，
-   这里给预览列 flex-start 保持它自己的高度。 */
-.g-row > .preview-box { align-self: flex-start; }
-.g-row > .preview-box img { max-width: 100%; }
-.g-row > .preview-box #preview-orient { flex-wrap: nowrap; gap: 4px; }
-.g-row > .preview-box #preview-orient .tab { flex: 1 1 0; width: auto; min-width: 0; white-space: nowrap; padding: 3px 4px; }
+
+/* ---- ① 水印样式：设置区（左）与共用样式预览（右）左右分栏 ----
+   55:45 沿用旧版「分组卡 | 预览」的分配；预览列吸顶 —— logo 分组配置可以很长，
+   滚动时预览仍留在视口里。窄屏（<880px）退回上下堆叠。 */
+.style-split { display: flex; gap: 14px; align-items: flex-start; }
+.style-config { flex: 55 1 0; min-width: 0; }
+.style-split > .preview-box { flex: 45 1 0; min-width: 220px; position: sticky; top: 12px; }
+.style-split > .preview-box img { max-width: 100%; }
+@media (max-width: 880px) {
+  .style-split { flex-direction: column; }
+  .style-split > .preview-box { position: static; }
+}
 
 
 /* ---- 预览放大（lightBox：点击示例图看原尺寸） ---- */
@@ -369,3 +377,12 @@ select.dd-native { position: absolute; width: 1px; height: 1px; opacity: 0; poin
   border-radius: 7px; background: transparent; color: var(--txt); white-space: nowrap; font-size: 13px; }
 .dd-item:hover { background: var(--hover); }
 .dd-item.on { background: color-mix(in srgb, var(--pri) 10%, transparent); color: var(--pri-dk); font-weight: 650; }
+
+/* ---- ① 水印样式：三类型页签 + 共用样式预览 ---- */
+/* 页签保持普通 tab 的尺寸：自适应宽度，只把字重稍加重一点以示区分 */
+.type-tabs .tab { padding: 6px 14px; font-weight: 600; }
+.type-tabs { margin-bottom: 6px; }
+.type-note { margin: 0 0 12px; }
+/* 各类型面板之间的分隔：与来源页签同款虚线 */
+.type-panel { padding-top: 2px; }
+.type-panel + .type-panel { border-top: 1px dashed var(--border-subtle); }

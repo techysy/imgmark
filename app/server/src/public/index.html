@@ -31,11 +31,19 @@
   </div>
 </header>
 
+<!-- 视图导航（CreditDaddy 模式：三个视图 DOM 常驻、只做显隐切换 —— 各视图的表单状态、
+     预览与事件绑定都原样保留，切走再切回不丢；角标显示监听数与任务进度） -->
+<nav class="nav" id="nav">
+  <button type="button" data-view="style" class="active">水印样式</button>
+  <button type="button" data-view="batch">批量处理<span class="cnt hidden" id="cnt-job"></span></button>
+  <button type="button" data-view="watch">文件夹监听<span class="cnt hidden" id="cnt-watch">0</span></button>
+</nav>
+
 <main>
-  <section class="col">
+  <section class="view active" id="view-style">
     <!-- ⓪ 方案 -->
     <div class="card">
-      <h2>⓪ 方案 <small>logo 原文件与全部分组参数保存在程序数据目录，换浏览器/清缓存/重启后一键恢复</small></h2>
+      <h2>⓪ 方案 <small>logo 原文件与全部参数保存在程序数据目录，换浏览器/清缓存/重启后一键恢复</small></h2>
       <div class="preset-bar">
         <div class="preset-picker">
           <button id="preset-toggle" class="btn preset-toggle" aria-expanded="false">
@@ -52,107 +60,97 @@
       <div id="preset-hint" class="notes">下拉可浏览全部方案的参数摘要；选中即加载</div>
     </div>
 
-    <!-- ① 水印文件 -->
+    <!-- ① 水印样式：三种类型三选一（图标水印 / 相机参数 / 相框），
+         引擎里它们本就是三条独立链路（logo 分组 / EXIF 文字组 / options.frame），
+         界面把它们提为一级类型，选哪个就只配哪个，互不干扰。
+         底部的样式预览三类型共用，即改即预览。 -->
     <div class="card">
-      <h2>① logo 管理 <small>AI / SVG / PNG / JPG，白底或黑底自动转透明，每个 logo 独立去底</small></h2>
-      <div class="row">
-        <label class="file-btn" id="wm-file-btn">添加 logo（可多选）
-          <input type="file" id="wm-file" accept=".ai,.svg,.png,.jpg,.jpeg,.webp,.bmp,.gif,.tif,.tiff" multiple hidden>
-        </label>
-        <span id="wm-name" class="muted">未选择</span>
+      <h2>① 水印样式 <small>三种类型选一种，参数即改即预览</small></h2>
+      <div class="tabs type-tabs" id="wm-type-tabs">
+        <button type="button" class="tab on" data-wtype="logo">图标水印</button>
+        <button type="button" class="tab" data-wtype="exif">相机参数</button>
+        <button type="button" class="tab" data-wtype="frame">相框</button>
       </div>
-      <div id="logo-list" class="logo-list"></div>
-      <div class="row wm-preview-row">
-        <div class="preview-side">
-          <div class="checker" id="wm-preview-wrap">
-            <div class="img-holder">
-              <img id="wm-preview" alt="水印预览" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='190' height='150'%3E%3Ctext x='95' y='70' text-anchor='middle' font-family='sans-serif' font-size='12' fill='%239aa0a6'%3E添加 logo 后预览%3C/text%3E%3Ctext x='95' y='92' text-anchor='middle' font-family='sans-serif' font-size='11' fill='%23b9bec5'%3E支持 AI / SVG / PNG / JPG%3C/text%3E%3C/svg%3E">
-              <div id="crop-rect" class="crop-rect hidden"></div>
+      <div id="type-note" class="notes type-note">上传 logo 后按分组布局叠到画面上</div>
+
+      <!-- 设置区（左）与样式预览（右）左右分栏；预览三类型共用，配置长时滚动吸顶 -->
+      <div class="style-split">
+      <div class="style-config">
+
+      <!-- 类型一：图标水印（logo 管理 + 分组布局） -->
+      <div id="type-logo" class="type-panel">
+        <div class="row">
+          <label class="file-btn" id="wm-file-btn">添加 logo（可多选）
+            <input type="file" id="wm-file" accept=".ai,.svg,.png,.jpg,.jpeg,.webp,.bmp,.gif,.tif,.tiff" multiple hidden>
+          </label>
+          <span id="wm-name" class="muted">未选择</span>
+        </div>
+        <div id="logo-list" class="logo-list"></div>
+        <div class="row wm-preview-row">
+          <div class="preview-side">
+            <div class="checker" id="wm-preview-wrap">
+              <div class="img-holder">
+                <img id="wm-preview" alt="水印预览" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='190' height='150'%3E%3Ctext x='95' y='70' text-anchor='middle' font-family='sans-serif' font-size='12' fill='%239aa0a6'%3E添加 logo 后预览%3C/text%3E%3Ctext x='95' y='92' text-anchor='middle' font-family='sans-serif' font-size='11' fill='%23b9bec5'%3E支持 AI / SVG / PNG / JPG%3C/text%3E%3C/svg%3E">
+                <div id="crop-rect" class="crop-rect hidden"></div>
+              </div>
+            </div>
+            <div id="crop-tools">
+              <div class="row-inline" style="gap:6px;margin:0">
+                <button id="crop-btn" class="btn tiny" disabled>✂ 框选裁剪</button>
+                <button id="crop-reset" class="btn tiny" disabled>重置</button>
+              </div>
+              <div id="crop-status" class="notes"></div>
             </div>
           </div>
-          <div id="crop-tools">
-            <div class="row-inline" style="gap:6px;margin:0">
-              <button id="crop-btn" class="btn tiny" disabled>✂ 框选裁剪</button>
-              <button id="crop-reset" class="btn tiny" disabled>重置</button>
+          <div class="wm-meta">
+            <div class="field">
+              <label>底色识别</label>
+              <select id="wm-bg">
+                <option value="auto">自动（白底/黑底）</option>
+                <option value="white">强制白底</option>
+                <option value="black">强制黑底</option>
+              </select>
             </div>
-            <div id="crop-status" class="notes"></div>
+            <div class="field">
+              <label>去底容差 <b id="tol-v">40</b></label>
+              <input type="range" id="wm-tol" min="5" max="150" value="40">
+            </div>
+            <div class="field check">
+              <label><input type="checkbox" id="wm-trim" checked> 自动裁掉边缘空白（去边）</label>
+            </div>
+            <div class="field check">
+              <label><input type="checkbox" id="wm-force"> 已有透明通道时仍强制去底</label>
+            </div>
+            <div id="wm-notes" class="notes"></div>
           </div>
         </div>
-        <div class="wm-meta">
+        <!-- 分组布局 -->
+        <div class="row g-row">
+          <div class="grow">
+            <div id="groups-box"></div>
+            <button id="group-add" class="btn" disabled>＋ 添加分组</button>
+          </div>
+        </div>
+        <div class="row g-row">
+          <div class="field check">
+            <label title="按图片明暗自动换黑/白 logo"><input type="checkbox" id="opt-autocolor" disabled> 亮度自适应黑白（自动换黑/白 logo）</label>
+            <div id="autocolor-hint" class="notes"></div>
+          </div>
           <div class="field">
-            <label>底色识别</label>
-            <select id="wm-bg">
-              <option value="auto">自动（白底/黑底）</option>
-              <option value="white">强制白底</option>
-              <option value="black">强制黑底</option>
+            <label>大小基准</label>
+            <select id="opt-sizebase">
+              <option value="long" selected>长边（横竖构图同实际大小）</option>
+              <option value="short">短边</option>
+              <option value="width">图宽</option>
             </select>
           </div>
-          <div class="field">
-            <label>去底容差 <b id="tol-v">40</b></label>
-            <input type="range" id="wm-tol" min="5" max="150" value="40">
-          </div>
-          <div class="field check">
-            <label><input type="checkbox" id="wm-trim" checked> 自动裁掉边缘空白（去边）</label>
-          </div>
-          <div class="field check">
-            <label><input type="checkbox" id="wm-force"> 已有透明通道时仍强制去底</label>
-          </div>
-          <div id="wm-notes" class="notes"></div>
         </div>
       </div>
-    </div>
 
-    <!-- ② 水印分组 -->
-    <div class="card">
-      <h2>② 水印分组 <small>每组独立定位/大小/间距，可放 1 个或多个 logo，参数即改即预览</small></h2>
-      <!-- 分组卡在左（宽度见 --gc-w）、样式预览在右。
-           左列按内容收缩、右列吃掉全部剩余宽度，两者之间不留空隙。 -->
-      <div class="row g-row">
-        <div class="grow">
-          <div id="groups-box"></div>
-          <button id="group-add" class="btn" disabled>＋ 添加分组</button>
-        </div>
-        <div class="preview-box">
-          <div class="tabs" id="preview-orient">
-            <button type="button" class="tab on" data-orient="landscape">横图示例</button>
-            <button type="button" class="tab" data-orient="portrait">竖图示例</button>
-          </div>
-          <img id="style-preview" alt="样式预览" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='420' height='280'%3E%3Crect x='0' y='0' width='420' height='280' fill='%23dde3ea'/%3E%3Ccircle cx='90' cy='70' r='42' fill='%23ffffff' opacity='.35'/%3E%3Crect x='280' y='180' width='110' height='66' fill='%233d4f63' opacity='.3' rx='8'/%3E%3Ctext x='210' y='145' text-anchor='middle' font-family='sans-serif' font-size='13' fill='%237a8494'%3E添加 logo 并配置分组后预览%3C/text%3E%3C/svg%3E"><span class="preview-cap" id="preview-cap">样式预览（亮图示例）</span>
-          <img id="style-preview-auto" class="hidden" alt="暗图预览"><span class="preview-cap hidden" id="preview-cap-auto">暗图示例（自动换白标）</span>
-        </div>
-      </div>
-      <!-- 与上面 g-row 同一条 55:45 竖线：亮度自适应占左 55、大小基准占右 45，
-           右栏宽度与样式预览列一致，整个 ② 卡片只有一条分割线 -->
-      <div class="row g-row">
-        <div class="field check">
-          <label title="按图片明暗自动换黑/白 logo"><input type="checkbox" id="opt-autocolor" disabled> 亮度自适应黑白（自动换黑/白 logo）</label>
-          <div id="autocolor-hint" class="notes"></div>
-        </div>
-        <div class="field">
-          <label>大小基准</label>
-          <select id="opt-sizebase">
-            <option value="long" selected>长边（横竖构图同实际大小）</option>
-            <option value="short">短边</option>
-            <option value="width">图宽</option>
-          </select>
-        </div>
-      </div>
-    </div>
-
-    <!-- ③ 相机参数水印：从每张图自己的 EXIF 读相机/镜头/曝光，渲染成一行文字水印。
-         与 logo 水印是「并列的第 N 组」，位置/大小跟普通分组一样配，可以只出文字不叠 logo。
-         字段与样式都是全局的一套 —— 同一批照片通常同一台相机，逐图调没意义。 -->
-    <div class="card">
-      <h2>③ 相机参数水印 <small>把相机品牌/镜头/曝光/日期写进画面，参数从每张照片的 EXIF 读</small></h2>
-      <div class="row">
-        <div class="field check" style="flex:1 1 100%">
-          <label title="勾选后把相机参数作为一组水印叠到图片上">
-            <input type="checkbox" id="opt-exif"> 叠加相机参数水印</label>
-          <div id="exif-note" class="notes">没有 EXIF 的照片会自动跳过这一组，不会留空水印</div>
-        </div>
-      </div>
-      <div id="exif-panel" class="hidden">
-        <!-- 输出哪些字段：勾选顺序即拼接顺序 -->
+      <!-- 类型二：相机参数（从每张图自己的 EXIF 读相机/镜头/曝光，渲染成一行文字水印） -->
+      <div id="type-exif" class="type-panel hidden">
+        <div class="notes">字段与样式是全局的一套 —— 同一批照片通常同一台相机，逐图调没意义。
+没有 EXIF 的照片会自动跳过，不会留空水印。</div>
         <div class="row">
           <div class="field" style="flex:1 1 100%">
             <label>输出内容</label>
@@ -188,7 +186,7 @@
             <label>后缀 <input type="text" id="exif-suffix" class="num" style="width:100%" placeholder="如  ©2026" maxlength="40"></label>
           </div>
         </div>
-        <!-- 位置/大小：与水印分组同义，但独立于分组，只作用于这一行文字 -->
+        <!-- 位置/大小：与分组同义，只作用于这一行文字 -->
         <div class="row-inline gc-ctrl">
           <div class="field"><label>位置</label>
             <div class="grid9 gc-pos" id="exif-pos"></div>
@@ -207,14 +205,15 @@
           </div>
         </div>
         <div class="notes">示例文案：<b id="exif-sample">—</b></div>
+      </div>
 
-        <!-- 边框容器：把参数放进新撑出来的留白里，而不是浮在画面上 —— 这是与上面「文字水印」的区别。
-             选了版式后，画面尺寸会变大（下方的条/四周的白边都算输出的一部分）。 -->
-        <div class="row" style="margin-top:12px">
+      <!-- 类型三：相框（把画布撑出留白，参数写进留白 —— 不是浮在画面上的文字） -->
+      <div id="type-frame" class="type-panel hidden">
+        <div class="row">
           <div class="field" style="flex:0 0 auto">
             <label>边框样式</label>
             <select id="exif-frame">
-              <option value="" selected>不加边框</option>
+              <option value="" selected>选择边框样式…</option>
               <option value="band">下方条幅（白底黑字）</option>
               <option value="frame">四周白框 + 底部文字</option>
               <option value="inset">装裱细线框（照片内缩）</option>
@@ -238,16 +237,29 @@
             <div class="field"><label>条幅文字 · 副行</label>
               <input type="text" id="exif-line2" class="num" style="width:100%" maxlength="120" placeholder="留空则自动填曝光参数"></div>
           </div>
-          <div class="notes">两行都留空 → 自动用「机型 / 曝光参数」。留白比例跟着短边走，横竖构图观感一致。</div>
         </div>
+        <div class="notes">两行都留空 → 自动用这张照片的「机型 / 曝光参数」，没有 EXIF 则整张跳过边框。
+留白比例跟着短边走，横竖构图观感一致。</div>
       </div>
+      </div><!-- /style-config -->
+
+      <!-- 样式预览：三种类型共用，点击可放大（分栏右列） -->
+      <div class="preview-box">
+        <div class="tabs" id="preview-orient">
+          <button type="button" class="tab on" data-orient="landscape">横图示例</button>
+          <button type="button" class="tab" data-orient="portrait">竖图示例</button>
+        </div>
+        <img id="style-preview" alt="样式预览" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='420' height='280'%3E%3Crect x='0' y='0' width='420' height='280' fill='%23dde3ea'/%3E%3Ccircle cx='90' cy='70' r='42' fill='%23ffffff' opacity='.35'/%3E%3Crect x='280' y='180' width='110' height='66' fill='%233d4f63' opacity='.3' rx='8'/%3E%3Ctext x='210' y='145' text-anchor='middle' font-family='sans-serif' font-size='13' fill='%237a8494'%3E选择水印样式后预览%3C/text%3E%3C/svg%3E"><span class="preview-cap" id="preview-cap">样式预览（亮图示例）</span>
+        <img id="style-preview-auto" class="hidden" alt="暗图预览"><span class="preview-cap hidden" id="preview-cap-auto">暗图示例（自动换白标）</span>
+      </div>
+      </div><!-- /style-split -->
     </div>
   </section>
 
-  <section class="col">
-    <!-- ④ 图片来源 -->
+  <section class="view" id="view-batch">
+    <!-- ② 图片来源 -->
     <div class="card">
-      <h2>④ 图片来源</h2>
+      <h2>② 图片来源</h2>
       <div class="tabs">
         <button class="tab" data-mode="fnos">飞牛授权目录</button>
         <button class="tab" data-mode="local">本地路径</button>
@@ -290,9 +302,9 @@
       </div>
     </div>
 
-    <!-- 输出设置 -->
+    <!-- ③ 输出设置 -->
     <div class="card">
-      <h2>⑤ 输出设置</h2>
+      <h2>③ 输出设置</h2>
       <!-- 输出裁剪独占一行：它带一行提示（智能裁剪…），跟别的挤一行会把提示挤到隔壁格下面去。
            裁剪在最前 —— 它决定画面，是这一步里最「上游」的选择。
            两个下拉：勾上「横竖分开设置」才各管一个方向，否则只有左边（横图）那个可用，
@@ -358,6 +370,10 @@
             <option value="webp">WebP</option>
           </select>
         </div>
+        <div class="field">
+          <label title="输出图片长边超过该值时等比缩小（只缩不放），水印随画面一起缩；留空保持原始尺寸">长边上限 (px)</label>
+          <input type="number" id="opt-maxedge" class="num" min="0" step="1" placeholder="不限">
+        </div>
       </div>
       <div class="row-inline wrap">
         <label class="check"><input type="checkbox" id="opt-recursive"> 包含子目录</label>
@@ -370,21 +386,23 @@
       </div>
       <div class="row-inline">
         <button id="run" class="btn primary big" disabled>开始处理</button>
-        <span id="run-hint" class="muted">先选水印文件和图片来源</span>
+        <span id="run-hint" class="muted">先配置水印样式和图片来源</span>
       </div>
     </div>
 
-    <!-- ⑥ 任务 -->
+    <!-- ④ 任务 -->
     <div class="card">
-      <h2>⑥ 任务进度</h2>
+      <h2>④ 任务进度</h2>
       <div class="progress"><div id="bar"></div></div>
       <div id="job-summary" class="muted">空闲</div>
       <div id="job-log" class="log"></div>
     </div>
+  </section>
 
-    <!-- ⑦ 文件夹监听 -->
+  <section class="view" id="view-watch">
+    <!-- ⑤ 文件夹监听 -->
     <div class="card">
-      <h2>⑦ 文件夹监听 <small>新图片落盘自动加水印 · 本地数据库校验不重复处理</small></h2>
+      <h2>⑤ 文件夹监听 <small>新图片落盘自动加水印 · 本地数据库校验不重复处理</small></h2>
       <div class="row-inline">
         <input type="text" id="watch-dir" placeholder="监听目录（绝对路径），如 C:\photos\inbox" class="path-input" style="flex:1;min-width:240px">
         <button id="watch-dir-pick" class="btn hidden">选择文件夹</button>
@@ -397,7 +415,7 @@
         <button id="watch-refresh" class="btn ghost">刷新状态</button>
       </div>
       <!-- 文案按「建监听 / 不重复 / 重启后」三件事各一行，短句比长段落好读 -->
-      <div id="watch-hint" class="notes">以当前 logo 与分组配置建立监听；输出目录内的文件不会再次处理。
+      <div id="watch-hint" class="notes">以当前水印样式建立监听；输出目录内的文件不会再次处理。
 服务重启后监听自动恢复，水印失效时需重建。</div>
       <div id="watch-list"></div>
     </div>

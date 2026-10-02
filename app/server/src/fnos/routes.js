@@ -114,7 +114,7 @@ function createFnosRouter({ client, listImages }) {
         path: dir,
         semanticPath: (sem || {}).semanticPath || dir,
         writable: !!(entry && entry.writable),
-        parents: roots.filter((r) => dir.startsWith(r.replace(/\/+$/, '') + '/')) .map((r) => r),
+        parents: roots.filter((r) => dir.startsWith(r.replace(/\/+$/, '') + '/')),
         dirs: dirs.slice(0, 500),
         imageCount: files.length,
         images: files.slice(0, 200).map((f) => f.name),

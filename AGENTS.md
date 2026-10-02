@@ -126,6 +126,8 @@ curl -s http://127.0.0.1:28110/api/jobs/<jobId>
 - 引擎可独立使用：`node -e "require('./src/core/exiftext').formatCameraText(exif, {fields:['camera']})"`
 
 - `options.sizeBase`：`long`（默认，同一相机横/竖构图水印实际像素大小一致）| `short` | `width`
+- `options.maxLongEdge`：输出长边上限（像素）。超过的图在**裁剪后**等比缩小（只缩不放，
+  水印随画面一起缩），EXIF/ICC 保留；留空/0 保持原始尺寸。没超限的图原样返回，不重编码
 - `options.autoColor`：组内 logo 全部为纯黑白墨时，按每张图水印落点亮度**整组**自动换黑标/白标；
   文字组没有备用变体，改为按同套字段换个墨色再渲一遍
 - 校验：`logos` 序号越界 → 500；分组数 1..8、每组 logo 数 1..8
@@ -169,7 +171,8 @@ node bin/wm.js apply -w combined.png -i /abs/photos --pos se --size 25 \
   --format auto --quality 90 -o /abs/photos/_wm --recursive
 ```
 
-CLI 暂不支持分组布局 / 监听 / 数据库去重（这三项走 HTTP API）。
+CLI 暂不支持分组布局 / 监听 / 数据库去重 / 输出裁剪 cropRatio / 输出缩放 maxLongEdge（这些走 HTTP API；
+CLI 的 `--crop` 是水印源裁剪，别混淆）。
 
 ## 7. 其他模式
 

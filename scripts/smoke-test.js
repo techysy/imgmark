@@ -10,7 +10,7 @@ const assert = require('assert');
 const { spawn, spawnSync } = require('child_process');
 const sharp = require(path.join(__dirname, '..', 'app', 'server', 'node_modules', 'sharp'));
 
-const { prepareWatermark, mergeWatermarks, composeWatermark } = require('../app/server/src/core/watermark');
+const { prepareWatermark, mergeWatermarks, composeWatermark, composeGroups, applyCrop, applyResize } = require('../app/server/src/core/watermark');
 const { runBatch, expectedExt, isInside } = require('../app/server/src/core/batch');
 
 const ROOT = path.join(__dirname, '..');
@@ -598,6 +598,142 @@ async function main() {
     mgr.remove(w.id);
     assert.strictEqual(st.stats.processed, 2, `应处理 2 张: ${JSON.stringify(st.stats)} ${st.lastError}`);
     assert(fs.existsSync(path.join(out, 'a_wm.jpg')) && fs.existsSync(path.join(out, 'a(2)_wm.jpg')), `输出: ${fs.readdirSync(out)}`);
+  });
+
+  // ---------- [9] 输出裁剪（cropRatio）：条带方差选区 + 水印保留 ----------
+  console.log('\n[9] 输出裁剪：智能选区 / 水印不被裁掉 / 编码参数贯通');
+  // 800×400：左半随机噪声（细节多）、右半平坦灰 —— 1:1 裁剪应保留左半
+  const cropTarget = Buffer.alloc(800 * 400 * 3);
+  for (let y = 0; y < 400; y++) {
+    for (let x = 0; x < 800; x++) {
+      const i = (y * 800 + x) * 3;
+      const v = x < 400 ? (Math.floor(Math.random() * 256) + y) % 256 : 128;
+      cropTarget[i] = cropTarget[i + 1] = cropTarget[i + 2] = v;
+    }
+  }
+  const cropBasePng = await sharp(cropTarget, { raw: { width: 800, height: 400, channels: 3 } }).png().toBuffer();
+  const redCount = async (buf, region) => {
+    const { data, info } = await sharp(buf).raw().toBuffer({ resolveWithObject: true });
+    const [x0, y0, x1, y1] = region;
+    let n = 0;
+    for (let y = y0; y < Math.min(y1, info.height); y++) for (let x = x0; x < Math.min(x1, info.width); x++) {
+      const i = (y * info.width + x) * info.channels;
+      if (data[i] > 180 && data[i + 1] < 110 && data[i + 2] < 110) n++;
+    }
+    return n;
+  };
+  await t('输出裁剪：对比将被裁掉的条带方差，保留细节多的一侧', async () => {
+    const out = await applyCrop(cropBasePng, { cropRatio: '1:1', format: 'png' });
+    const meta = await sharp(out).metadata();
+    assert.strictEqual(meta.width, 400);
+    assert.strictEqual(meta.height, 400);
+    // 保留的应是噪声左半：右下角若为平坦灰区（方差≈0）则说明裁错了边
+    const { data, info } = await sharp(out).raw().toBuffer({ resolveWithObject: true });
+    let s = 0, s2 = 0, n = 0;
+    for (let y = 200; y < 400; y++) for (let x = 200; x < 400; x++) {
+      const v = data[(y * info.width + x) * info.channels];
+      s += v; s2 += v * v; n++;
+    }
+    const mean = s / n;
+    assert(s2 / n - mean * mean > 400, `保留区应为噪声（方差 ${(s2 / n - mean * mean).toFixed(0)}）`);
+  });
+  await t('输出裁剪：方差偏好与水印保留冲突时，完整保留水印', async () => {
+    const { buffer, ext, wmRects } = await composeWatermark(cropBasePng, wmSvg.buffer,
+      { position: 'se', sizePct: 20, marginPct: 2, format: 'png' });
+    assert.strictEqual(ext, '.png');
+    assert(Array.isArray(wmRects) && wmRects.length === 1 && wmRects[0].width > 0, '应回传水印落点矩形');
+    // 左半方差大本想保左，但水印在右下 —— 窗口必须整体挪过去罩住水印
+    const out = await applyCrop(buffer, { cropRatio: '1:1', format: 'png' }, wmRects);
+    const meta = await sharp(out).metadata();
+    assert.strictEqual(meta.width, 400);
+    assert.strictEqual(meta.height, 400);
+    const red = await redCount(out, [200, 200, 400, 400]);
+    assert(red > 100, `裁剪结果应完整包含水印（右下区红色像素 ${red}）`);
+  });
+  await t('输出裁剪：无水印约束时居中/方差偏好照旧；分组合成同样回传落点', async () => {
+    // 同一构图但没有 wmRects：回到方差偏好，保留左半（不含水印，无红色）
+    const noWm = await applyCrop(cropBasePng, { cropRatio: '1:1', format: 'png' });
+    assert.strictEqual((await redCount(noWm, [0, 0, 400, 400])), 0, '左半不应出现水印红');
+    const { wmRects } = await composeGroups(cropBasePng,
+      [{ wmBuffer: wmSvg.buffer, options: { position: 'se', sizePct: 20, marginPct: 2 } }],
+      { format: 'png' });
+    assert(Array.isArray(wmRects) && wmRects.length === 1, '分组合成应回传水印落点矩形');
+  });
+
+  // ---------- [9b] 输出缩放（maxLongEdge）：裁剪后等比缩小，只缩不放 ----------
+  console.log('\n[9b] 输出缩放：长边上限 / 不放大 / EXIF 摆正 / 未超限原样返回');
+  await t('长边超限等比缩小；未超限与未配置原样返回同一 Buffer', async () => {
+    const big = fs.readFileSync(F.photoJpg); // 1200×800
+    const down = await applyResize(big, { maxLongEdge: 600, format: 'png' });
+    const m = await sharp(down).metadata();
+    assert.strictEqual(m.width, 600);
+    assert.strictEqual(m.height, 400);
+    assert.strictEqual(m.format, 'png', 'format 选项应与合成共用同一套编码规则');
+    const kept = await applyResize(big, { maxLongEdge: 2000 });
+    assert.strictEqual(kept, big, '未超限应原样返回（不重编码）');
+    const off = await applyResize(big, {});
+    assert.strictEqual(off, big, '未配置应原样返回');
+  });
+  await t('EXIF 摆正后的长边按可见方向计（orientation=6）', async () => {
+    // 存储 200×100、orientation=6 → 可见 100×200（竖图），长边 = 可见高 200
+    const withOri = await sharp({ create: { width: 200, height: 100, channels: 3, background: '#888' } })
+      .withMetadata({ orientation: 6 }).jpeg().toBuffer();
+    const down = await applyResize(withOri, { maxLongEdge: 50, format: 'png' });
+    const m = await sharp(down).metadata();
+    assert.strictEqual(m.width, 25);
+    assert.strictEqual(m.height, 50);
+    assert.notStrictEqual(m.orientation, 6, '摆正后不应残留 orientation=6');
+  });
+  await t('批量管线贯通：runBatch + maxLongEdge 输出为缩小后的图', async () => {
+    const dir = path.join(TMP, 'resize10'), out = path.join(dir, 'out');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.copyFileSync(F.photoJpg, path.join(dir, 'r.jpg')); // 1200×800
+    const r = await runBatch({ inputDir: dir, outputDir: out, watermark: wmWhite.buffer,
+      options: { maxLongEdge: 400 }, concurrency: 1 });
+    assert.strictEqual(r.ok, 1);
+    const m = await sharp(fs.readFileSync(path.join(out, 'r_wm.jpg'))).metadata();
+    assert.strictEqual(m.width, 400);
+    assert.strictEqual(m.height, 267); // Math.round(800 × 400/1200) = 267
+  });
+
+  // ---------- [10] 回归：文字水印不裁字 / 底色徽章紧贴墨迹 / inset 零边距 ----------
+  console.log('\n[10] 文字水印与边框回归');
+  // 参考渲染：同一文本画在远大于内容的画布上 → trim 得到真实墨迹宽
+  const trueInkWidth = async (svgText, ls = 0) => {
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="6000" height="200">`
+      + `<text x="0" y="150" font-family="sans-serif" font-size="96" font-weight="bold" fill="#000"${ls ? ` letter-spacing="${ls}"` : ''}>${svgText}</text></svg>`;
+    const buf = await sharp(Buffer.from(svg)).png().toBuffer();
+    return (await sharp(buf).trim({ threshold: 0 }).png().toBuffer({ resolveWithObject: true })).info.width;
+  };
+  await t('文字水印：宽字形（M/W）与正字距不被 SVG 视口裁掉', async () => {
+    const { renderTextWatermark } = require('../app/server/src/core/textmark');
+    const wide = 'W'.repeat(20);
+    const wm = await renderTextWatermark(wide, { fontSize: 96, fontWeight: 'bold' });
+    const refW = await trueInkWidth(wide);
+    assert(wm.width >= refW - 1, `宽字形不应被视口裁掉: 输出 ${wm.width}px < 真实墨迹 ${refW}px`);
+    const wmLs = await renderTextWatermark('Hello World', { fontSize: 96, letterSpacing: 40 });
+    const refLs = await trueInkWidth('Hello World', 40);
+    assert(wmLs.width >= refLs - 1, `正字距不应被视口裁掉: 输出 ${wmLs.width}px < 真实墨迹 ${refLs}px`);
+  });
+  await t('文字水印：底色徽章尺寸 = 墨迹 + 2×pad，四周留白均匀', async () => {
+    const { renderTextWatermark } = require('../app/server/src/core/textmark');
+    const plain = await renderTextWatermark('SONY ILCE-7M4', { fontSize: 96, fontWeight: 'bold' });
+    const badge = await renderTextWatermark('SONY ILCE-7M4', { fontSize: 96, fontWeight: 'bold', bg: '#111111', padding: 20 });
+    assert.strictEqual(badge.width, plain.width + 40, `徽章宽应为墨迹 ${plain.width} + 2×20，实际 ${badge.width}`);
+    assert.strictEqual(badge.height, plain.height + 40);
+    const { data, info } = await sharp(badge.buffer).raw().toBuffer({ resolveWithObject: true });
+    const at = (x, y) => [data[(y * info.width + x) * 4], data[(y * info.width + x) * 4 + 1], data[(y * info.width + x) * 4 + 2]];
+    assert.deepStrictEqual(at(0, 0), [17, 17, 17], '四角应为底色');
+    assert.deepStrictEqual(at(info.width - 1, 0), [17, 17, 17], '右缘应为底色（估宽不再带来松散右边）');
+  });
+  await t('inset 边框 padPct=0：描边层装得进画布，不再抛错', async () => {
+    const { applyFrame } = require('../app/server/src/core/framemark');
+    const img = await sharp({ create: { width: 300, height: 200, channels: 3, background: '#888' } }).png().toBuffer();
+    const r = await applyFrame(img, { style: 'inset', padPct: 0, bottomPct: 0.1, lines: ['IMGMARK'] });
+    const m = await sharp(r.buffer).metadata();
+    assert.strictEqual(m.width, r.width);
+    // 装裱线是 (src+2) 的描边层贴在 pad-1：画布必须 ≥ src+4 才装得下
+    assert(r.width >= 304, `inset 描边需要最小留白，画布至少 304px 宽，实际 ${r.width}`);
   });
 
   console.log(`\n结果：${pass} 通过，${fail} 失败  （fixtures 保留在 ${TMP}）`);

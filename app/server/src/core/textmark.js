@@ -23,20 +23,28 @@ function escXml(s) {
 }
 
 /**
- * 估宽度：按经验比例。CJK/全角按 1.0 em，其余按 0.55 em。
- * 只用来定 SVG 画布大小；画布大一点无害，渲染后再用 trim 收掉多余透明边。
+ * 估宽度：按经验比例，宁大勿小 —— 它只决定临时画布的下限，渲染后按墨迹 trim 收掉，
+ * 估大了无害（多占点临时内存），估小了会把字裁掉。
+ * 系数取自 bold 无衬线实测（W≈0.95em 最宽、大写平均≈0.7em）再留跨机器字体差异的余量：
+ * CJK/全角/emoji 按 1.0 em，em dash 一类按 1.15 em，M/W/m/w 宽字形按 1.05 em，其余 0.85 em。
+ * 正字距按字符间隙累加；负字距只会更窄，忽略。
  */
-function estimateWidth(text, fontSize) {
-  let em = 0;
+const WIDE_GLYPHS = new Set(['M', 'W', 'm', 'w']);
+function estimateWidth(text, fontSize, letterSpacing = 0) {
+  let em = 0, chars = 0;
   for (const ch of String(text)) {
+    chars++;
     const cp = ch.codePointAt(0);
-    // 全角/CJK/emoji 约 1em，其余约 0.55em
+    // 全角/CJK/emoji 约 1em
     em += (cp >= 0x1100 && (cp <= 0x115f || (cp >= 0x2e80 && cp <= 0xa4cf) ||
       (cp >= 0xac00 && cp <= 0xd7a3) || (cp >= 0xf900 && cp <= 0xfaff) ||
       (cp >= 0xfe30 && cp <= 0xfe6f) || (cp >= 0xff00 && cp <= 0xff60) ||
-      (cp >= 0xffe0 && cp <= 0xffe6) || (cp >= 0x1f300 && cp <= 0x1f9ff))) ? 1.0 : 0.55;
+      (cp >= 0xffe0 && cp <= 0xffe6) || (cp >= 0x1f300 && cp <= 0x1f9ff))) ? 1.0
+      : (cp >= 0x2013 && cp <= 0x2015) ? 1.15
+      : WIDE_GLYPHS.has(ch) ? 1.05
+      : 0.85;
   }
-  return Math.ceil(em * fontSize);
+  return Math.ceil(em * fontSize + Math.max(0, letterSpacing) * Math.max(0, chars - 1));
 }
 
 /**
@@ -67,10 +75,6 @@ async function renderTextWatermark(text, o = {}) {
   const pad = Math.max(0, Math.round(padding));
   const lineH = Math.round(size * 1.32); // 行高 = 字号 × 1.32（含行距）
   const gap = Math.round(size * lineGap);
-  const lineWidths = lines.map((l) => estimateWidth(l, size));
-  const maxLineW = Math.max(1, ...lineWidths);
-  const width = maxLineW + pad * 2;
-  const height = lines.length * lineH + (lines.length - 1) * gap + pad * 2;
 
   const bgRect = bg && bg !== 'none'
     ? `<rect width="100%" height="100%" fill="${escXml(bg)}"/>` : '';
@@ -82,17 +86,29 @@ async function renderTextWatermark(text, o = {}) {
     return `<tspan x="${pad}" dy="${dy}">${escXml(l)}</tspan>`;
   }).join('');
 
+  // 画布大小只求装得下文字：估宽再准也不如实测 —— 不同系统的 sans-serif 字形差异大，
+  // 画布小于墨迹会把字裁掉。估宽之外再留两倍字号的余量兜住极端字体，多出的透明边
+  // 由下面的 trim 收掉
+  const estW = Math.max(1, ...lines.map((l) => estimateWidth(l, size, letterSpacing)));
+  const width = estW + pad * 2 + size * 2;
+  const height = lines.length * lineH + (lines.length - 1) * gap + pad * 2 + lineH;
+
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" `
     + `viewBox="0 0 ${width} ${height}">${bgRect}`
     + `<text font-family="${escXml(fontFamily)}" font-size="${size}" font-weight="${escXml(fontWeight)}"`
     + (letterSpacing ? ` letter-spacing="${letterSpacing}"` : '')
     + ` fill="${escXml(color)}"${strokeAttr}>${tspans}</text></svg>`;
 
-  // 渲染 + 去边：估宽可能偏大，trim 收掉四周透明像素，得到真实的水印尺寸。
-  // 有底色时不能 trim（底色就是内容的一部分）
+  // 渲染 + 按墨迹裁边：得到精确的文字块尺寸（描边/字距/系统字体差异一并兜住）。
+  // 有底色时文字先在透明底上渲染（边上不能有底色，否则 trim 不掉），再贴回
+  // 一张正好墨迹大小 + 2×pad 的底色画布 —— 估宽带来的松散右边距也随之消失
   let out = await sharp(Buffer.from(svg)).png().toBuffer();
-  if (!bg || bg === 'none') {
-    out = await sharp(out).trim({ threshold: 0 }).png().toBuffer();
+  out = await sharp(out).trim({ threshold: 0 }).png().toBuffer();
+  if (bg && bg !== 'none') {
+    const ink = await sharp(out).metadata();
+    out = await sharp({
+      create: { width: ink.width + pad * 2, height: ink.height + pad * 2, channels: 4, background: bg },
+    }).composite([{ input: out, left: pad, top: pad }]).png().toBuffer();
   }
   const meta = await sharp(out).metadata();
   if (!meta.width || !meta.height) throw new Error('文字水印渲染结果为空（字体或内容有问题）');

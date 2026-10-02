@@ -12,7 +12,7 @@ const express = require('express');
 const multer = require('multer');
 const sharp = require('sharp');
 
-const { prepareWatermark, mergeWatermarks, composeWatermark, composeGroups, buildGroupWatermark, analyzeInk, applyCrop, parseCropRatio, CROP_RATIOS, IMAGE_EXTS, WM_INPUT_EXTS, extOf } = require('./core/watermark');
+const { prepareWatermark, mergeWatermarks, composeWatermark, composeGroups, buildGroupWatermark, analyzeInk, applyCrop, applyResize, parseCropRatio, CROP_RATIOS, IMAGE_EXTS, WM_INPUT_EXTS, extOf } = require('./core/watermark');
 const { checkFontAvailable } = require('./core/textmark');
 const { formatCameraText } = require('./core/exiftext');
 const { runBatch, isInside, normalizeSuffix } = require('./core/batch');
@@ -684,7 +684,9 @@ app.post('/api/preview', express.json(), async (req, res) => {
       const toPreviewG = async (kind) => {
         const composed = await composeGroups(await getSampleImage(kind, orient), groupDefs,
           { sizeBase: options.sizeBase, frame: previewFrame });
-        composed.buffer = await applyCrop(composed.buffer, { cropRatio });
+        // 预览同样走 裁剪→缩放：用户设置长边上限后能直接看到输出大小
+        composed.buffer = await applyResize(
+          await applyCrop(composed.buffer, { cropRatio }, composed.wmRects), options);
         return previewDataUrl(composed);
       };
       const preview = await toPreviewG('light');
@@ -698,7 +700,8 @@ app.post('/api/preview', express.json(), async (req, res) => {
     const altBuf = options.autoColor && wm.altPath ? fs.readFileSync(wm.altPath) : null;
     const toPreview = async (sample) => {
       const composed = await composeWatermark(await getSampleImage(sample, orient), wmBuffer, options, altBuf);
-      composed.buffer = await applyCrop(composed.buffer, { cropRatio });
+      composed.buffer = await applyResize(
+        await applyCrop(composed.buffer, { cropRatio }, composed.wmRects), options);
       return previewDataUrl(composed);
     };
     const preview = await toPreview('light');
@@ -757,6 +760,7 @@ function presetSummary(p) {
   else tags.push({ k: 'format', label: '保持原格式' });
   if (o.quality && ['jpeg', 'webp'].includes(o.format)) tags.push({ k: 'quality', label: `质量 ${o.quality}` });
   if (o.sizeBase && SIZEBASE_LABEL[o.sizeBase]) tags.push({ k: 'sizebase', label: `基准 ${SIZEBASE_LABEL[o.sizeBase]}` });
+  if (o.maxLongEdge) tags.push({ k: 'sizebase', label: `长边 ${o.maxLongEdge}px` });
   if (o.frame && FRAME_LABEL[o.frame.style]) tags.push({ k: 'frame', label: FRAME_LABEL[o.frame.style] });
   if (o.autoColor) tags.push({ k: 'autocolor', label: '亮度自适应' });
   const text = tags.map((t) => t.label).join(' · ');
@@ -883,6 +887,8 @@ function parseOptions(raw) {
     // 用 parseCropRatio 校验（直接查 CROP_RATIOS 会把带前缀的一律判成非法而丢掉）
     cropRatio: parseCropRatio(o.cropRatio) ? o.cropRatio : null,
     cropRatioPort: parseCropRatio(o.cropRatioPort) ? o.cropRatioPort : null,
+    // 输出长边上限（像素）：超过的图在裁剪后等比缩小（只缩不放），0/缺省 = 保持原始尺寸
+    maxLongEdge: Math.max(0, Math.min(30000, numOr(o.maxLongEdge, 0))) || null,
     // 边框 / 条幅：把相机参数放进新撑出来的留白，而不是浮在画面上
     frame: normFrame(o.frame),
   };

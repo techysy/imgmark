@@ -5,7 +5,7 @@
  */
 const fs = require('fs');
 const path = require('path');
-const { composeWatermark, composeGroups, applyCrop, IMAGE_EXTS, extOf } = require('./watermark');
+const { composeWatermark, composeGroups, applyCrop, applyResize, IMAGE_EXTS, extOf } = require('./watermark');
 const { ProcessDB } = require('./db');
 
 /** 源扩展名 → encodeCompose 在 format=auto 时实际写出的扩展名 */
@@ -184,10 +184,13 @@ async function runBatch(p) {
       await authorizeInput(file);
       inputStat = await fs.promises.stat(file);
       const buf = await fs.promises.readFile(file);
-      let { buffer, ext } = groups
+      const composed = groups
         ? await composeGroups(buf, groups, composeOptions)
         : await composeWatermark(buf, watermark, composeOptions, watermarkAlt);
-      buffer = await applyCrop(buffer, composeOptions);
+      // 裁剪选区带上水印落点：偏移选择时完整保留水印，别把刚叠上去的标切掉；
+      // 长边上限在裁剪后生效 —— 先定画面比例，再把像素收敛到目标长边
+      const buffer = await applyResize(await applyCrop(composed.buffer, composeOptions, composed.wmRects), composeOptions);
+      const ext = composed.ext;
       // 实际格式与预判不符（如扩展名是 .png 的 JPEG 文件）时现场再分配一个不冲突的名字
       const target = overwrite ? file : (planned[i].ext === ext ? planned[i].target : claim(file, ext));
       await fs.promises.mkdir(path.dirname(target), { recursive: true });
