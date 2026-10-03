@@ -1258,7 +1258,7 @@ async function refreshWatchers() {
           <span>📁 ${esc(w.inputDir)}${w.recursive ? '（含子目录）' : ''}</span>
           <span class="tag">${w.status === 'watching' ? '● 监听中' : w.status === 'paused' ? '⏸ 已暂停' : w.status}</span>
         </div>
-        <div class="muted">→ ${esc(w.outputDir)} · 已处理 ${w.stats.processed} · 跳过 ${w.stats.skipped} · 失败 ${w.stats.failed}${w.lastError ? ' · ' + esc(w.lastError) : ''}${w.note ? ' · ' + esc(w.note) : ''}</div>
+        <div class="muted">→ ${esc(w.outputDir)}${w.presetId ? ' · 绑定方案「' + esc((presets.find((p) => p.id === w.presetId) || {}).name || w.presetId.slice(0, 8)) + '」' : ''} · 已处理 ${w.stats.processed} · 跳过 ${w.stats.skipped} · 失败 ${w.stats.failed}${w.lastError ? ' · ' + esc(w.lastError) : ''}${w.note ? ' · ' + esc(w.note) : ''}</div>
         <div class="row-inline" style="gap:6px;margin:0">
           <button class="btn tiny" data-rescan="${w.id}">立即扫描</button>
           <button class="btn tiny ghost" data-del="${w.id}">删除</button>
@@ -1288,6 +1288,8 @@ async function createWatcher() {
     await api('/api/watchers', { method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ inputDir: dir, outputDir: $('watch-outdir').value.trim(),
         recursive: $('watch-recursive').checked,
+        // 下拉里选中了方案就绑定方案（重启自恢复）；否则按当前图层组合建立
+        presetId: selectedPresetId || undefined,
         watermarkId: state.watermarkId, groups: groupsForPayload(), options: options() }) });
     $('watch-hint').textContent = '监听已建立 ✓ 新图片落盘将自动加水印';
     refreshWatchers();

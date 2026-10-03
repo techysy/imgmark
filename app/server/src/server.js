@@ -59,6 +59,7 @@ const app = express();
 // ---- 水印与任务状态 ----
 const watermarks = new Map(); // id -> {path,width,height,bgColor,notes,preview}
 const logoSets = new Map();   // setId -> { logos: [{key,path,altPath,name,width,height,monochrome,inkDark}] }（分组模式）
+const presetMaterials = new Map(); // presetId -> {time,setId}：方案落盘 logo 现场准备后的缓存（方案重存自动失效）
 const jobs = new Map();       // id -> {status,total,done,ok,failed,current,results,error,outputDir,dirKind}
 const JOB_TTL_MS = 6 * 3600 * 1000; // 结束超过该时长的任务从内存移除，上传模式的临时结果一并删除
 const MAX_ACTIVE_PROCESS_JOBS = 2;
@@ -84,6 +85,17 @@ const watchers = new WatcherManager({
     if (target) await assertFnosPath(cfg.ownerUid, target, { write: true, roots });
   },
   resolveTarget: async (w) => {
+    // 绑定方案的监听：分组与选项整套装自方案，logo 从数据目录现场重新准备 —— 重启后照常恢复
+    if (w.cfg.presetId) {
+      const preset = loadPresets()[w.cfg.presetId];
+      if (!preset) return null;
+      const options = { ...preset.data.options };
+      const set = await materializePreset(w.cfg.presetId);
+      if (!set) return null;
+      const wantsLogo = (preset.data.groups || []).some((g) => !normTextSpec(g && g.text));
+      if (wantsLogo && !set.logos.length) return null;
+      return { groups: await resolveGroups(set, preset.data.groups, !!options.autoColor), options };
+    }
     const options = { ...(w.cfg.options || {}) };
     if (Array.isArray(w.cfg.groups) && w.cfg.groups.length) {
       const wantsLogo = w.cfg.groups.some((g) => !normTextSpec(g && g.text));
@@ -116,6 +128,7 @@ function ensurePreparedCapacity() {
   const referenced = new Set();
   for (const job of jobs.values()) if (job.status === 'running' && job.watermarkId) referenced.add(job.watermarkId);
   for (const watcher of watchers.list()) if (watcher.watermarkId) referenced.add(watcher.watermarkId);
+  for (const m of presetMaterials.values()) if (m.setId) referenced.add(m.setId); // 绑定方案的监听正持有这批产物
   while (watermarks.size + logoSets.size >= MAX_PREPARED_TARGETS) {
     const candidate = [...watermarks.keys(), ...logoSets.keys()].find((id) => !referenced.has(id));
     if (!candidate) throw httpError(429, '水印缓存已满，请删除旧监听或稍后重试');
@@ -715,6 +728,36 @@ fs.mkdirSync(PRESET_DIR, { recursive: true });
 function loadPresets() { try { return JSON.parse(fs.readFileSync(PRESET_FILE, 'utf8')); } catch { return {}; } }
 function savePresets(map) { fs.writeFileSync(PRESET_FILE, JSON.stringify(map, null, 2)); }
 
+// 把已保存方案落盘的 logo 原文件现场准备成可合成的水印集（按方案缓存；方案重存 time 变化自动失效重备）。
+// 监听绑定方案后，服务重启也能从这里恢复 —— 这是「监听绑方案」能跨重启自恢复的根基
+async function materializePreset(presetId) {
+  const preset = loadPresets()[presetId];
+  if (!preset) return null;
+  const cached = presetMaterials.get(presetId);
+  if (cached && cached.time === preset.time) return logoSets.get(cached.setId) || null;
+  const entries = [];
+  for (const f of preset.files || []) {
+    const full = path.join(PRESET_DIR, presetId, f.file);
+    if (!fs.existsSync(full)) return null; // logo 文件丢失 → 上层按「方案不可用」处理
+    const p = await prepareWatermark(fs.readFileSync(full), f.name || f.file, { trim: true });
+    const ink = await analyzeInk(p.buffer);
+    const key = crypto.randomUUID();
+    const logoPath = path.join(WM_DIR, `${key}.png`);
+    fs.writeFileSync(logoPath, p.buffer);
+    let altPath = null;
+    if (ink.monochrome && ink.altBuffer) {
+      altPath = path.join(WM_DIR, `${key}.alt.png`);
+      fs.writeFileSync(altPath, ink.altBuffer);
+    }
+    entries.push({ key, name: f.name, path: logoPath, altPath, width: p.width, height: p.height,
+      monochrome: ink.monochrome, inkDark: ink.dark });
+  }
+  const setId = crypto.randomUUID();
+  logoSets.set(setId, { logos: entries });
+  presetMaterials.set(presetId, { time: preset.time, setId });
+  return logoSets.get(setId);
+}
+
 // 方案摘要：从已存 options/groups 推导出人类可读的关键参数，供前端下拉与详情卡片展示
 // 摘要里裁剪切片的文案：只写比例，方向由「横向 / 竖向」前缀交代，
 // 因为带 land@ / port@ 的选项本来就分方向，不加前缀两张卡片的「裁剪 5:4」会看不出区别。
@@ -1109,7 +1152,7 @@ app.get('/api/watchers', (req, res) => {
 });
 app.post('/api/watchers', express.json(), async (req, res) => {
   try {
-    const { inputDir, outputDir, recursive, suffix, watermarkId, groups, options } = req.body || {};
+    const { inputDir, outputDir, recursive, suffix, watermarkId, presetId, groups, options } = req.body || {};
     if (groups != null && !Array.isArray(groups)) return res.status(400).json({ error: 'groups 必须为数组' });
     const ownerUid = fnos.isAvailable() ? gatewayUid(req) : 0;
     if (fnos.isAvailable() && !ownerUid) return res.status(403).json({ error: '请求缺少 fnOS 网关注入的用户身份' });
@@ -1126,22 +1169,40 @@ app.post('/api/watchers', express.json(), async (req, res) => {
     if (!path.isAbsolute(outDir)) outDir = path.join(inDir, outDir);
     outDir = path.resolve(outDir);
     if (outDir === inDir) return res.status(400).json({ error: '输出目录不能与监听目录相同（防止水印图再次被处理）' });
-    // 监听的目标可能压根不是 logo：纯文字组（只写相机参数）不需要水印集，
-    // 纯边框（options.frame）更是什么都不叠 —— 这两类都得放行，否则
-    // 「只写参数 / 只加边框」在批量能跑、在监听里却被拒，行为割裂。
-    const wantsLogo = Array.isArray(groups) && groups.some((g) =>
-      !normTextSpec(g && g.text) && Array.isArray(g && g.logos) && g.logos.length > 0);
-    const logoSet = watermarkId ? logoSets.get(watermarkId) : null;
-    if (wantsLogo && !logoSet) return res.status(404).json({ error: '水印不存在或服务已重启，请先在页面重新准备' });
-    const wGroups = Array.isArray(groups) ? normalizeGroups(groups, logoSet?.logos.length ?? null) : [];
-    const normalizedOptions = parseOptions(options);
-    const usesLogoGroup = wGroups.some((g) => !g.text);
-    const frameOnly = !wGroups.length && !!normalizedOptions.frame;
-    const hasTarget = frameOnly ||
-      (wGroups.length > 0 && !usesLogoGroup) ||
-      (wGroups.length > 0 && usesLogoGroup && logoSet) ||
-      (wGroups.length === 0 && watermarks.get(watermarkId));
-    if (!hasTarget) return res.status(404).json({ error: '水印不存在或服务已重启，请先在页面重新准备' });
+    // 绑定方案：分组与选项整套装自方案（logo 原文件落盘在数据目录里），
+    // 监听因此不依赖内存里的 watermarkId —— 服务重启后自己重新准备水印，不再转 paused
+    let wGroups, normalizedOptions, effWatermarkId = watermarkId || null;
+    if (presetId) {
+      const preset = loadPresets()[presetId];
+      if (!preset) return res.status(404).json({ error: '方案不存在或已删除' });
+      if (fnos.isAvailable() && preset.ownerUid != null && preset.ownerUid !== ownerUid) {
+        return res.status(404).json({ error: '方案不存在或已删除' });
+      }
+      try {
+        wGroups = normalizeGroups(preset.data.groups, null); // logo 序号在 resolve 时按实际数量校验
+      } catch (e) {
+        return res.status(400).json({ error: `方案分组无效：${e.message}` });
+      }
+      normalizedOptions = parseOptions(preset.data.options);
+      effWatermarkId = null;
+    } else {
+      // 监听的目标可能压根不是 logo：纯文字组（只写相机参数）不需要水印集，
+      // 纯边框（options.frame）更是什么都不叠 —— 这两类都得放行，否则
+      // 「只写参数 / 只加边框」在批量能跑、在监听里却被拒，行为割裂。
+      const wantsLogo = Array.isArray(groups) && groups.some((g) =>
+        !normTextSpec(g && g.text) && Array.isArray(g && g.logos) && g.logos.length > 0);
+      const logoSet = watermarkId ? logoSets.get(watermarkId) : null;
+      if (wantsLogo && !logoSet) return res.status(404).json({ error: '水印不存在或服务已重启，请先在页面重新准备' });
+      wGroups = Array.isArray(groups) ? normalizeGroups(groups, logoSet?.logos.length ?? null) : [];
+      normalizedOptions = parseOptions(options);
+      const usesLogoGroup = wGroups.some((g) => !g.text);
+      const frameOnly = !wGroups.length && !!normalizedOptions.frame;
+      const hasTarget = frameOnly ||
+        (wGroups.length > 0 && !usesLogoGroup) ||
+        (wGroups.length > 0 && usesLogoGroup && logoSet) ||
+        (wGroups.length === 0 && watermarks.get(watermarkId));
+      if (!hasTarget) return res.status(404).json({ error: '水印不存在或服务已重启，请先在页面重新准备' });
+    }
     let ownerRoots = null;
     if (fnos.isAvailable()) {
       ownerRoots = await fnosRoots(ownerUid);
@@ -1151,7 +1212,8 @@ app.post('/api/watchers', express.json(), async (req, res) => {
     const cfg = {
       inputDir: inDir, outputDir: outDir,
       recursive: !!recursive, overwrite: false,
-      suffix: normalizeSuffix(suffix || '_wm'), watermarkId, ownerUid: ownerUid || null,
+      suffix: normalizeSuffix(suffix || '_wm'), watermarkId: effWatermarkId, presetId: presetId || null,
+      ownerUid: ownerUid || null,
       authorizedRoots: ownerRoots,
       groups: wGroups.length ? wGroups : null,
       options: normalizedOptions,

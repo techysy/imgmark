@@ -150,7 +150,10 @@ curl -s -X POST http://127.0.0.1:28110/api/watchers \
   输出目录内的文件永不处理（防回环）
 - `GET /api/watchers` → 列表（status: watching/paused + stats{processed,skipped,failed} + lastError）
 - `POST /api/watchers/:id/rescan` 立即全量扫描；`DELETE /api/watchers/:id` 删除
-- 服务重启：监听配置持久化自动恢复；水印映射在内存里失效 → 监听转 `paused`，需重新 prepare 后重建
+- **绑定方案**：请求带 `presetId` 时，分组与选项整套装自该方案，logo 原文件从数据目录现场重新准备 ——
+  服务重启后监听**自动恢复**（方案落盘在 DATA_DIR/presets），不再转 `paused`；
+  不传 `presetId` 的旧形式（watermarkId/groups）行为不变
+- 服务重启：监听配置持久化自动恢复；仅 watermarkId 形式的旧监听因水印映射在内存里失效转 `paused`，需重新 prepare 后重建
 - 不支持 `overwrite`（监听永远输出新文件）
 
 ## 5. 任务 C：单图预览

@@ -742,6 +742,86 @@ async function main() {
     assert(r.width >= 304, `inset 描边需要最小留白，画布至少 304px 宽，实际 ${r.width}`);
   });
 
+  // ---------- [11] 监听绑定方案：服务重启后自动恢复（不再 paused） ----------
+  console.log('\n[11] 监听绑定方案：跨重启自恢复');
+  await t('preset 监听跨重启自动恢复，重启后新图照常处理', async () => {
+    const port = 28119;
+    const dataDir = path.join(TMP, 'data11');
+    const serverPath = path.join(ROOT, 'app', 'server', 'src', 'server.js');
+    const start = () => spawn(process.execPath, [serverPath],
+      { env: { ...process.env, PORT: String(port), IMGMARK_DATA_DIR: dataDir } });
+    const base = `http://127.0.0.1:${port}`;
+    const waitHealth = async () => {
+      for (let i = 0; i < 50; i++) {
+        try { await (await fetch(`${base}/api/health`)).json(); return; }
+        catch { await new Promise((r) => setTimeout(r, 300)); }
+      }
+      throw new Error('服务启动超时');
+    };
+    let srv = start();
+    try {
+      await waitHealth();
+      // 保存一个带 logo 的方案
+      const fd = new FormData();
+      fd.append('logos', new Blob([fs.readFileSync(F.logoWhiteJpg)], { type: 'image/jpeg' }), 'logo.jpg');
+      fd.append('payload', JSON.stringify({ name: '重启方案A',
+        groups: [{ logos: [0], position: 'se', sizePct: 25 }], options: { format: 'png' } }));
+      const preset = await (await fetch(`${base}/api/presets`, { method: 'POST', body: fd })).json();
+      assert(preset.id, '方案应保存成功');
+      // 监听目录放 2 张旧图（mtime 拨旧规避 2s 防半写）
+      const wdir = path.join(TMP, 'watch11');
+      fs.mkdirSync(wdir, { recursive: true });
+      const old = new Date(Date.now() - 60000);
+      for (const [src, name] of [[F.photoJpg, 'x1.jpg'], [F.photoPng, 'x2.png']]) {
+        fs.copyFileSync(src, path.join(wdir, name));
+        fs.utimesSync(path.join(wdir, name), old, old);
+      }
+      // 建立「绑定方案」的监听：不传 groups/watermarkId，只带 presetId
+      const w = await (await fetch(`${base}/api/watchers`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ inputDir: wdir, outputDir: '_out', presetId: preset.id }),
+      })).json();
+      assert(w.id, '监听应创建成功');
+      assert.strictEqual(w.options.format, 'png', `监听选项应取自方案: ${JSON.stringify(w.options)}`);
+      let st;
+      for (let i = 0; i < 60; i++) {
+        st = (await (await fetch(`${base}/api/watchers`)).json()).watchers[0];
+        if (st && st.stats.processed + st.stats.failed >= 2) break;
+        await new Promise((r) => setTimeout(r, 300));
+      }
+      assert.strictEqual(st.stats.failed, 0, `重启前应全部处理成功: ${JSON.stringify(st)}`);
+      assert(fs.existsSync(path.join(wdir, '_out', 'x1_wm.png')), '重启前输出缺失');
+      // —— 重启服务（同一数据目录）——
+      srv.kill();
+      await new Promise((r) => setTimeout(r, 600));
+      srv = start();
+      await waitHealth();
+      // 监听应自动恢复为 watching（旧逻辑这里会 paused：内存水印映射失效）
+      for (let i = 0; i < 40; i++) {
+        st = (await (await fetch(`${base}/api/watchers`)).json()).watchers[0];
+        if (st && st.status === 'watching') break;
+        await new Promise((r) => setTimeout(r, 300));
+      }
+      assert.strictEqual(st.status, 'watching', `重启后应自动恢复: ${JSON.stringify(st)}`);
+      assert(fs.existsSync(path.join(wdir, '_out', 'x1_wm.png')), '重启后既有输出不应丢失');
+      // 重启后落一张新图，照常处理 —— 证明水印真的从方案里重新准备好了
+      fs.copyFileSync(F.photoJpg, path.join(wdir, 'x3.jpg'));
+      fs.utimesSync(path.join(wdir, 'x3.jpg'), old, old);
+      let processed = 0;
+      for (let i = 0; i < 60; i++) {
+        st = (await (await fetch(`${base}/api/watchers`)).json()).watchers[0];
+        processed = st.stats.processed;
+        if (processed >= 1) break;
+        await new Promise((r) => setTimeout(r, 300));
+      }
+      assert(processed >= 1, `重启后新图应被处理: ${JSON.stringify(st)}`);
+      assert(fs.existsSync(path.join(wdir, '_out', 'x3_wm.png')), '重启后新图输出缺失');
+      assert(st.stats.failed === 0, `重启后不应有失败: ${JSON.stringify(st)}`);
+    } finally {
+      srv.kill();
+    }
+  });
+
   console.log(`\n结果：${pass} 通过，${fail} 失败  （fixtures 保留在 ${TMP}）`);
   process.exit(fail ? 1 : 0);
 }
