@@ -145,12 +145,26 @@
         </div>
       </div>
 
-      <!-- 图层二：相机参数（从每张图自己的 EXIF 读相机/镜头/曝光，渲染成一行文字水印） -->
+      <!-- 图层二：文字 / 画框 —— 相机参数文字与条幅/白框/装裱合为一个图层：
+           浮动文字（不加框）就是传统「相机参数水印」，容器样式把文字写进留白里。
+           线格式不变（浮动→text 组、容器→options.frame），合并只发生在界面上 -->
       <div class="layer-head">
-        <label><input type="checkbox" id="layer-exif"> <b>相机参数</b></label>
-        <span class="muted">把每张照片自己的 EXIF 渲成一行文字，无需 logo；与 Logo 水印可同时开启</span>
+        <label><input type="checkbox" id="layer-text"> <b>文字 / 画框</b></label>
+        <span class="muted">把每张照片自己的 EXIF 渲成文字：浮在画面上，或写进条幅 / 白框 / 装裱的留白里</span>
       </div>
-      <div id="type-exif" class="type-panel hidden">
+      <div id="type-text" class="type-panel hidden">
+        <div class="row">
+          <div class="field" style="flex:0 0 auto">
+            <label>样式</label>
+            <select id="exif-frame">
+              <option value="" selected>浮动文字（不加框）</option>
+              <option value="band">下方条幅</option>
+              <option value="frame">四周白框 + 底部文字</option>
+              <option value="inset">装裱细线框（照片内缩）</option>
+            </select>
+          </div>
+        </div>
+        <div id="float-cfg">
         <div class="notes">字段与样式是全局的一套 —— 同一批照片通常同一台相机，逐图调没意义。
 没有 EXIF 的照片会自动跳过，不会留空水印。</div>
         <div class="row">
@@ -207,45 +221,31 @@
           </div>
         </div>
         <div class="notes">示例文案：<b id="exif-sample">—</b></div>
-      </div>
+        </div><!-- /float-cfg -->
 
-      <!-- 图层三：相框（把画布撑出留白，参数写进留白 —— 不是浮在画面上的文字） -->
-      <div class="layer-head">
-        <label><input type="checkbox" id="layer-frame"> <b>画框</b></label>
-        <span class="muted">撑出留白并把参数写进留白里；与上面两个图层可同时开启</span>
-      </div>
-      <div id="type-frame" class="type-panel hidden">
-        <div class="row">
-          <div class="field" style="flex:0 0 auto">
-            <label>边框样式</label>
-            <select id="exif-frame">
-              <option value="" selected>选择边框样式…</option>
-              <option value="band">下方条幅（白底黑字）</option>
-              <option value="frame">四周白框 + 底部文字</option>
-              <option value="inset">装裱细线框（照片内缩）</option>
-            </select>
+        <!-- 容器样式（条幅/白框/装裱）专属：留白底色、对齐与两行文字 -->
+        <div id="frame-cfg" class="hidden">
+          <div class="row">
+            <div class="field">
+              <label>留白底色 <input type="color" id="exif-frame-bg" value="#ffffff" title="边框/条幅的底色"></label>
+            </div>
+            <div class="field">
+              <label>文字对齐</label>
+              <select id="exif-frame-align">
+                <option value="left" selected>左对齐</option>
+                <option value="center">居中</option>
+              </select>
+            </div>
           </div>
-          <div class="field">
-            <label>留白底色 <input type="color" id="exif-frame-bg" value="#ffffff" title="边框/条幅的底色"></label>
-          </div>
-          <div class="field">
-            <label>文字对齐</label>
-            <select id="exif-frame-align">
-              <option value="left" selected>左对齐</option>
-              <option value="center">居中</option>
-            </select>
-          </div>
-        </div>
-        <div id="frame-extra" class="hidden">
           <div class="row">
             <div class="field"><label>条幅文字 · 主行</label>
               <input type="text" id="exif-line1" class="num" style="width:100%" maxlength="120" placeholder="留空则自动填机型"></div>
             <div class="field"><label>条幅文字 · 副行</label>
               <input type="text" id="exif-line2" class="num" style="width:100%" maxlength="120" placeholder="留空则自动填曝光参数"></div>
           </div>
-        </div>
-        <div class="notes">两行都留空 → 自动用这张照片的「机型 / 曝光参数」，没有 EXIF 则整张跳过边框。
+          <div class="notes">两行都留空 → 自动用这张照片的「机型 / 曝光参数」，没有 EXIF 则整张跳过边框。
 留白比例跟着短边走，横竖构图观感一致。</div>
+        </div>
       </div>
       </div><!-- /style-config -->
 

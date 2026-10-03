@@ -22,8 +22,8 @@ const state = {
   // 裁剪（每个 logo 各自一份裁剪框）
   crops: [],
   editingIdx: 0,
-  // 水印图层：logo / 相机参数 / 画框 三层独立开关、任意组合（引擎本就支持混排）
-  layers: { logo: true, exif: false, frame: false },
+  // 水印图层：logo / 文字·画框 两层独立开关（文字层内含 浮动文字 / 条幅 / 白框 / 装裱 四种样式）
+  layers: { logo: true, text: false },
 };
 // 各图层的一句话说明直接写在 index.html 的 .layer-head 里；
 // 这里只负责开关状态：显隐面板、持久化、联动预览与运行判定
@@ -36,7 +36,7 @@ function setLayer(name, on) {
   refreshPreview();
 }
 function applyLayers() {
-  for (const k of ['logo', 'exif', 'frame']) {
+  for (const k of ['logo', 'text']) {
     $(`layer-${k}`).checked = !!state.layers[k];
     $(`type-${k}`).classList.toggle('hidden', !state.layers[k]);
   }
@@ -448,7 +448,7 @@ function applyPresetData(meta) {
   const hasText = restored.some(isTextGroup);
   const hasLogoGroups = restored.some((g) => !isTextGroup(g));
   if (hasLogoGroups || hasText || hasFrame) {
-    state.layers = { logo: hasLogoGroups, exif: hasText, frame: hasFrame };
+    state.layers = { logo: hasLogoGroups, text: hasText || hasFrame };
     localStorage.setItem('imgmark_layers', JSON.stringify(state.layers));
     applyLayers();
   }
@@ -770,9 +770,10 @@ function updateExifUI() {
   syncExifSample();
 }
 
-/** 相机参数这一组的定义（仅在该图层开启时生效）；给 /api/process 与 /api/preview 用 */
+/** 相机参数组的定义：仅「文字 / 画框」图层开启且样式为浮动文字时生效 */
 function exifGroupDef() {
-  if (!state.layers.exif) return null;
+  if (!state.layers.text) return null;
+  if ($('exif-frame') && $('exif-frame').value) return null; // 容器样式：文字写进画框留白，走 options.frame
   const fields = exifUI.selected.slice();
   if (!fields.length) return null;
   const color = $('exif-color').value;
@@ -1060,7 +1061,7 @@ function options() {
 // 与「文字水印」的区别：文字浮在画面上，边框是把画布撑大、参数写进留白。
 // 两行都留空时交给服务端用机型/曝光参数自动填（见 /api/preview 的 previewFrame）。
 function frameDef() {
-  if (!state.layers.frame) return null;
+  if (!state.layers.text) return null;
   const style = $('exif-frame') ? $('exif-frame').value : '';
   if (!style) return null;
   return {
@@ -1072,8 +1073,9 @@ function frameDef() {
 }
 
 function updateFrameUI() {
-  const on = !!($('exif-frame') && $('exif-frame').value);
-  $('frame-extra').classList.toggle('hidden', !on);
+  const container = !!($('exif-frame') && $('exif-frame').value); // '' = 浮动文字，其余为容器样式
+  if ($('float-cfg')) $('float-cfg').classList.toggle('hidden', container);
+  if ($('frame-cfg')) $('frame-cfg').classList.toggle('hidden', !container);
 }
 function bindPreviewOn(selector, ev = 'input') {
   document.querySelectorAll(selector).forEach((el) => el.addEventListener(ev, refreshPreview));
@@ -1226,25 +1228,24 @@ function currentSource() {
 }
 function updateRun() {
   // 每个开启的图层各自判定「已配好」；全部配好才算样式就绪
+  const style = $('exif-frame') ? $('exif-frame').value : '';
   const ready = {
     logo: !!state.watermarkId && state.groups.length > 0,
-    exif: !!exifGroupDef(),
-    frame: !!frameDef(),
+    text: style === '' ? !!exifGroupDef() : !!frameDef(),
   };
-  const active = ['logo', 'exif', 'frame'].filter((k) => state.layers[k]);
+  const active = ['logo', 'text'].filter((k) => state.layers[k]);
   const styleReady = active.length > 0 && active.every((k) => ready[k]);
   const ok = styleReady && !!currentSource();
   $('run').disabled = !ok;
   $('group-add').disabled = !state.logoSet; // 有 logo 才能建分组
   $('watch-create').disabled = !styleReady; // 监听复用当前图层组合（服务端支持任意组合监听）
   const pending = active.find((k) => !ready[k]);
-  const layerNames = { logo: 'Logo 图层', exif: '相机参数图层', frame: '画框图层' };
   $('run-hint').textContent = ok ? '准备就绪'
     : !currentSource() ? '先选择图片来源'
     : !active.length ? '先开启任一水印图层'
     : pending === 'logo' ? (!state.logoSet ? 'Logo 图层：先添加 logo' : 'Logo 图层：等待水印准备…')
-    : pending === 'exif' ? '相机参数图层：先勾选要输出的字段'
-    : '画框图层：先选择一个边框样式';
+    : style === '' ? '文字 / 画框图层：先勾选要输出的字段'
+    : '文字 / 画框图层：请选择边框样式';
 }
 
 // ---------- 文件夹监听 ----------
@@ -1415,11 +1416,19 @@ function init() {
     refreshPreview();
   });
   $('opt-format').addEventListener('change', () => { $('quality-wrap').style.opacity = ['jpeg', 'webp'].includes($('opt-format').value) ? 1 : .4; refreshPreview(); });
-  // 水印图层开关：三层独立组合，状态记住
-  for (const k of ['logo', 'exif', 'frame']) {
+  // 水印图层开关：两层独立组合，状态记住；旧存档的 exif/frame 键迁移为合并后的 text 层
+  for (const k of ['logo', 'text']) {
     $(`layer-${k}`).addEventListener('change', (e) => setLayer(k, e.target.checked));
   }
-  try { Object.assign(state.layers, JSON.parse(localStorage.getItem('imgmark_layers') || '{}')); } catch { /* 损坏则用默认 */ }
+  let savedLayers = null;
+  try { savedLayers = JSON.parse(localStorage.getItem('imgmark_layers') || '{}'); } catch { /* 损坏则用默认 */ }
+  if (savedLayers && typeof savedLayers === 'object') {
+    state.layers = {
+      logo: savedLayers.logo !== false,
+      text: !!(savedLayers.text ?? savedLayers.exif ?? savedLayers.frame),
+    };
+    localStorage.setItem('imgmark_layers', JSON.stringify(state.layers));
+  }
   applyLayers();
   updateRun();
   $('group-add').addEventListener('click', addGroup);
