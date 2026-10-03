@@ -176,7 +176,10 @@ input[type="checkbox"] { accent-color: var(--pri); }
 #cropratio-hint:empty { display: none; }
 
 .preview-box { flex: 1; min-width: 260px; text-align: center; }
-.preview-box img { width: 100%; max-width: 420px; border-radius: 10px; border: 1px solid var(--border-subtle); cursor: zoom-in; }
+/* 横/竖示例图装进同一个高度框（280 = 旧上限 420 宽下横图的天然高度）：
+   竖图不再把预览列撑高、切换横竖时版面不跳；原尺寸观看交给点击放大（lightbox） */
+.preview-box img { width: auto; height: auto; max-width: 100%; max-height: 280px;
+  border-radius: 10px; border: 1px solid var(--border-subtle); cursor: zoom-in; }
 .preview-cap { font-size: 11px; color: var(--text-3); display: block; margin-top: 3px; }
 #preview-orient { justify-content: center; margin-bottom: 8px; }
 #preview-orient .tab { padding: 3px 12px; font-size: 12px; }
