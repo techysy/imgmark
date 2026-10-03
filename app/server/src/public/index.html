@@ -153,16 +153,16 @@
         <span class="muted">把每张照片自己的 EXIF 渲成文字：浮在画面上，或写进条幅 / 白框 / 装裱的留白里</span>
       </div>
       <div id="type-text" class="type-panel hidden">
-        <div class="row">
-          <div class="field" style="flex:0 0 auto">
-            <label>样式</label>
-            <select id="exif-frame">
-              <option value="" selected>浮动文字（不加框）</option>
-              <option value="band">下方条幅</option>
-              <option value="frame">四周白框 + 底部文字</option>
-              <option value="inset">装裱细线框（照片内缩）</option>
-            </select>
-          </div>
+        <div class="field" style="flex:1 1 100%">
+          <label>样式 <span class="muted">点缩略图直接选用，效果即所见</span></label>
+          <!-- 预设缩略图墙（Liit 式交互）：每格用当前配置真实合成；select 保留为隐藏数据源 -->
+          <div id="frame-presets" class="frame-presets"></div>
+          <select id="exif-frame" hidden>
+            <option value="" selected>浮动文字（不加框）</option>
+            <option value="band">下方条幅</option>
+            <option value="frame">四周白框 + 底部文字</option>
+            <option value="inset">装裱细线框（照片内缩）</option>
+          </select>
         </div>
         <div id="float-cfg">
         <div class="notes">字段与样式是全局的一套 —— 同一批照片通常同一台相机，逐图调没意义。

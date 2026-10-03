@@ -770,6 +770,29 @@ function updateExifUI() {
   syncExifSample();
 }
 
+/** 文字组定义（读界面配置；不判图层/样式门控，供 exifGroupDef 与缩略图共用） */
+function textSpecDef() {
+  const fields = exifUI.selected.slice();
+  if (!fields.length) return null;
+  const color = $('exif-color').value;
+  return {
+    text: {
+      enabled: true,
+      fields,
+      color,
+      fontWeight: $('exif-weight').value,
+      separator: $('exif-sep').value,
+      prefix: $('exif-prefix').value,
+      suffix: $('exif-suffix').value,
+    },
+    position: exifUI.pos || 'se',
+    sizePct: +$('exif-size').value,
+    marginPct: +$('exif-mg').value,
+    opacity: +$('exif-op').value,
+    autoColor: $('exif-autocolor').checked,
+  };
+}
+
 /** 相机参数组的定义：仅「文字 / 画框」图层开启且样式为浮动文字时生效 */
 function exifGroupDef() {
   if (!state.layers.text) return null;
@@ -984,6 +1007,7 @@ function updateCropSplitUI() {
 
 // ---------- 样式预览（单张实时：任一分组参数变化都重新合成示例图） ----------
 async function doRefreshPreview() {
+  refreshFrameThumbs(); // 防抖独立：样式墙跟着当前配置重渲
   const groups = groupsForPayload();
   const hasLogoGroup = groups.some((g) => !g.text);
   const frame = frameDef();
@@ -1076,6 +1100,57 @@ function updateFrameUI() {
   const container = !!($('exif-frame') && $('exif-frame').value); // '' = 浮动文字，其余为容器样式
   if ($('float-cfg')) $('float-cfg').classList.toggle('hidden', container);
   if ($('frame-cfg')) $('frame-cfg').classList.toggle('hidden', !container);
+  syncFramePresets();
+}
+
+// ---- 样式预设缩略图墙（Liit 式交互：每种样式用当前配置真实合成一张小图，点缩略图直接选用） ----
+const FRAME_STYLES = [['', '浮动'], ['band', '条幅'], ['frame', '白框'], ['inset', '装裱']];
+let frameThumbGen = 0;
+const refreshFrameThumbs = debounce(async () => {
+  if (!state.layers.text) return;
+  const gen = ++frameThumbGen;
+  const orient = previewOrient;
+  const spec = textSpecDef();
+  const frameBase = {
+    lines: [$('exif-line1').value.trim(), $('exif-line2').value.trim()],
+    bg: $('exif-frame-bg').value,
+    align: $('exif-frame-align').value,
+  };
+  const reqs = FRAME_STYLES.map(async ([val]) => {
+    const payload = val === ''
+      ? { groups: spec ? [spec] : [], options: { format: 'jpeg', quality: 90 }, orient }
+      : { options: { format: 'jpeg', quality: 90, frame: { ...frameBase, style: val } }, orient };
+    try {
+      const r = await api('/api/preview', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+      return [val, r.preview || null];
+    } catch { return [val, null]; }
+  });
+  const results = await Promise.all(reqs);
+  if (gen !== frameThumbGen) return; // 过期响应丢弃
+  for (const [val, src] of results) {
+    const img = document.querySelector(`.frame-preset[data-style="${val}"] img`);
+    if (img && src) img.src = src;
+  }
+}, 700);
+
+function renderFramePresets() {
+  const box = $('frame-presets');
+  if (!box || box.dataset.built === '1') return;
+  box.dataset.built = '1';
+  box.innerHTML = FRAME_STYLES.map(([val, label]) => `
+    <button type="button" class="frame-preset" data-style="${val}" title="${label}">
+      <img alt="${label}"><span>${label}</span>
+    </button>`).join('');
+  box.querySelectorAll('.frame-preset').forEach((btn) => btn.addEventListener('click', () => {
+    if ($('exif-frame').value === btn.dataset.style) return;
+    $('exif-frame').value = btn.dataset.style;
+    $('exif-frame').dispatchEvent(new Event('change', { bubbles: true }));
+  }));
+  syncFramePresets();
+}
+function syncFramePresets() {
+  const cur = $('exif-frame') ? $('exif-frame').value : '';
+  document.querySelectorAll('.frame-preset').forEach((btn) => btn.classList.toggle('on', btn.dataset.style === cur));
 }
 function bindPreviewOn(selector, ev = 'input') {
   document.querySelectorAll(selector).forEach((el) => el.addEventListener(ev, refreshPreview));
@@ -1400,7 +1475,8 @@ function init() {
   slider('wm-tol', 'tol-v'); slider('opt-quality', 'q-v');
 
   // 原生 select 统一升级为自定义下拉（保留原生元素做数据源与事件目标）
-  ['wm-bg', 'opt-sizebase', 'opt-format', 'opt-cropratio', 'opt-cropratio-port', 'exif-sep', 'exif-weight', 'exif-frame', 'exif-frame-align'].forEach((id) => enhanceSelect($(id)));
+  ['wm-bg', 'opt-sizebase', 'opt-format', 'opt-cropratio', 'opt-cropratio-port', 'exif-sep', 'exif-weight', 'exif-frame-align'].forEach((id) => enhanceSelect($(id)));
+  renderFramePresets();
   ['wm-tol', 'opt-quality'].forEach((id) => $(id).addEventListener('input', refreshPreview));
   bindPreviewOn('#opt-maxedge', 'input');
   bindPreviewOn('#opt-format', 'change');

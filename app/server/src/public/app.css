@@ -391,6 +391,18 @@ select.dd-native { position: absolute; width: 1px; height: 1px; opacity: 0; poin
 .layer-head .muted { font-size: 12px; }
 .type-panel { padding-top: 2px; }
 
+/* 样式预设缩略图墙（Liit 式）：每种样式用当前配置真实合成，点选即用 */
+.frame-presets { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-top: 4px; }
+.frame-preset { border: 1px solid var(--border); border-radius: 10px; padding: 4px;
+  background: var(--surface-2); cursor: pointer; display: flex; flex-direction: column; gap: 3px;
+  transition: border-color .15s, box-shadow .15s; }
+.frame-preset:hover { border-color: var(--border-strong); }
+.frame-preset.on { border-color: var(--pri); box-shadow: 0 0 0 2px color-mix(in srgb, var(--pri) 18%, transparent); }
+.frame-preset img { width: 100%; aspect-ratio: 3 / 2; object-fit: cover; border-radius: 6px;
+  background: var(--tertiary); }
+.frame-preset span { font-size: 11px; color: var(--muted); text-align: center; }
+.frame-preset.on span { color: var(--pri-dk); font-weight: 600; }
+
 /* ③ 输出设置的小节标题：输出画面（裁剪/长边）与输出文件（格式/质量）分属两类 */
 .outsec { margin: 6px 0 2px; font-size: 12px; font-weight: 700; color: var(--muted); }
 .outsec small { font-weight: normal; color: var(--text-3); margin-left: 6px; }
