@@ -22,27 +22,24 @@ const state = {
   // 裁剪（每个 logo 各自一份裁剪框）
   crops: [],
   editingIdx: 0,
-  // 水印类型三选一：logo=图标水印 / exif=相机参数 / frame=相框（引擎本就是三条独立链路）
-  wmType: 'logo',
+  // 水印图层：logo / 相机参数 / 画框 三层独立开关、任意组合（引擎本就支持混排）
+  layers: { logo: true, exif: false, frame: false },
 };
-// 各类型的一句话说明（切换页签时显示在 #type-note）
-const TYPE_NOTE = {
-  logo: '上传 logo 后按分组布局叠到画面上；支持多 logo、九宫格定位、平铺与亮度自适应换色',
-  exif: '把相机品牌/镜头/曝光/日期渲染成一行文字，内容取自每张照片自己的 EXIF，无需 logo',
-  frame: '把画布撑出留白：下方条幅 / 四周白框 / 装裱细线框，参数写进留白里而不是浮在画面上',
-};
-
-/** 切换水印类型：只显隐面板与说明，各类型的配置在切走后保留，切回不丢 */
-function setType(t) {
-  if (!TYPE_NOTE[t]) t = 'logo';
-  state.wmType = t;
-  localStorage.setItem('imgmark_wmtype', t);
-  document.querySelectorAll('#wm-type-tabs .tab').forEach((b) => b.classList.toggle('on', b.dataset.wtype === t));
-  const note = $('type-note');
-  if (note) note.textContent = TYPE_NOTE[t];
-  ['logo', 'exif', 'frame'].forEach((k) => { const p = $(`type-${k}`); if (p) p.classList.toggle('hidden', k !== t); });
+// 各图层的一句话说明直接写在 index.html 的 .layer-head 里；
+// 这里只负责开关状态：显隐面板、持久化、联动预览与运行判定
+function setLayer(name, on) {
+  state.layers[name] = !!on;
+  localStorage.setItem('imgmark_layers', JSON.stringify(state.layers));
+  $(`layer-${name}`).checked = !!on;
+  $(`type-${name}`).classList.toggle('hidden', !on);
   updateRun();
   refreshPreview();
+}
+function applyLayers() {
+  for (const k of ['logo', 'exif', 'frame']) {
+    $(`layer-${k}`).checked = !!state.layers[k];
+    $(`type-${k}`).classList.toggle('hidden', !state.layers[k]);
+  }
 }
 let cropMode = false, dragStart = null;
 let previewOrient = 'landscape'; // 样式预览示例图方向：landscape|portrait（仅预览用）
@@ -445,13 +442,16 @@ function applyPresetData(meta) {
   const restored = JSON.parse(JSON.stringify(meta.data.groups || []));
   // 相机参数那一组没有 logos，会被下面的 logo 过滤丢掉 —— 先摘出来单独还原到 UI
   const textGroup = restored.find((g) => isTextGroup(g)) || null;
-  // 按内容推断这套方案的水印类型：带边框 → 相框；只有文字组 → 相机参数；其余 → 图标水印。
-  // 老的「logo+文字」组合方案恢复为图标水印（界面三类型互斥，组合能力保留在引擎/API 层）
+  // 图层开关照着方案内容拨回去：组合方案原生恢复，不再折叠成单一类型
   const savedOpts = meta.data.options || {};
   const hasFrame = !!(savedOpts.frame && savedOpts.frame.style);
   const hasText = restored.some(isTextGroup);
   const hasLogoGroups = restored.some((g) => !isTextGroup(g));
-  setType(hasFrame ? 'frame' : hasText && !hasLogoGroups ? 'exif' : 'logo');
+  if (hasLogoGroups || hasText || hasFrame) {
+    state.layers = { logo: hasLogoGroups, exif: hasText, frame: hasFrame };
+    localStorage.setItem('imgmark_layers', JSON.stringify(state.layers));
+    applyLayers();
+  }
   applyExifGroup(textGroup);
   state.groups = restored
     .filter((g) => !isTextGroup(g))
@@ -479,8 +479,7 @@ function applyPresetData(meta) {
   refreshDD(); // 程序改了原生 select，同步刷新自定义下拉的显示文字
   renderLogoList(); renderGroups();
   updateAutoColorUI(); refreshPreview(); updateRun();
-  const mixedNote = hasText && hasLogoGroups && !hasFrame ? '（该方案含「logo + 相机参数」组合，界面按图标水印类型恢复）' : '';
-  hint.textContent = `已恢复 ✓ ${meta.summary ? meta.summary.text : ''}${mixedNote}`;
+  hint.textContent = `已恢复 ✓ ${meta.summary ? meta.summary.text : ''}`;
 }
 
 // logo 文件入口（网页 input / 桌面壳原生对话框 / 方案恢复共用）
@@ -488,6 +487,7 @@ function onWmFiles(files) {
   state.wmFiles = files;
   state.watermarkId = null;
   state.logoSet = null;
+  if (files.length && !state.layers.logo) setLayer('logo', true); // 传了 logo 自动开启该图层
   const names = files.map((f) => f.name);
   $('wm-name').textContent = files.length
     ? (files.length > 1 ? `${files.length} 个文件：` : '') + (names.join('、').length > 60 ? names.join('、').slice(0, 60) + '…' : names.join('、'))
@@ -770,9 +770,9 @@ function updateExifUI() {
   syncExifSample();
 }
 
-/** 相机参数这一组的定义（仅在相机参数类型下生效）；给 /api/process 与 /api/preview 用 */
+/** 相机参数这一组的定义（仅在该图层开启时生效）；给 /api/process 与 /api/preview 用 */
 function exifGroupDef() {
-  if (state.wmType !== 'exif') return null;
+  if (!state.layers.exif) return null;
   const fields = exifUI.selected.slice();
   if (!fields.length) return null;
   const color = $('exif-color').value;
@@ -794,10 +794,9 @@ function exifGroupDef() {
   };
 }
 
-/** logo 分组 + 相机参数组：类型互斥 —— logo 分组只在图标水印模式发出，
- *  相机参数模式只发文字组，相框模式只发 frame（不含任何组） */
+/** 组装 payload 的 groups：logo 分组（图层开）+ 相机参数组（图层开）—— 任意组合 */
 function groupsForPayload() {
-  const list = state.wmType === 'logo' ? state.groups.map((g) => ({ ...g })) : [];
+  const list = state.layers.logo ? state.groups.map((g) => ({ ...g })) : [];
   const eg = exifGroupDef();
   if (eg) list.push(eg);
   return list;
@@ -1061,7 +1060,7 @@ function options() {
 // 与「文字水印」的区别：文字浮在画面上，边框是把画布撑大、参数写进留白。
 // 两行都留空时交给服务端用机型/曝光参数自动填（见 /api/preview 的 previewFrame）。
 function frameDef() {
-  if (state.wmType !== 'frame') return null;
+  if (!state.layers.frame) return null;
   const style = $('exif-frame') ? $('exif-frame').value : '';
   if (!style) return null;
   return {
@@ -1226,21 +1225,26 @@ function currentSource() {
   return state.uploadCount ? { mode: 'upload' } : null;
 }
 function updateRun() {
-  const groups = groupsForPayload();
-  const frame = frameDef();
-  // 各类型「样式已配好」的判定：logo 要水印就绪且有分组；文字要勾了内容；相框要选了样式
-  const styleReady = state.wmType === 'exif' ? groups.length > 0
-    : state.wmType === 'frame' ? !!frame
-    : !!state.watermarkId && groups.length > 0;
+  // 每个开启的图层各自判定「已配好」；全部配好才算样式就绪
+  const ready = {
+    logo: !!state.watermarkId && state.groups.length > 0,
+    exif: !!exifGroupDef(),
+    frame: !!frameDef(),
+  };
+  const active = ['logo', 'exif', 'frame'].filter((k) => state.layers[k]);
+  const styleReady = active.length > 0 && active.every((k) => ready[k]);
   const ok = styleReady && !!currentSource();
   $('run').disabled = !ok;
   $('group-add').disabled = !state.logoSet; // 有 logo 才能建分组
-  $('watch-create').disabled = !styleReady; // 监听复用当前类型配置（服务端支持三种类型独立监听）
+  $('watch-create').disabled = !styleReady; // 监听复用当前图层组合（服务端支持任意组合监听）
+  const pending = active.find((k) => !ready[k]);
+  const layerNames = { logo: 'Logo 图层', exif: '相机参数图层', frame: '画框图层' };
   $('run-hint').textContent = ok ? '准备就绪'
     : !currentSource() ? '先选择图片来源'
-    : state.wmType === 'exif' ? '先勾选要输出的相机参数'
-    : state.wmType === 'frame' ? '先选择一个边框样式'
-    : (!state.logoSet ? '先添加 logo' : '等待水印准备…');
+    : !active.length ? '先开启任一水印图层'
+    : pending === 'logo' ? (!state.logoSet ? 'Logo 图层：先添加 logo' : 'Logo 图层：等待水印准备…')
+    : pending === 'exif' ? '相机参数图层：先勾选要输出的字段'
+    : '画框图层：先选择一个边框样式';
 }
 
 // ---------- 文件夹监听 ----------
@@ -1409,9 +1413,13 @@ function init() {
     refreshPreview();
   });
   $('opt-format').addEventListener('change', () => { $('quality-wrap').style.opacity = ['jpeg', 'webp'].includes($('opt-format').value) ? 1 : .4; refreshPreview(); });
-  // 水印类型页签：三选一（图标水印 / 相机参数 / 相框），记住上次选择
-  document.querySelectorAll('#wm-type-tabs .tab').forEach((b) => b.addEventListener('click', () => setType(b.dataset.wtype)));
-  setType(state.wmType);
+  // 水印图层开关：三层独立组合，状态记住
+  for (const k of ['logo', 'exif', 'frame']) {
+    $(`layer-${k}`).addEventListener('change', (e) => setLayer(k, e.target.checked));
+  }
+  try { Object.assign(state.layers, JSON.parse(localStorage.getItem('imgmark_layers') || '{}')); } catch { /* 损坏则用默认 */ }
+  applyLayers();
+  updateRun();
   $('group-add').addEventListener('click', addGroup);
   bindExifUI();
   loadExifFields(); // 字段清单来自服务端，回来后会重绘勾选区

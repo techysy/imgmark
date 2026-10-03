@@ -65,19 +65,17 @@
          界面把它们提为一级类型，选哪个就只配哪个，互不干扰。
          底部的样式预览三类型共用，即改即预览。 -->
     <div class="card">
-      <h2>① 水印样式 <small>三种类型选一种，参数即改即预览</small></h2>
-      <div class="tabs type-tabs" id="wm-type-tabs">
-        <button type="button" class="tab on" data-wtype="logo">图标水印</button>
-        <button type="button" class="tab" data-wtype="exif">相机参数</button>
-        <button type="button" class="tab" data-wtype="frame">相框</button>
-      </div>
-      <div id="type-note" class="notes type-note">上传 logo 后按分组布局叠到画面上</div>
+      <h2>① 水印样式 <small>三个图层独立开关、任意组合，参数即改即预览</small></h2>
 
-      <!-- 设置区（左）与样式预览（右）左右分栏；预览三类型共用，配置长时滚动吸顶 -->
+      <!-- 设置区（左）与样式预览（右）左右分栏；预览所有图层共用，配置长时滚动吸顶 -->
       <div class="style-split">
       <div class="style-config">
 
-      <!-- 类型一：图标水印（logo 管理 + 分组布局） -->
+      <!-- 图层一：Logo 水印（logo 管理 + 分组布局） -->
+      <div class="layer-head">
+        <label><input type="checkbox" id="layer-logo"> <b>Logo 水印</b></label>
+        <span class="muted">上传 logo 后按分组布局叠到画面上；支持多 logo、九宫格定位、平铺与亮度自适应换色</span>
+      </div>
       <div id="type-logo" class="type-panel">
         <div class="row">
           <label class="file-btn" id="wm-file-btn">添加 logo（可多选）
@@ -147,7 +145,11 @@
         </div>
       </div>
 
-      <!-- 类型二：相机参数（从每张图自己的 EXIF 读相机/镜头/曝光，渲染成一行文字水印） -->
+      <!-- 图层二：相机参数（从每张图自己的 EXIF 读相机/镜头/曝光，渲染成一行文字水印） -->
+      <div class="layer-head">
+        <label><input type="checkbox" id="layer-exif"> <b>相机参数</b></label>
+        <span class="muted">把每张照片自己的 EXIF 渲成一行文字，无需 logo；与 Logo 水印可同时开启</span>
+      </div>
       <div id="type-exif" class="type-panel hidden">
         <div class="notes">字段与样式是全局的一套 —— 同一批照片通常同一台相机，逐图调没意义。
 没有 EXIF 的照片会自动跳过，不会留空水印。</div>
@@ -207,7 +209,11 @@
         <div class="notes">示例文案：<b id="exif-sample">—</b></div>
       </div>
 
-      <!-- 类型三：相框（把画布撑出留白，参数写进留白 —— 不是浮在画面上的文字） -->
+      <!-- 图层三：相框（把画布撑出留白，参数写进留白 —— 不是浮在画面上的文字） -->
+      <div class="layer-head">
+        <label><input type="checkbox" id="layer-frame"> <b>画框</b></label>
+        <span class="muted">撑出留白并把参数写进留白里；与上面两个图层可同时开启</span>
+      </div>
       <div id="type-frame" class="type-panel hidden">
         <div class="row">
           <div class="field" style="flex:0 0 auto">
@@ -305,6 +311,9 @@
     <!-- ③ 输出设置 -->
     <div class="card">
       <h2>③ 输出设置</h2>
+      <!-- 输出画面 = 画布本身（裁剪决定比例、长边决定像素规模），水印的定位基准随之而定；
+           与「输出文件」（格式/质量）是两类事，分组呈现 -->
+      <div class="outsec">输出画面 <small>裁剪与长边上限，决定水印的定位基准</small></div>
       <!-- 输出裁剪独占一行：它带一行提示（智能裁剪…），跟别的挤一行会把提示挤到隔壁格下面去。
            裁剪在最前 —— 它决定画面，是这一步里最「上游」的选择。
            两个下拉：勾上「横竖分开设置」才各管一个方向，否则只有左边（横图）那个可用，
@@ -352,7 +361,12 @@
             <div id="cropratio-port-hint" class="notes"></div>
           </div>
         </div>
+        <div class="field">
+          <label title="输出图片长边超过该值时等比缩小（只缩不放），水印随画面一起缩；留空保持原始尺寸">长边上限 (px)</label>
+          <input type="number" id="opt-maxedge" class="num" min="0" step="1" placeholder="不限">
+        </div>
       </div>
+      <div class="outsec">输出文件 <small>格式与质量</small></div>
       <!-- 输出质量 + 输出格式同排：质量滑杆与 JPEG 体积优先在左（要宽），格式下拉在右。
            格式跟在质量后面 —— 「体积优先」这个开关本来就只对 JPEG 生效，两者挨在一起才读得通。 -->
       <div class="row">
@@ -369,10 +383,6 @@
             <option value="jpeg">JPEG</option>
             <option value="webp">WebP</option>
           </select>
-        </div>
-        <div class="field">
-          <label title="输出图片长边超过该值时等比缩小（只缩不放），水印随画面一起缩；留空保持原始尺寸">长边上限 (px)</label>
-          <input type="number" id="opt-maxedge" class="num" min="0" step="1" placeholder="不限">
         </div>
       </div>
       <div class="row-inline wrap">
