@@ -929,7 +929,8 @@ app.post('/api/presets', reserveMemoryUploadSlot, requestContentLengthLimit(128 
     if (!body || typeof body !== 'object' || Array.isArray(body)) return res.status(400).json({ error: 'payload 必须是 JSON 对象' });
     const name = String(body.name || '').trim().slice(0, 100);
     if (!name) return res.status(400).json({ error: '缺少方案名称' });
-    if (!Array.isArray(body.groups) || !body.groups.length) return res.status(400).json({ error: '方案缺少分组配置' });
+    const hasFrame = !!(body.options && body.options.frame && body.options.frame.style);
+    if (!Array.isArray(body.groups) || (!body.groups.length && !hasFrame)) return res.status(400).json({ error: '方案缺少分组配置或边框样式' });
     const logos = (req.files && req.files.logos) || [];
     // 只含相机参数文字水印的方案不带 logo，也是合法的
     for (const f of logos) {
