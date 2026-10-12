@@ -6,7 +6,7 @@
  * - preload 暴露 window.imgmarkDesktop：原生文件/文件夹对话框（比 <input type=file> 强：
  *   多选文件返回真实路径、选文件夹、按扩展名过滤水印源），路径交给后端 local-files 模式批量处理
  */
-const { app, BrowserWindow, Tray, Menu, dialog, ipcMain, shell, nativeImage } = require('electron');
+const { app, BrowserWindow, Tray, Menu, dialog, ipcMain, shell, nativeImage, clipboard, ClipboardItem } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
 const http = require('node:http');
@@ -17,6 +17,7 @@ let boundPort = BASE_PORT;
 let tray = null;
 let isQuitting = false;
 let watcherCount = 0; // -1 = 尚未获取
+let dataDir = null;   // 内嵌服务的数据目录，托盘菜单里要显示/打开
 
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) { app.quit(); }
@@ -39,7 +40,7 @@ function probeImgmark(port) {
 }
 
 async function startServer() {
-  const dataDir = path.resolve(app.getPath('userData'));
+  dataDir = path.resolve(app.getPath('userData'));
   const normalizeDataDir = (value) => {
     const resolved = path.resolve(value);
     return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
@@ -85,33 +86,83 @@ function createWindow() {
     if (!isQuitting) {
       e.preventDefault();
       win.hide();
+      refreshTray();
     }
   });
   win.on('closed', () => { win = null; });
 }
 
 function showMain() {
-  if (!win) createWindow();
-  else { win.show(); win.focus(); }
+  if (!win) { createWindow(); return; }
+  if (win.isMinimized()) win.restore();
+  win.show();
+  win.focus();
+  refreshTray(); // 菜单第一项在「打开 ImgMark」/「显示主窗口」之间变，跟着窗口状态走
 }
 
 // ---- 托盘 ----
+// 菜单按桌面壳常见的样子铺开：打开窗口 / 浏览器访问 → 运行状态 → 数据目录 → 开机自启 → 退出。
+// 监听常驻后台（关窗口只是收进托盘），所以「去哪儿看状态」得托盘自己说清楚。
 function buildTrayMenu() {
+  const portLabel = boundPort ? `服务运行中 · 127.0.0.1:${boundPort}` : '服务未就绪';
   const watchLabel = watcherCount < 0 ? '文件夹监听：获取状态中…'
     : watcherCount === 0 ? '文件夹监听：无运行中的监听'
     : `文件夹监听：${watcherCount} 个运行中`;
+  const winLabel = win && !win.isDestroyed() && win.isVisible() ? '显示主窗口' : '打开 ImgMark';
   return Menu.buildFromTemplate([
-    { label: '显示主窗口', click: showMain },
+    { label: winLabel, click: showMain },
+    { label: '在浏览器中打开', enabled: !!boundPort, click: () => shell.openExternal(`http://127.0.0.1:${boundPort}/`) },
     { type: 'separator' },
+    { label: portLabel, enabled: false },
     { label: watchLabel, enabled: false },
+    { type: 'separator' },
+    { label: '打开数据目录', enabled: !!dataDir, click: () => { if (dataDir) shell.openPath(dataDir); } },
+    // 内嵌服务与壳同生共死，所以这里是「重启 ImgMark」而不是「重启服务」
+    { label: '重启 ImgMark', click: () => { isQuitting = true; app.relaunch(); app.quit(); } },
+    {
+      label: '开机自启',
+      type: 'checkbox',
+      checked: app.getLoginItemSettings().openAtLogin,
+      click: (item) => setAutoLaunch(item.checked),
+    },
+    { type: 'separator' },
+    { label: `关于 ImgMark ${app.getVersion()}`, click: showAbout },
     { type: 'separator' },
     { label: '退出 ImgMark', click: () => { isQuitting = true; app.quit(); } },
   ]);
 }
 
+// 开机自启走 Electron 内置的登录项（注册表 Run 键），只装 Windows 版就用 exePath
+function setAutoLaunch(enable) {
+  try {
+    app.setLoginItemSettings({ openAtLogin: !!enable, path: process.execPath, args: [] });
+  } catch {
+    dialog.showErrorBox('开机自启设置失败', '无法修改开机启动项，可在「设置 → 应用 → 启动」中手动开启 ImgMark。');
+  }
+  refreshTray();
+}
+
+function showAbout() {
+  const watchText = watcherCount < 0 ? '状态获取中'
+    : watcherCount === 0 ? '无运行中的监听' : `${watcherCount} 个监听运行中`;
+  dialog.showMessageBox(win || undefined, {
+    type: 'info',
+    title: '关于 ImgMark',
+    message: `ImgMark ${app.getVersion()}`,
+    detail: [
+      `批量图片水印 · 相机参数文字 · 文件夹监听`,
+      `服务地址：http://127.0.0.1:${boundPort}/`,
+      `数据目录：${dataDir || '未知'}`,
+      `监听：${watchText}`,
+    ].join('\n'),
+    buttons: ['好'],
+  });
+}
+
 function refreshTray() {
   if (!tray) return;
-  tray.setToolTip(`ImgMark 批量图片水印（${watcherCount > 0 ? `${watcherCount} 个监听运行中` : '无监听'}）`);
+  const tip = `ImgMark 批量图片水印 · ${watcherCount > 0 ? `${watcherCount} 个监听运行中` : '无监听'} · 双击打开`;
+  tray.setToolTip(tip);
   tray.setContextMenu(buildTrayMenu());
 }
 
@@ -138,6 +189,10 @@ function createTray() {
   tray = new Tray(icon);
   tray.setToolTip('ImgMark 批量图片水印');
   tray.setContextMenu(buildTrayMenu());
+  // 设了 contextMenu 之后，Windows 上托盘的单击/双击默认行为（弹菜单）不会再来，
+  // 双击也就没人处理了 —— 这里自己接：双击显示主窗口，单击也显示（更符合直觉）
+  tray.on('double-click', showMain);
+  tray.on('click', showMain);
   pollWatchers();
   setInterval(pollWatchers, 30000);
 }
@@ -176,6 +231,33 @@ ipcMain.handle('pick-watermark', async () => {
 });
 
 // 单张导出存盘：浏览器里只能靠 <a download> 落到下载目录，桌面壳直接问用户存哪
+// 复制成图到系统剪贴板，供分享到微信/QQ/小红书等。
+// 用主进程 clipboard.writeImage 而非渲染进程的 navigator.clipboard：后者在 Electron 里
+// 只能写 text 与（Chromium 允许的）image/png，微信一类程序读的是 Windows 原生 DIB 格式
+ipcMain.handle('copy-image', async (_e, payload) => {
+  try {
+    const buf = Buffer.from(payload.data);
+    if (!buf.length) return { copied: false, error: '图片数据为空' };
+    // Electron 44 的主进程 clipboard 只剩异步 web API（write/read/writeText…），
+    // writeImage/readImage 已经没有了 —— 必须走 clipboard.write(ClipboardItem)。
+    // 系统剪贴板认的格式由它自己往 Windows 侧翻译（DIB 等），我们只管给出标准图片格式。
+    let out = buf;
+    if (!/\.png$/i.test(String(payload.name || ''))) {
+      // 只保证 PNG 一条路：JPEG/WebP 直接塞 ClipboardItem 未必被目标程序接受，
+      // 统一转成无损 PNG 再放。sharp 从内嵌服务借，延迟 require ——
+      // 启动时加载它要上百毫秒，而复制是偶发操作，不该让每次开 ImgMark 都为此等一下
+      const serverRoot = app.isPackaged
+        ? path.join(process.resourcesPath, 'imgmark', 'server')
+        : path.join(__dirname, '..', 'app', 'server');
+      out = await require(path.join(serverRoot, 'node_modules', 'sharp'))(buf).png().toBuffer();
+    }
+    await clipboard.write([new ClipboardItem({ 'image/png': out })]);
+    return { copied: true };
+  } catch (e) {
+    return { copied: false, error: String(e.message || e) };
+  }
+});
+
 ipcMain.handle('save-image', async (_e, payload) => {
   const name = typeof (payload && payload.name) === 'string' && payload.name.trim() ? payload.name : 'image_wm.jpg';
   const ext = path.extname(name).slice(1).toLowerCase();

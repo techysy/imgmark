@@ -78,6 +78,8 @@ const I = {
   image: svg('<rect width="18" height="18" x="3" y="3" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.1-3.1a2 2 0 0 0-2.8 0L6 21"/>'),
   download: svg('<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/><path d="M12 15V3"/>'),
   x: svg('<path d="M18 6 6 18"/><path d="m6 6 12 12"/>'),
+    // 复制成图到剪贴板（分享到社交平台）
+    clipboard: svg('<rect width="8" height="4" x="8" y="2" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/>'),
 };
 
 // 空状态占位图（与 index.html 中的初始 src 保持一致）
@@ -1218,6 +1220,135 @@ async function saveOwn() {
   oneHint(`已下载：${st.name}`);
 }
 
+// ---------- 复制成图到剪贴板（分享到微信 / QQ / 小红书等） ----------
+// 两条路：桌面壳走主进程 clipboard.writeImage（写 Windows 原生格式，微信一类才认），
+// 浏览器走 navigator.clipboard.write —— 它只接受 PNG，JPEG/WebP 得先转一道。
+// 两种都拿不到就退回「下载」，别让右键点了没反应。
+async function copyImageToClipboard(blob, name, hint) {
+  const say = (s) => { if (hint) hint(s); };
+  if (!blob) { say('这张图还没渲染出来'); return; }
+  try {
+    if (native && native.copyImage) {
+      const r = await native.copyImage(await blob.arrayBuffer(), name);
+      if (r && r.copied) { say('已复制，可直接粘贴到微信 / QQ 等'); return; }
+      throw new Error((r && r.error) || '复制失败');
+    }
+    if (!navigator.clipboard || !window.ClipboardItem) throw new Error('浏览器不支持直接写剪贴板');
+    // navigator.clipboard 只收 image/png：先解出来画到 canvas 再转一道
+    let pngBlob = blob;
+    if (blob.type !== 'image/png') {
+      pngBlob = await new Promise((res, rej) => {
+        const img = new Image();
+        img.onload = () => {
+          const c = document.createElement('canvas');
+          c.width = img.naturalWidth; c.height = img.naturalHeight;
+          c.getContext('2d').drawImage(img, 0, 0);
+          c.toBlob((b) => (b ? res(b) : rej(new Error('转 PNG 失败'))), 'image/png');
+        };
+        img.onerror = () => rej(new Error('图片解码失败'));
+        img.src = URL.createObjectURL(blob);
+      });
+    }
+    await navigator.clipboard.write([new window.ClipboardItem({ 'image/png': pngBlob })]);
+    say('已复制，可直接粘贴到微信 / QQ 等');
+  } catch (e) {
+    // 剪贴板这条路走不通（权限/非安全上下文/格式不支持）时，至少让用户能拿到文件
+    say('复制失败：' + (e.message || e) + '，已改为下载');
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = name || 'image_wm.png';
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+  }
+}
+
+// ---------- 预览图右键菜单 ----------
+// 桌面壳默认不弹 Chromium 菜单，浏览器默认菜单里也只有「复制图像地址」（一个 blob: URL，
+// 粘到别处毫无意义），所以自己做一套，选项跟当前显示的是真图还是示例图有关。
+let ctxTarget = null;
+function closeCtxMenu() {
+  const m = $('ctx-menu');
+  if (m) m.classList.add('hidden');
+  ctxTarget = null;
+}
+function openCtxMenu(x, y, items) {
+  const m = $('ctx-menu');
+  m.innerHTML = items.map((it) => (it.sep ? '<div class="ctx-sep"></div>'
+    : `<button type="button" class="ctx-item"${it.disabled ? ' disabled' : ''}>${esc(it.label)}</button>`)).join('');
+  m.classList.remove('hidden');
+  // 贴着鼠标放；贴到视口边缘时向内收
+  const r = m.getBoundingClientRect();
+  m.style.left = Math.max(6, Math.min(x, window.innerWidth - r.width - 6)) + 'px';
+  m.style.top = Math.max(6, Math.min(y, window.innerHeight - r.height - 6)) + 'px';
+  m.querySelectorAll('.ctx-item').forEach((b, i) => {
+    if (items[i].disabled) return;
+    b.addEventListener('click', () => { const fn = items[i].onClick; closeCtxMenu(); if (fn) fn(); });
+  });
+}
+// 当前预览区显示的这张图：真图模式拿原始 blob，示例模式取 data: URL
+function currentPreviewImage() {
+  if (previewOwnMode && previewOwn && previewOwn.blob) {
+    return { blob: previewOwn.blob, name: previewOwn.name || 'image_wm.jpg', own: true };
+  }
+  const im = $('style-preview');
+  const src = im.getAttribute('src') || '';
+  if (!src.startsWith('data:image/')) return null;
+  return { dataUrl: src, name: 'imgmark-sample.jpg', own: false };
+}
+async function blobFromImage(img) {
+  if (img.blob) return img.blob;
+  const r = await fetch(img.dataUrl);
+  return await r.blob();
+}
+// img 描述 → 剪贴板。取字节这步可能失败（data: URL 解不出图），失败也要有话说，
+// 所以统一在这里兜住，别把 Promise 当 Blob 传下去（createObjectURL 会直接抛）
+function copyImageDesc(img, hint) {
+  return blobFromImage(img)
+    .then((blob) => copyImageToClipboard(blob, img.name, hint))
+    .catch((e) => { if (hint) hint('✗ ' + (e.message || e)); });
+}
+// 挂在预览图与大图上：右键复制、左键大图照旧放大
+function bindCtxCopy(imgEl, capEl, isLightbox) {
+  imgEl.addEventListener('contextmenu', (e) => {
+    e.preventDefault();
+    const img = isLightbox ? lightboxImage() : currentPreviewImage();
+    if (!img) return;
+    ctxTarget = img;
+    const say = (s) => { if (isLightbox) lightboxSay(s); else oneHint(s); };
+    openCtxMenu(e.clientX, e.clientY, [
+      { label: '复制图片到剪贴板', onClick: () => copyImageDesc(img, say) },
+      { sep: true },
+      { label: '在新标签页打开图片', disabled: !img.own, onClick: () => window.open(
+        previewOwn && previewOwn.url ? previewOwn.url : '', '_blank') },
+    ]);
+  });
+}
+function lightboxImage() {
+  const src = $('lightbox-img').getAttribute('src') || '';
+  if (!src) return null;
+  if (previewOwnMode && previewOwn && src === previewOwn.url) {
+    return { blob: previewOwn.blob, name: previewOwn.name || 'image_wm.jpg', own: true };
+  }
+  if (!src.startsWith('data:image/')) return null;
+  return { dataUrl: src, name: 'imgmark-sample.jpg', own: false };
+}
+function lightboxSay(s) {
+  const el = $('lightbox-cap');
+  if (!el) return;
+  el.textContent = s;
+  el.style.color = s.startsWith('已') ? '#8ce99a' : '#ffd8a8';
+  clearTimeout(lightboxSay._t);
+  lightboxSay._t = setTimeout(() => {
+    el.textContent = $('lightbox-copy').dataset.cap || '';
+    el.style.color = '';
+  }, 2600);
+}
+document.addEventListener('click', (e) => {
+  if (!e.target.closest('.ctx-menu')) closeCtxMenu();
+});
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeCtxMenu(); });
+window.addEventListener('scroll', closeCtxMenu, true);
+
 // ---------- 预览放大（点击亮/暗示例图看原尺寸；点击任意处或 Esc 关闭） ----------
 function openLightbox(imgEl, capEl) {
   const src = imgEl.getAttribute('src') || '';
@@ -1225,15 +1356,30 @@ function openLightbox(imgEl, capEl) {
   if (!/^(data:image\/(jpeg|png|webp|avif)|blob:)/.test(src)) return;
   $('lightbox-img').src = src;
   $('lightbox-cap').textContent = capEl.textContent;
+  $('lightbox-copy').dataset.cap = capEl.textContent;
+  // 有真实字节可复制时才给这个角标；示例图虽是 data: URL 也能复制，一并留着
+  $('lightbox-copy').classList.remove('hidden');
   $('lightbox').classList.remove('hidden');
 }
 function closeLightbox() {
   $('lightbox').classList.add('hidden');
+  $('lightbox-copy').classList.add('hidden');
   $('lightbox-img').removeAttribute('src');
 }
 $('style-preview').addEventListener('click', () => openLightbox($('style-preview'), $('preview-cap')));
 $('style-preview-auto').addEventListener('click', () => openLightbox($('style-preview-auto'), $('preview-cap-auto')));
+// 大图上的「复制图片」角标：点它别触发下面的「点任意处关闭」
+$('lightbox-copy').addEventListener('click', (e) => {
+  e.stopPropagation();
+  const img = lightboxImage();
+  if (!img) return;
+  copyImageDesc(img, lightboxSay);
+});
 $('lightbox').addEventListener('click', closeLightbox);
+// 预览图与大图都支持右键复制
+bindCtxCopy($('style-preview'), $('preview-cap'), false);
+bindCtxCopy($('style-preview-auto'), $('preview-cap-auto'), false);
+bindCtxCopy($('lightbox-img'), $('lightbox-cap'), true);
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && !$('lightbox').classList.contains('hidden')) closeLightbox();
 });

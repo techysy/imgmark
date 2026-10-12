@@ -448,7 +448,12 @@
 <footer id="page-footer">ImgMark · AI/SVG/PNG/JPG 白底黑底自动转透明 · fnOS 开放平台文件授权 · 局域网工具，无鉴权，请勿暴露公网</footer>
 
 <!-- 预览放大：点击亮/暗示例图看原尺寸，点击任意处或 Esc 关闭 -->
+<!-- 预览图右键菜单：把成图复制到剪贴板（分享到微信/QQ/小红书等）。
+     浏览器与 Electron 都不提供可用的默认右键菜单（Electron 干脆不弹），所以自己做一套 -->
+<div id="ctx-menu" class="ctx-menu hidden" role="menu"></div>
+
 <div id="lightbox" class="hidden" role="dialog" aria-modal="true">
+  <button id="lightbox-copy" class="hidden" title="复制这张图到剪贴板，可直接粘贴到微信 / QQ 等"><span class="pv-ic" data-ic="clipboard"></span>复制图片</button>
   <img id="lightbox-img" alt="预览大图">
   <div id="lightbox-cap"></div>
 </div>
