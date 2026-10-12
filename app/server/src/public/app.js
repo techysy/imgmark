@@ -1331,16 +1331,13 @@ async function blobFromImage(img) {
 }
 // img 描述 → 剪贴板。取字节这步可能失败（data: URL 解不出图），失败也要有话说，
 // 所以统一在这里兜住，别把 Promise 当 Blob 传下去（createObjectURL 会直接抛）
-function copyImageDesc(img, hint) {
+function copyImageDesc(img, hint, shortEdge) {
   return blobFromImage(img)
-    .then((blob) => copyImageToClipboard(blob, img.name, hint, copyShortEdge()))
+    .then((blob) => copyImageToClipboard(blob, img.name, hint, shortEdge))
     .catch((e) => { if (hint) hint('✗ ' + (e.message || e)); });
 }
-// 分享尺寸设置：只管复制，导出与预览一律原图。0 = 不缩放
-function copyShortEdge() {
-  const v = $('one-copy-size') && $('one-copy-size').value;
-  return v === '0' ? 0 : (Number(v) || SHARE_SHORT_EDGE);
-}
+// 分享尺寸：默认短边 1080（主流社交平台的通行上限）。工具条上不再放一个常驻下拉 ——
+// 那是低频设置，占一行里第五个位置不值当；要换尺寸在右键菜单里直接选「原始尺寸」那条。
 // 挂在预览图与大图上：右键复制、左键大图照旧放大
 function bindCtxCopy(imgEl, capEl, isLightbox) {
   imgEl.addEventListener('contextmenu', (e) => {
@@ -1349,11 +1346,10 @@ function bindCtxCopy(imgEl, capEl, isLightbox) {
     if (!img) return;
     ctxTarget = img;
     const say = (s) => { if (isLightbox) lightboxSay(s); else oneHint(s); };
-    // 菜单里直接写清这次会复制成多大，免得缩放变成看不见的行为
-    const n = copyShortEdge();
+    // 两条复制并排给，点哪条就用哪种尺寸 —— 不用再藏一个开关去设置
     openCtxMenu(e.clientX, e.clientY, [
-      { label: n ? `复制图片到剪贴板（短边 ${n}px）` : '复制图片到剪贴板（原始尺寸）',
-        onClick: () => copyImageDesc(img, say) },
+      { label: `复制图片 · 短边 ${SHARE_SHORT_EDGE}（分享）`, onClick: () => copyImageDesc(img, say, SHARE_SHORT_EDGE) },
+      { label: '复制图片 · 原始尺寸', onClick: () => copyImageDesc(img, say, 0) },
       { sep: true },
       { label: '在新标签页打开图片', disabled: !img.own, onClick: () => window.open(
         previewOwn && previewOwn.url ? previewOwn.url : '', '_blank') },
@@ -1410,7 +1406,7 @@ $('lightbox-copy').addEventListener('click', (e) => {
   e.stopPropagation();
   const img = lightboxImage();
   if (!img) return;
-  copyImageDesc(img, lightboxSay);
+  copyImageDesc(img, lightboxSay, SHARE_SHORT_EDGE);
 });
 $('lightbox').addEventListener('click', closeLightbox);
 // 预览图与大图都支持右键复制
@@ -1904,17 +1900,6 @@ function init() {
   });
   $('one-clear').addEventListener('click', () => { previewOwnOff(); doRefreshPreview(); });
   $('one-save').addEventListener('click', saveOwn);
-  // 分享尺寸：记住上次的选择（大图角标的提示文字也要跟着改）
-  try { $('one-copy-size').value = localStorage.getItem('imgmark_copy_size') || '1080'; } catch { /* 隐私模式等 */ }
-  const syncCopySizeUI = () => {
-    const n = copyShortEdge();
-    $('lightbox-copy').title = n
-      ? `复制这张图到剪贴板（短边缩到 ${n}px），可直接粘贴到微信 / QQ 等`
-      : '复制这张图到剪贴板（原始尺寸）';
-    try { localStorage.setItem('imgmark_copy_size', n ? String(n) : '0'); } catch { /* 同上 */ }
-  };
-  $('one-copy-size').addEventListener('change', syncCopySizeUI);
-  syncCopySizeUI();
   $('watch-create').addEventListener('click', createWatcher);
   $('watch-refresh').addEventListener('click', refreshWatchers);
   if (native) {

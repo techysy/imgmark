@@ -212,11 +212,6 @@ input[type="checkbox"] { accent-color: var(--pri); }
 .pv-own .pv-own-btn, .pv-own .btn { padding: 6px 12px; min-height: 30px; font-size: 12px;
   line-height: 1.2; border-radius: 15px; }
 .pv-own .btn.ghost { border-color: var(--border); }
-/* 分享尺寸下拉：跟着工具条一行的节奏，但走 quiet 样式 —— 它是设置不是主操作，
-   不该跟「导出」那个 primary 按钮抢视线 */
-.pv-own .copy-size { padding: 5px 8px; min-height: 28px; font-size: 11px; color: var(--muted);
-  background: transparent; border: 1px dashed var(--border); border-radius: 15px; cursor: pointer; }
-.pv-own .copy-size:hover { color: var(--txt); border-color: var(--border-strong); border-style: solid; }
 /* 按钮图标统一走 Lucide 线性图标（见 app.js 的 I），emoji 各平台字形不一，不适合做控件 */
 .pv-ic { display: inline-flex; align-items: center; width: 13px; height: 13px; margin-right: 5px; flex: none; }
 .pv-ic svg { width: 100%; height: 100%; display: block; }
@@ -236,22 +231,26 @@ input[type="checkbox"] { accent-color: var(--pri); }
 
 /* ---- 预览图右键菜单（复制成图） ----
    桌面壳不弹 Chromium 默认菜单，普通浏览器那份菜单里也只有「复制图像地址」，
-   所以自己做一套。z-index 高于 lightbox(80)：放大后右键同样能用。 */
-.ctx-menu { position: fixed; z-index: 120; min-width: 172px; background: var(--card);
-  border: 1px solid var(--border); border-radius: 10px; padding: 5px;
-  box-shadow: 0 12px 32px rgba(0, 0, 0, .22); display: flex; flex-direction: column; gap: 3px; }
-.ctx-item { width: 100%; text-align: left; cursor: pointer; padding: 7px 9px;
-  border: 1px solid transparent; border-radius: 7px; background: transparent; color: var(--txt); font-size: 13px; }
+   所以自己做一套。z-index 高于 lightbox(80)：放大后右键同样能用。
+   尺寸照着 .dd-menu 那套下拉走（同 padding / 圆角 / 阴影），别做成另一个量级的东西 */
+.ctx-menu { position: fixed; z-index: 120; min-width: 148px; background: var(--card);
+  border: 1px solid var(--border); border-radius: 10px; padding: 4px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, .16); display: flex; flex-direction: column; gap: 2px; }
+.ctx-item { width: 100%; text-align: left; cursor: pointer; padding: 6px 8px;
+  border: 1px solid transparent; border-radius: 7px; background: transparent; color: var(--txt);
+  font-size: 12px; line-height: 1.2; white-space: nowrap; }
 .ctx-item:hover:not(:disabled) { background: var(--hover); }
 .ctx-item:disabled { opacity: .45; cursor: default; }
-.ctx-sep { height: 1px; background: var(--border-subtle); margin: 3px 4px; }
-/* 大图右上角那个「复制」角标：让人知道放大后也能右键/点复制，不必猜 */
-#lightbox-copy { position: absolute; top: 16px; right: 20px; z-index: 81;
-  background: rgba(20, 22, 28, .72); border: 1px solid rgba(255, 255, 255, .22); color: #f0f1f4;
-  border-radius: 20px; padding: 7px 14px; font-size: 12px; cursor: pointer;
-  display: flex; align-items: center; gap: 6px; backdrop-filter: blur(4px); }
-#lightbox-copy:hover { background: rgba(20, 22, 28, .88); }
-#lightbox-copy svg { width: 14px; height: 14px; }
+.ctx-sep { height: 1px; background: var(--border-subtle); margin: 2px 4px; }
+/* 大图右上角那个「复制」角标：让人知道放大后也能右键/点复制，不必猜。
+   同样收着做 —— 盖在图上，不能抢了看图本身的注意力 */
+#lightbox-copy { position: absolute; top: 12px; right: 14px; z-index: 81;
+  background: rgba(16, 18, 24, .58); border: 1px solid rgba(255, 255, 255, .18); color: #e8eaed;
+  border-radius: 13px; padding: 5px 10px; min-height: 26px; font-size: 11px; cursor: pointer;
+  display: flex; align-items: center; gap: 5px; }
+#lightbox-copy:hover { background: rgba(16, 18, 24, .8); }
+#lightbox-copy svg { width: 12px; height: 12px; }
+#lightbox-copy .pv-ic { margin-right: 0; }
 
 /* ---- 九宫格 ---- */
 /* 单元格尺寸由 .grid9 定义，按钮一律 100% 填满；宽度统一用 grid-template-columns 控制，

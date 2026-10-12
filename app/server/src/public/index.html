@@ -268,11 +268,6 @@
           </label>
           <button id="one-save" class="btn primary tiny hidden" disabled title="存为 原名_wm.扩展名"><span class="pv-ic" data-ic="download"></span>导出</button>
           <button id="one-clear" class="btn tiny ghost hidden" title="回到示例图"><span class="pv-ic" data-ic="x"></span>回到示例</button>
-          <!-- 分享尺寸：只影响「复制到剪贴板」，不影响导出（导出永远是原分辨率） -->
-          <select id="one-copy-size" class="copy-size" title="复制到剪贴板时的尺寸；导出不受影响">
-            <option value="1080" selected>复制按短边 1080</option>
-            <option value="0">复制原始尺寸</option>
-          </select>
         </div>
         <div id="one-hint" class="notes"></div>
       </div>
@@ -458,7 +453,7 @@
 <div id="ctx-menu" class="ctx-menu hidden" role="menu"></div>
 
 <div id="lightbox" class="hidden" role="dialog" aria-modal="true">
-  <button id="lightbox-copy" class="hidden" title="复制这张图到剪贴板，可直接粘贴到微信 / QQ 等"><span class="pv-ic" data-ic="clipboard"></span>复制图片</button>
+  <button id="lightbox-copy" class="hidden" title="复制这张图到剪贴板（短边 1080，适合分享）；右键大图可选原始尺寸"><span class="pv-ic" data-ic="clipboard"></span>复制图片</button>
   <img id="lightbox-img" alt="预览大图">
   <div id="lightbox-cap"></div>
 </div>
