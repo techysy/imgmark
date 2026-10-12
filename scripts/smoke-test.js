@@ -741,6 +741,32 @@ async function main() {
     // 装裱线是 (src+2) 的描边层贴在 pad-1：画布必须 ≥ src+4 才装得下
     assert(r.width >= 304, `inset 描边需要最小留白，画布至少 304px 宽，实际 ${r.width}`);
   });
+  await t('字体：fontFamily 真的换了字形；没装的字体回落默认而不是画空白', async () => {
+    const { renderTextWatermark } = require('../app/server/src/core/textmark');
+    const { normalizeFontFamily } = require('../app/server/src/core/fonts');
+    const txt = 'FUJIFILM X-E4 15mm f/2.8';
+    const hash = (b) => require('node:crypto').createHash('sha1').update(b).digest('hex');
+    const a = await renderTextWatermark(txt, { fontSize: 64, fontWeight: 'bold', fontFamily: 'SimSun' });
+    const b = await renderTextWatermark(txt, { fontSize: 64, fontWeight: 'bold', fontFamily: 'KaiTi' });
+    assert.notStrictEqual(hash(a.buffer), hash(b.buffer), '两款已装字体渲染结果不应相同');
+    // 不在白名单的名字（也没装）必须回落 sans-serif，且与显式 sans-serif 逐字节一致
+    assert.strictEqual(normalizeFontFamily('绝对不存在的字体'), 'sans-serif', '未知字体名应回落 sans-serif');
+    const bogus = await renderTextWatermark(txt, { fontSize: 64, fontWeight: 'bold', fontFamily: normalizeFontFamily('绝对不存在的字体') });
+    const dflt = await renderTextWatermark(txt, { fontSize: 64, fontWeight: 'bold', fontFamily: 'sans-serif' });
+    assert.strictEqual(hash(bogus.buffer), hash(dflt.buffer), '未知字体名应与 sans-serif 完全一致');
+  });
+  await t('字体清单：只给本机真装了的；墨迹指纹能认出被悄悄回落的名字', async () => {
+    const { listAvailableFonts } = require('../app/server/src/core/fonts');
+    const fonts = await listAvailableFonts();
+    assert(fonts.length > 0, '字体清单不应为空');
+    assert(fonts.some((f) => f.family === 'sans-serif'), '默认族 sans-serif 必须始终在列');
+    // 清单里不该有「回落指纹」那一类：这些名字在 Windows 上根本没装
+    const missing = fonts.filter((f) => ['PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC'].includes(f.family));
+    assert.strictEqual(missing.length, 0, `未安装的字体不应出现在清单里: ${missing.map((f) => f.family).join(', ')}`);
+    // 装了的必须是真装了的：中文候选至少要留下两款 Windows 自带的
+    assert(fonts.filter((f) => ['SimSun', 'SimHei', 'KaiTi', 'Microsoft YaHei'].includes(f.family)).length >= 2,
+      'Windows 自带字体应当探测到');
+  });
 
   // ---------- [11] 监听绑定方案：服务重启后自动恢复（不再 paused） ----------
   console.log('\n[11] 监听绑定方案：跨重启自恢复');

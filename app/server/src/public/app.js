@@ -719,7 +719,66 @@ const exifUI = {
   // 字段元信息由服务端给（/api/exif-fields），避免前后端两份清单失配
   meta: [],
   selected: EXIF_DEFAULT_FIELDS.slice(),
+  // 字体清单同理由服务端给（/api/fonts）：它只列本机真装了的字体。
+  // 这点很要紧 —— librsvg 找不到字体时不报错，会悄悄回落默认字体，
+  // 界面上给一份「全平台通用」的清单等于给出一堆选了没变化的选项
+  fonts: [],
+  fontDefault: 'sans-serif',
 };
+
+/** 当前选中的字体族；清单没加载出来时回落默认族 */
+function currentFontFamily() {
+  const v = $('exif-font') && $('exif-font').value;
+  return v || exifUI.fontDefault;
+}
+
+/** 设字体：清单里没有这个名字（方案存了一款本机没装的）就回落默认族 */
+function setFontFamily(family) {
+  const sel = $('exif-font');
+  if (sel && [...sel.options].some((o) => o.value === family)) sel.value = family;
+  else if (sel) sel.value = exifUI.fontDefault;
+}
+
+async function loadFonts() {
+  try {
+    const r = await api('/api/fonts');
+    exifUI.fonts = Array.isArray(r.fonts) ? r.fonts : [];
+    if (typeof r.default === 'string') exifUI.fontDefault = r.default;
+  } catch {
+    exifUI.fonts = []; // 拿不到就只留默认族，不给一份可能装不上的清单
+  }
+  const sel = $('exif-font');
+  if (!sel) return;
+  // 保留当前选中项（切页、恢复方案时不该被重置）
+  const keep = sel.value || exifUI.fontDefault;
+  sel.innerHTML = '';
+  if (!exifUI.fonts.length) {
+    const o = document.createElement('option');
+    o.value = exifUI.fontDefault; o.textContent = '系统默认';
+    sel.appendChild(o);
+  } else {
+    // 按 kind 分组：中文正文 / 西文 / 等宽 / 通用族
+    const GROUPS = [['cjk', '中文'], ['latin', '西文'], ['mono', '等宽'], ['generic', '通用']];
+    for (const [kind, title] of GROUPS) {
+      const list = exifUI.fonts.filter((f) => f.kind === kind);
+      if (!list.length) continue;
+      const og = document.createElement('optgroup');
+      og.label = title;
+      for (const f of list) {
+        const o = document.createElement('option');
+        o.value = f.family;
+        o.textContent = f.note ? `${f.label}（${f.note}）` : f.label;
+        og.appendChild(o);
+      }
+      sel.appendChild(og);
+    }
+  }
+  // 旧方案存的字体这台上没装 → 留在默认族，别把 select 留在一个不存在的选项上
+  const has = [...sel.options].some((o) => o.value === keep);
+  sel.value = has ? keep : exifUI.fontDefault;
+  // 清单是异步到的，若这个 select 已被 enhanceSelect 包过，按钮上的当前项文字要跟着刷
+  refreshDD(sel);
+}
 
 async function loadExifFields() {
   try {
@@ -803,6 +862,7 @@ function textSpecDef() {
       enabled: true,
       fields,
       color,
+      fontFamily: currentFontFamily(),
       fontWeight: $('exif-weight').value,
       separator: $('exif-sep').value,
       prefix: $('exif-prefix').value,
@@ -820,25 +880,7 @@ function textSpecDef() {
 function exifGroupDef() {
   if (!state.layers.text) return null;
   if ($('exif-frame') && $('exif-frame').value) return null; // 容器样式：文字写进画框留白，走 options.frame
-  const fields = exifUI.selected.slice();
-  if (!fields.length) return null;
-  const color = $('exif-color').value;
-  return {
-    text: {
-      enabled: true,
-      fields,
-      color,
-      fontWeight: $('exif-weight').value,
-      separator: $('exif-sep').value,
-      prefix: $('exif-prefix').value,
-      suffix: $('exif-suffix').value,
-    },
-    position: exifUI.pos || 'se',
-    sizePct: +$('exif-size').value,
-    marginPct: +$('exif-mg').value,
-    opacity: +$('exif-op').value,
-    autoColor: $('exif-autocolor').checked,
-  };
+  return textSpecDef();
 }
 
 /** 组装 payload 的 groups：按当前标签页二选一，logo 分组或相机参数组 */
@@ -857,6 +899,7 @@ function applyExifGroup(g) {
     exifUI.selected = EXIF_DEFAULT_FIELDS.slice();
     exifUI.pos = 'se';
     $('exif-color').value = '#ffffff';
+    setFontFamily(exifUI.fontDefault);
     $('exif-weight').value = 'bold';
     $('exif-sep').value = ' · ';
     $('exif-prefix').value = '';
@@ -870,6 +913,7 @@ function applyExifGroup(g) {
     exifUI.selected = (Array.isArray(t.fields) ? t.fields : []).slice();
     exifUI.pos = g.position || 'se';
     if (t.color) $('exif-color').value = t.color;
+    if (t.fontFamily) setFontFamily(t.fontFamily);
     if (t.fontWeight) $('exif-weight').value = t.fontWeight;
     if (typeof t.separator === 'string') $('exif-sep').value = t.separator;
     $('exif-prefix').value = t.prefix || '';
@@ -894,6 +938,8 @@ function applyFrameOpt(f) {
   if (f && f.bg) $('exif-frame-bg').value = f.bg;
   $('exif-line1').value = has && Array.isArray(f.lines) ? (f.lines[0] || '') : '';
   $('exif-line2').value = has && Array.isArray(f.lines) ? (f.lines[1] || '') : '';
+  // 字体与浮动文字共用一套：画框存的和文字组存的是同一个字段，谁后恢复谁说了算
+  if (has && f.fontFamily) setFontFamily(f.fontFamily);
   refreshDD($('exif-frame'));
   refreshDD($('exif-frame-align'));
   updateFrameUI();
@@ -901,7 +947,7 @@ function applyFrameOpt(f) {
 
 function bindExifUI() {
   if (!$('exif-color')) return;
-  ['exif-sep', 'exif-prefix', 'exif-suffix', 'exif-color', 'exif-weight'].forEach((id) => {
+  ['exif-sep', 'exif-prefix', 'exif-suffix', 'exif-color', 'exif-weight', 'exif-font'].forEach((id) => {
     $(id).addEventListener('change', () => { syncExifSample(); refreshPreview(); });
     $(id).addEventListener('input', syncExifSample);
   });
@@ -1222,6 +1268,7 @@ function frameDef() {
     lines: [$('exif-line1').value.trim(), $('exif-line2').value.trim()],
     bg: $('exif-frame-bg').value,
     align: $('exif-frame-align').value,
+    fontFamily: currentFontFamily(),
   };
 }
 
@@ -1244,6 +1291,7 @@ const refreshFrameThumbs = debounce(async () => {
     lines: [$('exif-line1').value.trim(), $('exif-line2').value.trim()],
     bg: $('exif-frame-bg').value,
     align: $('exif-frame-align').value,
+    fontFamily: currentFontFamily(),
   };
   const reqs = FRAME_STYLES.map(async ([val]) => {
     const payload = val === ''
@@ -1606,7 +1654,7 @@ function init() {
   slider('wm-tol', 'tol-v'); slider('opt-quality', 'q-v');
 
   // 原生 select 统一升级为自定义下拉（保留原生元素做数据源与事件目标）
-  ['wm-bg', 'opt-sizebase', 'opt-format', 'opt-cropratio', 'opt-cropratio-port', 'exif-sep', 'exif-weight', 'exif-frame-align'].forEach((id) => enhanceSelect($(id)));
+  ['wm-bg', 'opt-sizebase', 'opt-format', 'opt-cropratio', 'opt-cropratio-port', 'exif-sep', 'exif-weight', 'exif-font', 'exif-frame-align'].forEach((id) => enhanceSelect($(id)));
   renderFramePresets();
   ['wm-tol', 'opt-quality'].forEach((id) => $(id).addEventListener('input', refreshPreview));
   bindPreviewOn('#opt-maxedge', 'input');
@@ -1646,6 +1694,7 @@ function init() {
   $('group-add').addEventListener('click', addGroup);
   bindExifUI();
   loadExifFields(); // 字段清单来自服务端，回来后会重绘勾选区
+  loadFonts();     // 字体清单来自服务端（只给本机真装了的）
   $('preset-save').addEventListener('click', savePreset);
   $('preset-del').addEventListener('click', delPreset);
   $('preset-toggle').addEventListener('click', (e) => { e.stopPropagation(); togglePresetMenu(); });

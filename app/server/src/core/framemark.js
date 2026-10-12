@@ -34,6 +34,7 @@ function buildTextBlock(lines, boxW, boxH, o = {}) {
   const {
     bg = '#ffffff', color = '#111111', subColor = null,
     align = 'left', padX = 0, lineSpacing = 1.35, maxFontPx = 0,
+    fontFamily = 'sans-serif',
   } = o;
   const rows = lines.filter(Boolean);
   if (!rows.length) return null;
@@ -51,7 +52,7 @@ function buildTextBlock(lines, boxW, boxH, o = {}) {
   }).join('');
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${boxW}" height="${boxH}">`
     + `<rect width="100%" height="100%" fill="${bg}"/>`
-    + `<text font-family="sans-serif" font-weight="bold" text-anchor="${anchor}">${tspans}</text></svg>`;
+    + `<text font-family="${escXml(fontFamily)}" font-weight="bold" text-anchor="${anchor}">${tspans}</text></svg>`;
   return Buffer.from(svg);
 }
 
@@ -65,6 +66,7 @@ function buildTextBlock(lines, boxW, boxH, o = {}) {
  *   color / subColor: 第一行 / 第二行文字颜色
  *   align: left|center（默认 left；frame/inset 通常用 center）
  *   padPct / bottomPct: 覆盖预设的留白比例（相对短边）
+ *   fontFamily: 字体族（默认 'sans-serif'；缺字体时 librsvg 会回落默认字体，不报错也不空白）
  *   border: inset 版式的内缩细线颜色（默认 #d8dde3），传 null 不画
  * @returns {{buffer:Buffer, width:number, height:number, cropRect:{left,top,width,height}}}
  *   cropRect 是照片在成品里的位置 —— 后续的水印分组要用它把坐标换算过去，
@@ -73,7 +75,7 @@ function buildTextBlock(lines, boxW, boxH, o = {}) {
 async function applyFrame(srcBuffer, o = {}) {
   const {
     style = 'band', lines = [], bg = '#ffffff', color = '#111111', subColor = null,
-    align = 'left', border = '#d8dde3',
+    align = 'left', border = '#d8dde3', fontFamily = 'sans-serif',
   } = o;
   const preset = FRAME_PRESETS[style] || FRAME_PRESETS.band;
   const meta = await sharp(srcBuffer).metadata();
@@ -105,7 +107,7 @@ async function applyFrame(srcBuffer, o = {}) {
     const boxH = bot - Math.round(pad * 0.4);
     const boxW = outW - pad * 2;
     const block = buildTextBlock(lines, Math.max(40, boxW), Math.max(24, boxH), {
-      bg, color, subColor, align,
+      bg, color, subColor, align, fontFamily,
       // 居中排版时内边距由 text-anchor 处理；左对齐时留出 pad
       padX: align === 'center' ? 0 : Math.round(pad || short * 0.03),
       maxFontPx: Math.round(short * 0.055),

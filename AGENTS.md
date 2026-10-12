@@ -33,6 +33,10 @@ cd app/server && npm install && npm start
   同批/同一监听内输出重名（如 a.jpg、a.png 都强制输出 JPEG）时后者为 `原文件名(2)_wm.扩展名`
 - `options.mozjpeg=true`：JPEG 体积小约 10-15%，但编码慢约 5 倍；默认 false（libjpeg-turbo）
 - `GET /api/exif-fields`：相机参数水印的可选字段清单（key/label/示例值），前端据此渲染勾选项
+- `GET /api/fonts`：本机**确实装了**的字体清单（family/label/kind/note）。librsvg 找不到字体会
+  悄悄回落默认字体（不报错、也不画空白），所以服务端逐个渲染一次探针串、按像素指纹与
+  「一个不存在的字体名」比对来判定 —— 清单里不会给出装了等于没装的选项。
+  `text.fontFamily` 与 `options.frame.fontFamily` 都只认这份清单里的名字，其余回落 `sans-serif`
 - 裁剪比例支持方向前缀：`land@5:4` 只对横图生效、`port@4:5` 只对竖图生效，
   不带前缀（`4:5`、`1:1`）两个方向都裁 —— 老方案里存的就是这种，行为与旧版一致
 - 裁剪在**加水印之前**生效：水印（logo / 相机参数文字 / 边框）按裁剪后的最终画面定位，预览与输出一致；
@@ -97,6 +101,7 @@ curl -s http://127.0.0.1:28110/api/jobs/<jobId>
     "enabled": true,
     "fields": ["camera", "lens", "exposure", "date"],  // 见 GET /api/exif-fields
     "color": "#ffffff",       // #rrggbb
+    "fontFamily": "Microsoft YaHei",  // 可选，见 GET /api/fonts；未装则回落 sans-serif
     "fontWeight": "bold",     // bold | normal
     "separator": " · ",       // 默认 " · "
     "prefix": "shot on ",     // 可选，≤40 字
@@ -112,6 +117,9 @@ curl -s http://127.0.0.1:28110/api/jobs/<jobId>
 - **没有 EXIF 的照片会自动跳过这一组**：原图字节不动（不重编码，不掉画质），不是画一行空白
 - `date` 与 `datetime` 同时勾选时只输出 `datetime`（避免同一时间出现两遍）
 - 文字渲染依赖系统字体；服务启动时会自检并在日志里警告（字体缺失时 libvips 不报错、只画空白）
+- `fontFamily`：`text` 组与 `options.frame` 共用同一个字段（画框把字写进留白时也是它）。
+  名字不在 `GET /api/fonts` 的清单里就回落 `sans-serif`；**没装的字体不会画空白**，
+  librsvg 会回落默认字体，看起来只是「选了没变化」
 - **边框 / 条幅**（`options.frame`）：把参数写进**新撑出来的留白**，而不是浮在画面上 ——
   这是它与上面「文字组」的本质区别（文字是 composite 到图上，边框是先改画布尺寸）。
   因此边框必须在合成前生效：它会撑大画布，随后 logo / 文字水印的位置全部按「照片那块矩形」换算，

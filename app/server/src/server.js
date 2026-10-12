@@ -14,6 +14,7 @@ const sharp = require('sharp');
 
 const { prepareWatermark, mergeWatermarks, composeWatermark, composeGroups, buildGroupWatermark, analyzeInk, applyResize, parseCropRatio, CROP_RATIOS, IMAGE_EXTS, WM_INPUT_EXTS, extOf } = require('./core/watermark');
 const { checkFontAvailable } = require('./core/textmark');
+const { listAvailableFonts, normalizeFontFamily, DEFAULT_FONT_FAMILY } = require('./core/fonts');
 const { formatCameraText } = require('./core/exiftext');
 const { runBatch, isInside, normalizeSuffix } = require('./core/batch');
 const { ProcessDB } = require('./core/db');
@@ -300,6 +301,15 @@ app.get('/api/health', (req, res) => res.json({ ok: true, app: APPNAME, dataDir:
 app.get('/api/config', (req, res) => res.json({ ...loadConfig(), version: APP_VERSION }));
 // 相机参数水印的可选字段：让前端不必硬编码一份与 exiftext.FIELD_KEYS 可能失配的清单
 app.get('/api/exif-fields', (req, res) => res.json({ fields: exifFieldsMeta() }));
+// 相机参数文字水印可选的字体：只给本机**确实装了的**。系统没装的字体 librsvg 会
+// 悄悄回落默认字体（不报错、也不画空白），照单全收等于给用户一个「选了没变化」的选项
+app.get('/api/fonts', async (req, res) => {
+  try {
+    res.json({ fonts: await listAvailableFonts(), default: DEFAULT_FONT_FAMILY });
+  } catch (e) {
+    res.status(500).json({ error: `字体探测失败：${e.message}` });
+  }
+});
 app.use('/vendor', express.static(path.join(__dirname, '..', 'node_modules', '@trimjs', 'web-app', 'dist')));
 app.use(express.static(path.join(__dirname, 'public')));
 app.use('/api', validateMutationOrigin);
@@ -534,7 +544,7 @@ function normTextSpec(raw) {
   const bg = raw.bg && /^#[0-9a-f]{6}$/i.test(raw.bg) ? raw.bg : 'none';
   const style = {
     color, bg,
-    fontFamily: 'sans-serif',
+    fontFamily: normalizeFontFamily(raw.fontFamily),
     fontWeight: TEXT_FONT_WEIGHTS.has(raw.fontWeight) ? raw.fontWeight : 'bold',
     letterSpacing: clampNum(numOr(raw.letterSpacing, 0), -5, 40),
     padding: bg === 'none' ? 0 : clampNum(numOr(raw.padding, 12), 0, 80),
@@ -1023,6 +1033,7 @@ function normFrame(raw) {
     color: hex(raw.color, '#111111'),
     subColor: raw.subColor ? hex(raw.subColor, null) : null,
     align: raw.align === 'center' ? 'center' : 'left',
+    fontFamily: normalizeFontFamily(raw.fontFamily),
     ...(Number.isFinite(+raw.padPct) ? { padPct: clampNum(+raw.padPct, 0, 0.3) } : {}),
     ...(Number.isFinite(+raw.bottomPct) ? { bottomPct: clampNum(+raw.bottomPct, 0, 0.4) } : {}),
   };
