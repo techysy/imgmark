@@ -22,24 +22,37 @@ const state = {
   // 裁剪（每个 logo 各自一份裁剪框）
   crops: [],
   editingIdx: 0,
-  // 水印图层：logo / 文字·画框 两层独立开关（文字层内含 浮动文字 / 条幅 / 白框 / 装裱 四种样式）
+  // 水印类型：logo / 文字·画框 两个标签页二选一（文字页内含 浮动文字 / 条幅 / 白框 / 装裱 四种样式）
   layers: { logo: true, text: false },
+  layerNoteExtra: '', // 恢复混合方案时的临时提醒，手动切页后清掉
 };
-// 各图层的一句话说明直接写在 index.html 的 .layer-head 里；
-// 这里只负责开关状态：显隐面板、持久化、联动预览与运行判定
-function setLayer(name, on) {
-  state.layers[name] = !!on;
+// 两类水印是二选一的标签页，不是两个可叠加的开关：一次只跑一类，配置区也只显示一类
+// （引擎仍支持任意组合，但页面上不再提供组合入口 —— 组合要配两套参数，用起来比切换麻烦）
+const LAYERS = ['logo', 'text'];
+const LAYER_NOTE = {
+  logo: '上传 logo 后按分组布局叠到画面上；支持多 logo、九宫格定位、平铺与亮度自适应换色',
+  text: '把每张照片自己的 EXIF 渲成文字：浮在画面上，或写进条幅 / 白框 / 装裱的留白里',
+};
+function layerNote() {
+  const active = LAYERS.find((k) => state.layers[k]) || 'logo';
+  const el = $('layer-note');
+  if (!el) return;
+  el.textContent = LAYER_NOTE[active] + (state.layerNoteExtra || '');
+}
+// 切到某一类：另一类自动收起（二选一），面板显隐、状态持久化、联动预览与运行判定
+function setLayer(name) {
+  for (const k of LAYERS) state.layers[k] = k === name;
   localStorage.setItem('imgmark_layers', JSON.stringify(state.layers));
-  $(`layer-${name}`).checked = !!on;
-  $(`type-${name}`).classList.toggle('hidden', !on);
+  applyLayers();
   updateRun();
   refreshPreview();
 }
 function applyLayers() {
-  for (const k of ['logo', 'text']) {
-    $(`layer-${k}`).checked = !!state.layers[k];
-    $(`type-${k}`).classList.toggle('hidden', !state.layers[k]);
-  }
+  for (const k of LAYERS) $(`type-${k}`).classList.toggle('hidden', !state.layers[k]);
+  document.querySelectorAll('#wm-layer-tabs .tab').forEach((b) => {
+    b.classList.toggle('on', !!state.layers[b.dataset.layer]);
+  });
+  layerNote();
 }
 let cropMode = false, dragStart = null;
 let previewOrient = 'landscape'; // 样式预览示例图方向：landscape|portrait（仅预览用）
@@ -446,13 +459,19 @@ function applyPresetData(meta) {
   const restored = JSON.parse(JSON.stringify(meta.data.groups || []));
   // 相机参数那一组没有 logos，会被下面的 logo 过滤丢掉 —— 先摘出来单独还原到 UI
   const textGroup = restored.find((g) => isTextGroup(g)) || null;
-  // 图层开关照着方案内容拨回去：组合方案原生恢复，不再折叠成单一类型
+  // 标签页按方案内容选：有 logo 就先落在 Logo 页，纯文字方案落在文字页
   const savedOpts = meta.data.options || {};
   const hasFrame = !!(savedOpts.frame && savedOpts.frame.style);
   const hasText = restored.some(isTextGroup);
   const hasLogoGroups = restored.some((g) => !isTextGroup(g));
   if (hasLogoGroups || hasText || hasFrame) {
-    state.layers = { logo: hasLogoGroups, text: hasText || hasFrame };
+    // 早期版本支持任意组合，方案里可能两类都有。数据照旧全量回填，但标签页只能停在
+    // 一类上（有 logo 就先给 Logo），并在说明行里讲清另一半没在跑，免得以为丢了配置
+    const showLogo = hasLogoGroups || !(hasText || hasFrame);
+    state.layers = { logo: showLogo, text: !showLogo };
+    state.layerNoteExtra = (hasLogoGroups && (hasText || hasFrame))
+      ? '　｜　该方案同时含 Logo 水印与文字/画框，现按标签页二选一只应用当前这一类；切到另一页可配置另一半'
+      : '';
     localStorage.setItem('imgmark_layers', JSON.stringify(state.layers));
     applyLayers();
   }
@@ -491,7 +510,7 @@ function onWmFiles(files) {
   state.wmFiles = files;
   state.watermarkId = null;
   state.logoSet = null;
-  if (files.length && !state.layers.logo) setLayer('logo', true); // 传了 logo 自动开启该图层
+  if (files.length && !state.layers.logo) setLayer('logo'); // 传了 logo 自动切到 Logo 水印页
   const names = files.map((f) => f.name);
   $('wm-name').textContent = files.length
     ? (files.length > 1 ? `${files.length} 个文件：` : '') + (names.join('、').length > 60 ? names.join('、').slice(0, 60) + '…' : names.join('、'))
@@ -797,7 +816,7 @@ function textSpecDef() {
   };
 }
 
-/** 相机参数组的定义：仅「文字 / 画框」图层开启且样式为浮动文字时生效 */
+/** 相机参数组的定义：仅「文字 / 画框」页签选中且样式为浮动文字时生效 */
 function exifGroupDef() {
   if (!state.layers.text) return null;
   if ($('exif-frame') && $('exif-frame').value) return null; // 容器样式：文字写进画框留白，走 options.frame
@@ -822,7 +841,7 @@ function exifGroupDef() {
   };
 }
 
-/** 组装 payload 的 groups：logo 分组（图层开）+ 相机参数组（图层开）—— 任意组合 */
+/** 组装 payload 的 groups：按当前标签页二选一，logo 分组或相机参数组 */
 function groupsForPayload() {
   const list = state.layers.logo ? state.groups.map((g) => ({ ...g })) : [];
   const eg = exifGroupDef();
@@ -1096,7 +1115,7 @@ async function renderOwn() {
   const st = previewOwn;
   if (!st || !st.file) return;
   const groups = groupsForPayload();
-  if (!groups.length && !frameDef()) { oneHint('先配好水印样式（开一个图层）'); return; }
+  if (!groups.length && !frameDef()) { oneHint('先配好水印样式'); return; }
   const gen = ++st.gen; // 连着改样式时只认最后一次响应，旧的直接丢弃
   $('one-save').disabled = true;
   oneHint('合成中…');
@@ -1412,7 +1431,7 @@ function currentSource() {
   return state.uploadCount ? { mode: 'upload' } : null;
 }
 function updateRun() {
-  // 每个开启的图层各自判定「已配好」；全部配好才算样式就绪
+  // 当前标签页这一类判定「已配好」，才算样式就绪
   const style = $('exif-frame') ? $('exif-frame').value : '';
   const ready = {
     logo: !!state.watermarkId && state.groups.length > 0,
@@ -1423,14 +1442,14 @@ function updateRun() {
   const ok = styleReady && !!currentSource();
   $('run').disabled = !ok;
   $('group-add').disabled = !state.logoSet; // 有 logo 才能建分组
-  $('watch-create').disabled = !styleReady; // 监听复用当前图层组合（服务端支持任意组合监听）
+  $('watch-create').disabled = !styleReady; // 监听复用当前选中的这一类水印
   const pending = active.find((k) => !ready[k]);
   $('run-hint').textContent = ok ? '准备就绪'
     : !currentSource() ? '先选择图片来源'
-    : !active.length ? '先开启任一水印图层'
-    : pending === 'logo' ? (!state.logoSet ? 'Logo 图层：先添加 logo' : 'Logo 图层：等待水印准备…')
-    : style === '' ? '文字 / 画框图层：先勾选要输出的字段'
-    : '文字 / 画框图层：请选择边框样式';
+    : !active.length ? '先选择一类水印'
+    : pending === 'logo' ? (!state.logoSet ? 'Logo 水印：先添加 logo' : 'Logo 水印：等待水印准备…')
+    : style === '' ? '文字 / 画框：先勾选要输出的字段'
+    : '文字 / 画框：请选择边框样式';
 }
 
 // ---------- 文件夹监听 ----------
@@ -1474,7 +1493,7 @@ async function createWatcher() {
     await api('/api/watchers', { method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ inputDir: dir, outputDir: $('watch-outdir').value.trim(),
         recursive: $('watch-recursive').checked,
-        // 下拉里选中了方案就绑定方案（重启自恢复）；否则按当前图层组合建立
+        // 下拉里选中了方案就绑定方案（重启自恢复）；否则按当前选中的这一类水印建立
         presetId: selectedPresetId || undefined,
         watermarkId: state.watermarkId, groups: groupsForPayload(), options: options() }) });
     $('watch-hint').textContent = '监听已建立 ✓ 新图片落盘将自动加水印';
@@ -1604,17 +1623,22 @@ function init() {
     refreshPreview();
   });
   $('opt-format').addEventListener('change', () => { $('quality-wrap').style.opacity = ['jpeg', 'webp'].includes($('opt-format').value) ? 1 : .4; refreshPreview(); });
-  // 水印图层开关：两层独立组合，状态记住；旧存档的 exif/frame 键迁移为合并后的 text 层
-  for (const k of ['logo', 'text']) {
-    $(`layer-${k}`).addEventListener('change', (e) => setLayer(k, e.target.checked));
-  }
+  // 水印类型标签页：两类二选一，状态记住；旧存档的 exif/frame 键迁移为合并后的 text 页
+  document.querySelectorAll('#wm-layer-tabs .tab').forEach((b) => {
+    b.addEventListener('click', () => {
+      const k = b.dataset.layer;
+      if (state.layers[k]) return;
+      state.layerNoteExtra = ''; // 手动切换后不再挂着方案混合的那条提醒
+      setLayer(k);
+    });
+  });
   let savedLayers = null;
   try { savedLayers = JSON.parse(localStorage.getItem('imgmark_layers') || '{}'); } catch { /* 损坏则用默认 */ }
   if (savedLayers && typeof savedLayers === 'object') {
-    state.layers = {
-      logo: savedLayers.logo !== false,
-      text: !!(savedLayers.text ?? savedLayers.exif ?? savedLayers.frame),
-    };
+    // 旧存档里两层可能同时开着（或 exif/frame 分开存），此时一律按 Logo 页收拢
+    const textOn = !!(savedLayers.text ?? savedLayers.exif ?? savedLayers.frame);
+    const logoOn = savedLayers.logo !== false;
+    state.layers = { logo: logoOn || !textOn, text: !logoOn && textOn };
     localStorage.setItem('imgmark_layers', JSON.stringify(state.layers));
   }
   applyLayers();

@@ -407,14 +407,10 @@ select.dd-native { position: absolute; width: 1px; height: 1px; opacity: 0; poin
 .dd-item:hover { background: var(--hover); }
 .dd-item.on { background: color-mix(in srgb, var(--pri) 10%, transparent); color: var(--pri-dk); font-weight: 650; }
 
-/* ---- ① 水印样式：三图层（Logo/相机参数/画框）独立开关 + 共用样式预览 ---- */
-.layer-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
-  border-top: 1px dashed var(--border-subtle); padding-top: 10px; margin-top: 10px; }
-.style-config > .layer-head:first-child { border-top: none; padding-top: 0; margin-top: 0; }
-.layer-head label { display: flex; align-items: center; gap: 6px; cursor: pointer; }
-.layer-head input { width: 15px; height: 15px; accent-color: var(--pri); }
-.layer-head b { font-size: 13px; }
-.layer-head .muted { font-size: 12px; }
+/* ---- ① 水印样式：两类水印（Logo / 文字·画框）标签页二选一 + 共用样式预览 ---- */
+/* 标签页下面那行说明跟着当前页签走，见 app.js 的 LAYER_NOTE */
+.type-tabs { margin-bottom: 6px; }
+.type-note { margin: -4px 0 10px; }
 .type-panel { padding-top: 2px; }
 
 /* 样式预设缩略图墙（Liit 式）：每种样式用当前配置真实合成，点选即用 */

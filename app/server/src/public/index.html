@@ -60,22 +60,23 @@
       <div id="preset-hint" class="notes">下拉可浏览全部方案的参数摘要；选中即加载</div>
     </div>
 
-    <!-- ① 水印样式：三种类型三选一（图标水印 / 相机参数 / 相框），
-         引擎里它们本就是三条独立链路（logo 分组 / EXIF 文字组 / options.frame），
-         界面把它们提为一级类型，选哪个就只配哪个，互不干扰。
-         底部的样式预览三类型共用，即改即预览。 -->
+    <!-- ① 水印样式：两类水印二选一（Logo 水印 / 文字·画框）——
+         引擎里它们本就是两条独立链路（logo 分组 / EXIF 文字组 + options.frame），
+         界面用标签页切换：选哪个就只配哪个、只跑哪个，互不干扰。
+         底部的样式预览两类共用，即改即预览。 -->
     <div class="card">
-      <h2>① 水印样式 <small>三个图层独立开关、任意组合，参数即改即预览</small></h2>
+      <h2>① 水印样式 <small>两类水印选一种，参数即改即预览</small></h2>
+      <div class="tabs type-tabs" id="wm-layer-tabs">
+        <button type="button" class="tab on" data-layer="logo">Logo 水印</button>
+        <button type="button" class="tab" data-layer="text">文字 / 画框</button>
+      </div>
+      <div id="layer-note" class="notes type-note"></div>
 
-      <!-- 设置区（左）与样式预览（右）左右分栏；预览所有图层共用，配置长时滚动吸顶 -->
+      <!-- 设置区（左）与样式预览（右）左右分栏；预览两类共用，配置长时滚动吸顶 -->
       <div class="style-split">
       <div class="style-config">
 
-      <!-- 图层一：Logo 水印（logo 管理 + 分组布局） -->
-      <div class="layer-head">
-        <label><input type="checkbox" id="layer-logo"> <b>Logo 水印</b></label>
-        <span class="muted">上传 logo 后按分组布局叠到画面上；支持多 logo、九宫格定位、平铺与亮度自适应换色</span>
-      </div>
+      <!-- 页签一：Logo 水印（logo 管理 + 分组布局） -->
       <div id="type-logo" class="type-panel">
         <div class="row">
           <label class="file-btn" id="wm-file-btn">添加 logo（可多选）
@@ -145,13 +146,9 @@
         </div>
       </div>
 
-      <!-- 图层二：文字 / 画框 —— 相机参数文字与条幅/白框/装裱合为一个图层：
+      <!-- 页签二：文字 / 画框 —— 相机参数文字与条幅/白框/装裱合为一页：
            浮动文字（不加框）就是传统「相机参数水印」，容器样式把文字写进留白里。
            线格式不变（浮动→text 组、容器→options.frame），合并只发生在界面上 -->
-      <div class="layer-head">
-        <label><input type="checkbox" id="layer-text"> <b>文字 / 画框</b></label>
-        <span class="muted">把每张照片自己的 EXIF 渲成文字：浮在画面上，或写进条幅 / 白框 / 装裱的留白里</span>
-      </div>
       <div id="type-text" class="type-panel hidden">
         <div class="field" style="flex:1 1 100%">
           <label>样式 <span class="muted">点缩略图直接选用，效果即所见</span></label>
@@ -249,7 +246,7 @@
       </div>
       </div><!-- /style-config -->
 
-      <!-- 样式预览：示例图与「自己的图」共用这一处 —— 换成真图后按当前图层即时重渲，
+      <!-- 样式预览：示例图与「自己的图」共用这一处 —— 换成真图后按当前样式即时重渲，
            满意就顺手导出（一条管线，所见即所得）。横/竖切换只对示例图有意义
            （真图的方向由图自己决定，载入时自动识别），所以放进真图模式就收起 -->
       <div class="preview-box">
@@ -435,7 +432,7 @@
         <button id="watch-refresh" class="btn ghost">刷新状态</button>
       </div>
       <!-- 文案按「建监听 / 不重复 / 重启后」三件事各一行，短句比长段落好读 -->
-      <div id="watch-hint" class="notes">以当前图层组合建立监听；输出目录内的文件不会再次处理。
+      <div id="watch-hint" class="notes">以当前选中的这一类水印建立监听；输出目录内的文件不会再次处理。
 ⓪ 下拉里选中了方案时，监听将绑定该方案 —— 重启后自动恢复，不再失效。</div>
       <div id="watch-list"></div>
     </div>
