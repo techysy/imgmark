@@ -1221,22 +1221,51 @@ async function saveOwn() {
 }
 
 // ---------- 复制成图到剪贴板（分享到微信 / QQ / 小红书等） ----------
-// 两条路：桌面壳走主进程 clipboard.writeImage（写 Windows 原生格式，微信一类才认），
+// 分享场景默认按「短边 1080」缩放：主流社交平台（微信/QQ/小红书/Instagram）的通行
+// 上限都是长边 ~1080~1350，原图 3000×4500 直接粘过去既慢又会被平台再压一遍，
+// 白白占剪贴板和上传流量。只缩不放：本来短边就 ≤1080 的原样复制。
+const SHARE_SHORT_EDGE = 1080;
+
+// 缩到短边 n。返回 {blob, w, h, scaled}
+async function scaleToShortEdge(blob, n) {
+  if (!n || n <= 0) return { blob, w: 0, h: 0, scaled: false };
+  const bmp = await createImageBitmap(blob);
+  const w0 = bmp.width, h0 = bmp.height;
+  const short = Math.min(w0, h0);
+  if (short <= n) { bmp.close(); return { blob, w: w0, h: h0, scaled: false }; }
+  const k = n / short;
+  const w = Math.round(w0 * k), h = Math.round(h0 * k);
+  const c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  const g = c.getContext('2d');
+  // 大比例缩小时默认的双线性会产生锯齿；高质量滤波对照片这类连续色调友好得多
+  g.imageSmoothingEnabled = true;
+  g.imageSmoothingQuality = 'high';
+  g.drawImage(bmp, 0, 0, w, h);
+  bmp.close();
+  const out = await new Promise((res, rej) => c.toBlob((b) => (b ? res(b) : rej(new Error('缩放失败'))), 'image/png'));
+  return { blob: out, w, h, scaled: true };
+}
+
+// 两条路：桌面壳走主进程（写 Windows 原生剪贴板格式，微信一类才认），
 // 浏览器走 navigator.clipboard.write —— 它只接受 PNG，JPEG/WebP 得先转一道。
 // 两种都拿不到就退回「下载」，别让右键点了没反应。
-async function copyImageToClipboard(blob, name, hint) {
+async function copyImageToClipboard(blob, name, hint, shortEdge) {
   const say = (s) => { if (hint) hint(s); };
   if (!blob) { say('这张图还没渲染出来'); return; }
   try {
+    const sc = await scaleToShortEdge(blob, shortEdge || 0);
+    const outBlob = sc.blob;
+    const suffix = sc.scaled ? `（短边 ${sc.w < sc.h ? sc.w : sc.h}px）` : '';
     if (native && native.copyImage) {
-      const r = await native.copyImage(await blob.arrayBuffer(), name);
-      if (r && r.copied) { say('已复制，可直接粘贴到微信 / QQ 等'); return; }
+      const r = await native.copyImage(await outBlob.arrayBuffer(), sc.scaled ? 'share.png' : name);
+      if (r && r.copied) { say('已复制' + suffix + '，可直接粘贴到微信 / QQ 等'); return; }
       throw new Error((r && r.error) || '复制失败');
     }
     if (!navigator.clipboard || !window.ClipboardItem) throw new Error('浏览器不支持直接写剪贴板');
-    // navigator.clipboard 只收 image/png：先解出来画到 canvas 再转一道
-    let pngBlob = blob;
-    if (blob.type !== 'image/png') {
+    // navigator.clipboard 只收 image/png：缩放后必然是 PNG，非缩放时看原格式
+    let pngBlob = outBlob;
+    if (outBlob.type !== 'image/png') {
       pngBlob = await new Promise((res, rej) => {
         const img = new Image();
         img.onload = () => {
@@ -1246,11 +1275,11 @@ async function copyImageToClipboard(blob, name, hint) {
           c.toBlob((b) => (b ? res(b) : rej(new Error('转 PNG 失败'))), 'image/png');
         };
         img.onerror = () => rej(new Error('图片解码失败'));
-        img.src = URL.createObjectURL(blob);
+        img.src = URL.createObjectURL(outBlob);
       });
     }
     await navigator.clipboard.write([new window.ClipboardItem({ 'image/png': pngBlob })]);
-    say('已复制，可直接粘贴到微信 / QQ 等');
+    say('已复制' + suffix + '，可直接粘贴到微信 / QQ 等');
   } catch (e) {
     // 剪贴板这条路走不通（权限/非安全上下文/格式不支持）时，至少让用户能拿到文件
     say('复制失败：' + (e.message || e) + '，已改为下载');
@@ -1304,8 +1333,13 @@ async function blobFromImage(img) {
 // 所以统一在这里兜住，别把 Promise 当 Blob 传下去（createObjectURL 会直接抛）
 function copyImageDesc(img, hint) {
   return blobFromImage(img)
-    .then((blob) => copyImageToClipboard(blob, img.name, hint))
+    .then((blob) => copyImageToClipboard(blob, img.name, hint, copyShortEdge()))
     .catch((e) => { if (hint) hint('✗ ' + (e.message || e)); });
+}
+// 分享尺寸设置：只管复制，导出与预览一律原图。0 = 不缩放
+function copyShortEdge() {
+  const v = $('one-copy-size') && $('one-copy-size').value;
+  return v === '0' ? 0 : (Number(v) || SHARE_SHORT_EDGE);
 }
 // 挂在预览图与大图上：右键复制、左键大图照旧放大
 function bindCtxCopy(imgEl, capEl, isLightbox) {
@@ -1315,8 +1349,11 @@ function bindCtxCopy(imgEl, capEl, isLightbox) {
     if (!img) return;
     ctxTarget = img;
     const say = (s) => { if (isLightbox) lightboxSay(s); else oneHint(s); };
+    // 菜单里直接写清这次会复制成多大，免得缩放变成看不见的行为
+    const n = copyShortEdge();
     openCtxMenu(e.clientX, e.clientY, [
-      { label: '复制图片到剪贴板', onClick: () => copyImageDesc(img, say) },
+      { label: n ? `复制图片到剪贴板（短边 ${n}px）` : '复制图片到剪贴板（原始尺寸）',
+        onClick: () => copyImageDesc(img, say) },
       { sep: true },
       { label: '在新标签页打开图片', disabled: !img.own, onClick: () => window.open(
         previewOwn && previewOwn.url ? previewOwn.url : '', '_blank') },
@@ -1867,6 +1904,17 @@ function init() {
   });
   $('one-clear').addEventListener('click', () => { previewOwnOff(); doRefreshPreview(); });
   $('one-save').addEventListener('click', saveOwn);
+  // 分享尺寸：记住上次的选择（大图角标的提示文字也要跟着改）
+  try { $('one-copy-size').value = localStorage.getItem('imgmark_copy_size') || '1080'; } catch { /* 隐私模式等 */ }
+  const syncCopySizeUI = () => {
+    const n = copyShortEdge();
+    $('lightbox-copy').title = n
+      ? `复制这张图到剪贴板（短边缩到 ${n}px），可直接粘贴到微信 / QQ 等`
+      : '复制这张图到剪贴板（原始尺寸）';
+    try { localStorage.setItem('imgmark_copy_size', n ? String(n) : '0'); } catch { /* 同上 */ }
+  };
+  $('one-copy-size').addEventListener('change', syncCopySizeUI);
+  syncCopySizeUI();
   $('watch-create').addEventListener('click', createWatcher);
   $('watch-refresh').addEventListener('click', refreshWatchers);
   if (native) {

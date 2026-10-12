@@ -212,6 +212,11 @@ input[type="checkbox"] { accent-color: var(--pri); }
 .pv-own .pv-own-btn, .pv-own .btn { padding: 6px 12px; min-height: 30px; font-size: 12px;
   line-height: 1.2; border-radius: 15px; }
 .pv-own .btn.ghost { border-color: var(--border); }
+/* 分享尺寸下拉：跟着工具条一行的节奏，但走 quiet 样式 —— 它是设置不是主操作，
+   不该跟「导出」那个 primary 按钮抢视线 */
+.pv-own .copy-size { padding: 5px 8px; min-height: 28px; font-size: 11px; color: var(--muted);
+  background: transparent; border: 1px dashed var(--border); border-radius: 15px; cursor: pointer; }
+.pv-own .copy-size:hover { color: var(--txt); border-color: var(--border-strong); border-style: solid; }
 /* 按钮图标统一走 Lucide 线性图标（见 app.js 的 I），emoji 各平台字形不一，不适合做控件 */
 .pv-ic { display: inline-flex; align-items: center; width: 13px; height: 13px; margin-right: 5px; flex: none; }
 .pv-ic svg { width: 100%; height: 100%; display: block; }
