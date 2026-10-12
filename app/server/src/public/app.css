@@ -206,14 +206,21 @@ input[type="checkbox"] { accent-color: var(--pri); }
   color: var(--muted); background: var(--surface-2); border: 1px solid var(--border);
   border-radius: 20px; cursor: pointer; transition: all .15s; }
 .pv-own-btn:hover { color: var(--txt); border-color: var(--border-strong); }
+/* 三个按钮（用自己的图 / 导出 / 回到示例）一套尺寸：pill 形按钮的高度由行高和内边距
+   共同决定，三者默认行高不同会差几个像素，导出里塞了图标后更明显 —— 统一成同一组
+   内边距、字号和 min-height，一行里并排才对得齐 */
+.pv-own .pv-own-btn, .pv-own .btn { padding: 6px 12px; min-height: 30px; font-size: 12px;
+  line-height: 1.2; border-radius: 15px; }
+.pv-own .btn.ghost { border-color: var(--border); }
 /* 按钮图标统一走 Lucide 线性图标（见 app.js 的 I），emoji 各平台字形不一，不适合做控件 */
-.pv-ic { display: inline-flex; align-items: center; width: 13px; height: 13px; margin-right: 4px; flex: none; }
+.pv-ic { display: inline-flex; align-items: center; width: 13px; height: 13px; margin-right: 5px; flex: none; }
 .pv-ic svg { width: 100%; height: 100%; display: block; }
-#one-save .pv-ic { margin-right: 4px; }
 #one-hint:empty { display: none; }
 
-/* 真图模式：横竖由图自己决定，竖图给足高度看细节，横图维持示例图那档，版面不跳 */
-.preview-box.own-portrait img { max-height: 340px; }
+/* 真图模式：横竖由图自己决定。竖图以「预览列的 80% 宽」为准（宽度是约束），高度用
+   70vh 兜底 —— 常规竖图（3:2 / 9:16）都能吃满 80% 宽，只有超长条才被压一下，
+   不至于把版面撑开；横图维持示例图那档 */
+.preview-box.own-portrait img { max-width: 80%; max-height: 70vh; }
 .preview-box.own-landscape img { max-height: 260px; }
 
 /* ---- 预览放大（lightBox：点击示例图看原尺寸） ---- */
