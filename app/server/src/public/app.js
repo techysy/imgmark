@@ -1008,6 +1008,8 @@ function updateCropSplitUI() {
 // ---------- 样式预览（单张实时：任一分组参数变化都重新合成示例图） ----------
 async function doRefreshPreview() {
   refreshFrameThumbs(); // 防抖独立：样式墙跟着当前配置重渲
+  // 预览区放的是真图时就地重渲它 —— 改样式看到的仍是自己那张照片，而不是换回示例图
+  if (previewOwnMode && previewOwn) { await renderOwn(); return; }
   const groups = groupsForPayload();
   const hasLogoGroup = groups.some((g) => !g.text);
   const frame = frameDef();
@@ -1028,26 +1030,108 @@ async function doRefreshPreview() {
 }
 const refreshPreview = debounce(doRefreshPreview, 350);
 
-// 说明文案跟随示例图方向（横图保持原文案）
+// 说明文案跟随示例图方向（横图保持原文案）；显示真图时改为「合成结果 + 文件名」
 function updatePreviewCaps() {
+  if (previewOwnMode && previewOwn && previewOwn.file) {
+    $('preview-cap').textContent = `合成结果 · ${previewOwn.file.name}`;
+    return;
+  }
   const p = previewOrient === 'portrait';
   $('preview-cap').textContent = p ? '样式预览（亮图·竖图示例）' : '样式预览（亮图示例）';
   $('preview-cap-auto').textContent = p ? '暗图·竖图示例（自动换白标）' : '暗图示例（自动换白标）';
 }
 
-// 横/竖示例图切换：sizeBase=long 时两者水印实际像素一致，可直观验证竖幅构图
+// 横/竖示例图切换：sizeBase=long 时两者水印实际像素一致，可直观验证竖幅构图。
+// 预览区正在显示真图时，点示例 tab 即切回示例图
 document.querySelectorAll('#preview-orient .tab').forEach((b) => b.addEventListener('click', () => {
-  if (b.dataset.orient === previewOrient) return;
+  if (b.dataset.orient === previewOrient && !previewOwnMode) return;
+  if (previewOwnMode) previewOwnOff();
   previewOrient = b.dataset.orient;
   document.querySelectorAll('#preview-orient .tab').forEach((x) => x.classList.toggle('on', x === b));
   updatePreviewCaps();
   doRefreshPreview();
 }));
 
+// ---------- 用自己的图试样式 + 顺带单张导出 ----------
+// 真图与示例图共用这一块预览：服务端 /api/render 与批量是同一条合成管线，
+// 所以预览到的画面就是导出的那张 —— 所见即所得，不必先跑一遍批量再打开文件夹确认
+let previewOwn = null;       // {file, blob, name, url, gen}：正在预览的真图
+let previewOwnMode = false;  // 预览区当前显示的是不是真图
+const oneHint = (s) => { $('one-hint').textContent = s; };
+
+function previewOwnOff() {
+  if (previewOwn && previewOwn.url) URL.revokeObjectURL(previewOwn.url);
+  previewOwn = null;
+  previewOwnMode = false;
+  $('one-save').classList.add('hidden');
+  $('one-clear').classList.add('hidden');
+  $('one-save').disabled = true;
+  oneHint('');
+}
+
+async function renderOwn() {
+  const st = previewOwn;
+  if (!st || !st.file) return;
+  const groups = groupsForPayload();
+  if (!groups.length && !frameDef()) { oneHint('先配好水印样式（开一个图层）'); return; }
+  const gen = ++st.gen; // 连着改样式时只认最后一次响应，旧的直接丢弃
+  $('one-save').disabled = true;
+  oneHint('合成中…');
+  try {
+    const fd = new FormData();
+    fd.append('file', st.file);
+    fd.append('payload', JSON.stringify({ watermarkId: state.watermarkId, groups, options: options() }));
+    const r = await fetch('/api/render', { method: 'POST', body: fd });
+    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || `HTTP ${r.status}`);
+    const blob = await r.blob();
+    if (gen !== st.gen || previewOwn !== st) return; // 期间又改了样式，或已经换了图
+    if (st.url) URL.revokeObjectURL(st.url);
+    st.blob = blob;
+    st.name = decodeURIComponent(r.headers.get('X-ImgMark-Name') || 'image_wm.jpg');
+    st.url = URL.createObjectURL(blob);
+    $('style-preview').src = st.url;
+    // 暗图示例是配给示例图的，对真图没有意义
+    $('style-preview-auto').classList.add('hidden');
+    $('preview-cap-auto').classList.add('hidden');
+    updatePreviewCaps();
+    $('one-save').classList.remove('hidden');
+    $('one-clear').classList.remove('hidden');
+    $('one-save').disabled = false;
+    oneHint(r.headers.get('X-ImgMark-Skipped') === '1'
+      ? '这张图没有可用的相机参数（EXIF），水印/边框已跳过，画面原样返回'
+      : `输出 ${st.name} · ${(blob.size / 1024).toFixed(0)} KB · 导出存为新文件，不动原图`);
+  } catch (e) {
+    if (gen !== st.gen || previewOwn !== st) return;
+    oneHint('✗ ' + e.message);
+  }
+}
+
+async function saveOwn() {
+  const st = previewOwn;
+  if (!st || !st.blob) return;
+  // 桌面壳问用户存哪；浏览器只能触发下载（落到下载目录）
+  if (native && native.saveImage) {
+    oneHint('保存中…');
+    try {
+      const r = await native.saveImage(st.name, await st.blob.arrayBuffer());
+      oneHint(r && r.saved ? `已保存：${r.path}` : '已取消保存');
+    } catch (e) { oneHint('✗ ' + e.message); }
+    return;
+  }
+  const a = document.createElement('a');
+  a.href = st.url;
+  a.download = st.name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  oneHint(`已下载：${st.name}`);
+}
+
 // ---------- 预览放大（点击亮/暗示例图看原尺寸；点击任意处或 Esc 关闭） ----------
 function openLightbox(imgEl, capEl) {
   const src = imgEl.getAttribute('src') || '';
-  if (!/^data:image\/(jpeg|png|webp|avif)/.test(src)) return; // 占位 SVG 不放大
+  // 单张导出的成图走 blob: URL，其余预览是 data: URL；占位 SVG 两种都不匹配
+  if (!/^(data:image\/(jpeg|png|webp|avif)|blob:)/.test(src)) return;
   $('lightbox-img').src = src;
   $('lightbox-cap').textContent = capEl.textContent;
   $('lightbox').classList.remove('hidden');
@@ -1522,6 +1606,18 @@ function init() {
     if (e.key === 'Escape' && !$('preset-menu').classList.contains('hidden')) closePresetMenu();
   });
   loadPresets();
+  // 预览区换真图：一次合成同时用于「看效果」与「导出」，不额外跑一遍
+  $('one-file').addEventListener('change', (e) => {
+    const f = (e.target.files || [])[0] || null;
+    e.target.value = ''; // 允许重选同一个文件
+    previewOwnOff();
+    if (!f) { doRefreshPreview(); return; }
+    previewOwn = { file: f, blob: null, name: '', url: '', gen: 0 };
+    previewOwnMode = true;
+    renderOwn();
+  });
+  $('one-clear').addEventListener('click', () => { previewOwnOff(); doRefreshPreview(); });
+  $('one-save').addEventListener('click', saveOwn);
   $('watch-create').addEventListener('click', createWatcher);
   $('watch-refresh').addEventListener('click', refreshWatchers);
   if (native) {

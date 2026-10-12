@@ -249,7 +249,8 @@
       </div>
       </div><!-- /style-config -->
 
-      <!-- 样式预览：三种类型共用，点击可放大（分栏右列） -->
+      <!-- 样式预览：示例图与「自己的图」共用这一处 —— 换成真图后按当前图层即时重渲，
+           满意就顺手导出（一条管线，所见即所得）；点横/竖示例可切回示例图 -->
       <div class="preview-box">
         <div class="tabs" id="preview-orient">
           <button type="button" class="tab on" data-orient="landscape">横图示例</button>
@@ -257,6 +258,14 @@
         </div>
         <img id="style-preview" alt="样式预览" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='420' height='280'%3E%3Crect x='0' y='0' width='420' height='280' fill='%23dde3ea'/%3E%3Ccircle cx='90' cy='70' r='42' fill='%23ffffff' opacity='.35'/%3E%3Crect x='280' y='180' width='110' height='66' fill='%233d4f63' opacity='.3' rx='8'/%3E%3Ctext x='210' y='145' text-anchor='middle' font-family='sans-serif' font-size='13' fill='%237a8494'%3E选择水印样式后预览%3C/text%3E%3C/svg%3E"><span class="preview-cap" id="preview-cap">样式预览（亮图示例）</span>
         <img id="style-preview-auto" class="hidden" alt="暗图预览"><span class="preview-cap hidden" id="preview-cap-auto">暗图示例（自动换白标）</span>
+        <div class="pv-own">
+          <label class="pv-own-btn" id="one-file-btn" title="用本地一张真图试当前样式，可直接导出">📷 用自己的图
+            <input type="file" id="one-file" accept=".jpg,.jpeg,.png,.webp,.bmp,.gif,.tif,.tiff,.avif" hidden>
+          </label>
+          <button id="one-save" class="btn primary tiny hidden" disabled title="存为 原名_wm.扩展名">⬇ 导出</button>
+          <button id="one-clear" class="btn tiny ghost hidden" title="回到示例图">✕ 回到示例</button>
+        </div>
+        <div id="one-hint" class="notes"></div>
       </div>
       </div><!-- /style-split -->
     </div>

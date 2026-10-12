@@ -19,6 +19,7 @@ cd app/server && npm install && npm start
 无鉴权，默认只监听 `127.0.0.1`；fnOS 通过 `app.sock` 网关访问。非回环绑定需同时设置 `HOST` 和 `IMGMARK_ALLOW_REMOTE=1`，只用于受信任网络，**不要暴露公网或不可信网络**。
 
 - 上传水印/方案：单文件最多 4 MB，请求体最多 128 MB；图片上传：单文件最多 22 MB、每批最多 10 张、请求体最多 256 MB
+- 单张导出：单文件最多 22 MB、请求体最多 64 MB、同时最多 2 路
 - 同时最多处理 2 个批量任务；每个任务最多 4 路并发；每位 fnOS 用户最多创建 16 个监听，服务端总数最多 64 个
 - 解码上限：目标图最多 50,000,000 像素；水印源最多 40,000,000 像素；PDF/AI 栅格化长边最多 4,000 像素
 
@@ -166,7 +167,26 @@ curl -s -X POST http://127.0.0.1:28110/api/preview \
 # orient 可选 landscape|portrait（默认 landscape），仅影响示例图方向；预览保持示例图原生分辨率（长边 960），前端点击可放大
 ```
 
-## 6. CLI 等价命令
+## 6. 任务 D：单张导出（一张图 → 立即回传成图）
+
+批量之外的单次用法：`/api/process` 那一套解析与合成原样复用，只是不建任务、不落盘，
+响应直接就是成图字节（`Content-Disposition` 已带 `原名_wm.扩展名`，`curl -OJ` 即可存盘）。
+适合「调完样式先拿一张真图确认效果」——注意文字组/边框用的是**这张图自己的 EXIF**。
+
+```bash
+curl -s -OJ -X POST http://127.0.0.1:28110/api/render \
+  -F 'file=@/abs/one.jpg' \
+  -F 'payload={"watermarkId":"<logoSetId>","groups":[{"logos":[0],"position":"se","sizePct":25}],"options":{"format":"auto","cropRatio":"16:9","maxLongEdge":1600}}'
+# → 图片字节；响应头 X-ImgMark-Name: one_wm.jpg（URL 编码，fetch 用 decodeURIComponent 取）
+#   X-ImgMark-Skipped: 1 表示这张图没画上任何东西（如没有 EXIF 的照片只要边框）→ 画面原样返回
+```
+
+- 表单字段：图片 `file`（单个，≤22 MB）、配置 `payload`（JSON，同 `/api/process` 的 `watermarkId`/`groups`/`options`）
+- 只走分组管线（`groups` + `options.frame`）；**不支持**单/合并水印的老路径（`watermarkId` 单独给会报 400）
+- 既没有分组也没有边框 → 400；引用了不存在/已失效的 logo 集 → 404
+- 出错仍是 JSON（`{"error":"中文原因"}`）——只有成功时才是图片字节，用 `-f`/`-OJ` 才能把错误存成文件
+
+## 7. CLI 等价命令
 
 ```bash
 cd app/server
@@ -179,13 +199,13 @@ node bin/wm.js apply -w combined.png -i /abs/photos --pos se --size 25 \
 CLI 暂不支持分组布局 / 监听 / 数据库去重 / 输出裁剪 cropRatio / 输出缩放 maxLongEdge（这些走 HTTP API；
 CLI 的 `--crop` 是水印源裁剪，别混淆）。
 
-## 7. 其他模式
+## 8. 其他模式
 
 - `mode=upload`：multipart 附 `files[]`（与 payload 同表单），结果用 `GET /api/jobs/:id/file/:idx` 逐个下载
 - `mode=fnos`：飞牛 NAS 内使用，UID 由应用网关注入 `x-trim-userid`（请求 payload/query 的 UID 不可信），输入和输出路径都必须位于当前用户可读/可写的授权目录（开放平台 `trim.file.*`），桌面壳内隐藏该页签
 - `mode=local-files`：桌面壳原生对话框的显式文件列表
 
-## 8. Agent 注意事项
+## 9. Agent 注意事项
 
 - **默认不要用 `overwrite`**：它会直接改写原图片文件（不可恢复）；勾选后强制保持原格式
 - `skipProcessed`：配合本地数据库跳过已输出文件（ overwrite 时无效）；「已输出」= 数据库身份命中且输出仍在，或输出文件已存在

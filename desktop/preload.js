@@ -7,4 +7,6 @@ contextBridge.exposeInMainWorld('imgmarkDesktop', {
   pickImages: () => ipcRenderer.invoke('pick-images'),
   pickFolder: (title) => ipcRenderer.invoke('pick-folder', title),
   pickWatermark: () => ipcRenderer.invoke('pick-watermark'),
+  // 单张导出存盘：name 是服务端给好的建议文件名，data 是图片字节（ArrayBuffer）
+  saveImage: (name, data) => ipcRenderer.invoke('save-image', { name, data }),
 });

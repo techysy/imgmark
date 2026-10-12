@@ -65,6 +65,7 @@ const JOB_TTL_MS = 6 * 3600 * 1000; // 结束超过该时长的任务从内存�
 const MAX_ACTIVE_PROCESS_JOBS = 2;
 let activeProcessReservations = 0;
 let activeMemoryUploadReservations = 0;
+let activeRenderReservations = 0;
 
 // 本地处理数据库 + 文件夹监听（DATA_DIR 下持久化）
 const db = new ProcessDB(path.join(DATA_DIR, 'process-db.json'));
@@ -716,6 +717,84 @@ app.post('/api/preview', express.json(), async (req, res) => {
     const previewAuto = altBuf ? await toPreview('dark') : null;
     res.json({ preview, previewAuto });
   } catch (e) {
+    res.status(e.status || 500).json({ error: e.message });
+  }
+});
+
+// ---- 单张导出：一张图 + 当前样式 → 立即回传成图 ----
+// 不建任务、不落盘、不写数据库：与 /api/process 同一套解析与合成，区别只是「一张图」且当场返回。
+// 存在的意义是批量之外的单次使用 —— 调完样式先拿一张真图确认效果，满意再存盘。
+const uploadOne = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 22 * 1024 * 1024, files: 1, fields: 8, fieldSize: 256 * 1024 },
+  defParamCharset: 'utf8',
+});
+
+// 单张合成是同步的（没有任务队列兜底），同时来太多会直接把进程压满 —— 与批量的 2 个任务同一量级
+function reserveRenderSlot(req, res, next) {
+  if (activeRenderReservations >= 2) return res.status(429).json({ error: '单张导出繁忙，请稍后重试' });
+  activeRenderReservations++;
+  let released = false;
+  const release = () => {
+    if (released) return;
+    released = true;
+    activeRenderReservations = Math.max(0, activeRenderReservations - 1);
+  };
+  res.once('finish', release);
+  res.once('close', release);
+  next();
+}
+
+/** Content-Disposition：中文名走 RFC 5987 的 filename*，同时留一个 ASCII 兜底给老客户端 */
+function contentDisposition(name) {
+  const ascii = name.replace(/[^\x20-\x7e]/g, '_').replace(/["\\]/g, '_');
+  return `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(name)}`;
+}
+
+app.post('/api/render', reserveRenderSlot, requestContentLengthLimit(64 * 1024 * 1024),
+  uploadOne.single('file'), async (req, res) => {
+  try {
+    const file = req.file;
+    if (!file) return res.status(400).json({ error: '未收到图片文件（表单字段名应为 file）' });
+    let payload;
+    try { payload = req.body && req.body.payload ? JSON.parse(req.body.payload) : (req.body || {}); }
+    catch { return res.status(400).json({ error: 'payload 不是合法 JSON' }); }
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+      return res.status(400).json({ error: 'payload 必须是 JSON 对象' });
+    }
+    if (payload.groups != null && !Array.isArray(payload.groups)) return res.status(400).json({ error: 'groups 必须为数组' });
+
+    const options = parseOptions(payload.options);
+    const groups = Array.isArray(payload.groups) ? payload.groups : [];
+    // 与 /api/process 同一套判定：logo 组要 logo 集；纯文字组 / 纯边框不需要。
+    // 只支持分组管线（composeGroups）—— 单/合并水印的旧路径没有裁剪与边框，已无单独价值
+    const wantsLogo = groups.some((g) => !normTextSpec(g && g.text));
+    const set = logoSets.get(payload.watermarkId);
+    if (wantsLogo && !set) return res.status(404).json({ error: 'logo 组不存在或服务已重启，请重新上传' });
+    if (!groups.length && !options.frame) {
+      return res.status(400).json({ error: '没有可合成的内容：请提供相机参数分组或边框' });
+    }
+    const groupDefs = groups.length
+      ? await resolveGroups(set || { logos: [] }, groups, options.autoColor)
+      : [];
+
+    // 合成与缩放都交给与批量相同的两个函数（options 整体照传，含 frame / 裁剪 / 长边上限）
+    const composed = await composeGroups(file.buffer, groupDefs, options);
+    composed.buffer = await applyResize(composed.buffer, options);
+
+    const ext = composed.ext || '.jpg';
+    const srcName = String(file.originalname || 'image');
+    const base = path.basename(srcName, path.extname(srcName)) || 'image';
+    const outName = `${base}_wm${ext}`;
+    res.set('Content-Type', PREVIEW_MIME[ext] || 'image/jpeg');
+    // 自定义头放文件名：前端 fetch 拿得到，好过从 Content-Disposition 里剥（中文名会乱码）
+    res.set('X-ImgMark-Name', encodeURIComponent(outName));
+    res.set('Content-Disposition', contentDisposition(outName));
+    // 「这张图没画上任何东西」（全是文字组而照片没有 EXIF）时原样返回，如实告诉调用方
+    if (composed.skipped) res.set('X-ImgMark-Skipped', '1');
+    res.send(composed.buffer);
+  } catch (e) {
+    if (e && e.code && String(e.code).startsWith('LIMIT_')) throw e; // 交给全局错误处理器翻译
     res.status(e.status || 500).json({ error: e.message });
   }
 });

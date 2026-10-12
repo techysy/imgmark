@@ -175,6 +175,22 @@ ipcMain.handle('pick-watermark', async () => {
   return r.filePaths.map((p) => ({ path: p, name: path.basename(p), base64: fs.readFileSync(p).toString('base64') }));
 });
 
+// 单张导出存盘：浏览器里只能靠 <a download> 落到下载目录，桌面壳直接问用户存哪
+ipcMain.handle('save-image', async (_e, payload) => {
+  const name = typeof (payload && payload.name) === 'string' && payload.name.trim() ? payload.name : 'image_wm.jpg';
+  const ext = path.extname(name).slice(1).toLowerCase();
+  const r = await dialog.showSaveDialog(win, {
+    title: '导出图片',
+    defaultPath: name,
+    filters: ext === 'png' ? [{ name: 'PNG 图片', extensions: ['png'] }]
+      : ext === 'webp' ? [{ name: 'WebP 图片', extensions: ['webp'] }]
+      : [{ name: 'JPEG 图片', extensions: ['jpg', 'jpeg'] }],
+  });
+  if (r.canceled || !r.filePath) return { saved: false };
+  await fs.promises.writeFile(r.filePath, Buffer.from(payload.data));
+  return { saved: true, path: r.filePath };
+});
+
 app.whenReady().then(async () => {
   app.setAppUserModelId('cn.techysy.imgmark');
   try { await startServer(); } catch (e) {

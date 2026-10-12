@@ -822,6 +822,98 @@ async function main() {
     }
   });
 
+  // ---------- [12] 单张导出 /api/render：与批量同一条管线，当场回传成图 ----------
+  console.log('\n[12] 单张导出：一张图 → 当前样式 → 立即回传');
+  await t('/api/render 裁剪+长边+logo，输出尺寸与文件名头正确', async () => {
+    const port = 28121;
+    const srv = spawn(process.execPath, [path.join(ROOT, 'app', 'server', 'src', 'server.js')], {
+      env: { ...process.env, PORT: String(port), IMGMARK_DATA_DIR: path.join(TMP, 'data12') },
+    });
+    const base = `http://127.0.0.1:${port}`;
+    try {
+      for (let i = 0; i < 50; i++) {
+        try { await (await fetch(`${base}/api/health`)).json(); break; } catch { await new Promise((r) => setTimeout(r, 300)); }
+      }
+      // 准备一个分组模式 logo 集（logos[] 供 groups 用序号引用）
+      const pf = new FormData();
+      pf.append('watermark', new Blob([fs.readFileSync(F.logoWhiteJpg)], { type: 'image/jpeg' }), 'logo.jpg');
+      pf.append('split', 'true');
+      const set = await (await fetch(`${base}/api/prepare`, { method: 'POST', body: pf })).json();
+      assert(set.logos && set.logos.length, 'split 准备应返回 logos');
+
+      const payload = {
+        watermarkId: set.id,
+        groups: [{ logos: [0], position: 'se', sizePct: 25, marginPct: 3 }],
+        options: { format: 'auto', cropRatio: '16:9', maxLongEdge: 600 },
+      };
+      const fd = new FormData();
+      fd.append('file', new Blob([fs.readFileSync(F.photoJpg)], { type: 'image/jpeg' }), 'photo.jpg');
+      fd.append('payload', JSON.stringify(payload));
+      const r = await fetch(`${base}/api/render`, { method: 'POST', body: fd });
+      assert.strictEqual(r.status, 200);
+      assert.strictEqual(r.headers.get('content-type'), 'image/jpeg');
+      assert.strictEqual(decodeURIComponent(r.headers.get('x-imgmark-name')), 'photo_wm.jpg');
+      assert(/filename="?photo_wm\.jpg"?/.test(r.headers.get('content-disposition')), 'Content-Disposition 应带文件名');
+      const buf = Buffer.from(await r.arrayBuffer());
+      const m = await sharp(buf).metadata();
+      // 1200×800 先裁成 16:9（1200×675），再按长边上限缩到 600
+      assert.strictEqual(m.width, 600, `长边应为 600，实际 ${m.width}`);
+      assert(m.height >= 330 && m.height <= 340, `裁成 16:9 后高度应约 338，实际 ${m.height}`);
+      assert.strictEqual(m.format, 'jpeg', 'format=auto 应保持 jpeg');
+
+      // 与批量走同一条管线：同样的 payload 交给 /api/process，输出尺寸应逐像素一致
+      const pfd = new FormData();
+      pfd.append('payload', JSON.stringify({ mode: 'upload', watermarkId: set.id, groups: payload.groups, options: payload.options }));
+      pfd.append('files', new Blob([fs.readFileSync(F.photoJpg)], { type: 'image/jpeg' }), 'photo.jpg');
+      const { jobId } = await (await fetch(`${base}/api/process`, { method: 'POST', body: pfd })).json();
+      let job;
+      for (let i = 0; i < 60; i++) {
+        job = await (await fetch(`${base}/api/jobs/${jobId}`)).json();
+        if (job.status !== 'running') break;
+        await new Promise((r) => setTimeout(r, 300));
+      }
+      const dl = await fetch(`${base}/api/jobs/${jobId}/file/0`);
+      const bmeta = await sharp(Buffer.from(await dl.arrayBuffer())).metadata();
+      assert.strictEqual(bmeta.width, m.width, '单张导出与批量的宽度应一致');
+      assert.strictEqual(bmeta.height, m.height, '单张导出与批量的高度应一致');
+
+      // 没有 EXIF 的照片 + 只要边框 → 整张跳过，原样返回并如实标注
+      const sfd = new FormData();
+      sfd.append('file', new Blob([fs.readFileSync(F.photoJpg)], { type: 'image/jpeg' }), 'photo.jpg');
+      sfd.append('payload', JSON.stringify({ options: { format: 'auto', frame: { style: 'band', lines: ['', ''] } } }));
+      const sr = await fetch(`${base}/api/render`, { method: 'POST', body: sfd });
+      assert.strictEqual(sr.status, 200);
+      assert.strictEqual(sr.headers.get('x-imgmark-skipped'), '1', '没 EXIF 又没给文字时应标注跳过');
+      const sm = await sharp(Buffer.from(await sr.arrayBuffer())).metadata();
+      assert.strictEqual(sm.width, 1200, '跳过的图应原样返回，不裁不缩');
+
+      // 显式给了条幅文字就照加：画布被撑大，长边相应变高
+      const tfd = new FormData();
+      tfd.append('file', new Blob([fs.readFileSync(F.photoJpg)], { type: 'image/jpeg' }), 'photo.jpg');
+      tfd.append('payload', JSON.stringify({ options: { format: 'auto', frame: { style: 'band', lines: ['TEST LINE', ''] } } }));
+      const tr = await fetch(`${base}/api/render`, { method: 'POST', body: tfd });
+      const tm = await sharp(Buffer.from(await tr.arrayBuffer())).metadata();
+      assert.strictEqual(tm.width, 1200);
+      assert(tm.height > 800, `条幅应撑高画布，实际 ${tm.height}`);
+
+      // 参数错误：没文件 / 空内容 / logo 集失效
+      const e1 = await fetch(`${base}/api/render`, { method: 'POST', body: new FormData() });
+      assert.strictEqual(e1.status, 400);
+      const efd = new FormData();
+      efd.append('file', new Blob([fs.readFileSync(F.photoJpg)], { type: 'image/jpeg' }), 'photo.jpg');
+      efd.append('payload', JSON.stringify({}));
+      const e2 = await fetch(`${base}/api/render`, { method: 'POST', body: efd });
+      assert.strictEqual(e2.status, 400, '既无分组也无边框应 400');
+      const badFd = new FormData();
+      badFd.append('file', new Blob([fs.readFileSync(F.photoJpg)], { type: 'image/jpeg' }), 'photo.jpg');
+      badFd.append('payload', JSON.stringify({ watermarkId: 'nope', groups: [{ logos: [0] }] }));
+      const e3 = await fetch(`${base}/api/render`, { method: 'POST', body: badFd });
+      assert.strictEqual(e3.status, 404, 'logo 集不存在应 404');
+    } finally {
+      srv.kill();
+    }
+  });
+
   console.log(`\n结果：${pass} 通过，${fail} 失败  （fixtures 保留在 ${TMP}）`);
   process.exit(fail ? 1 : 0);
 }
