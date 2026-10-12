@@ -61,6 +61,10 @@ const I = {
   github: svg('<path d="M15 22v-4a4.8 4.8 0 0 0-1-3.5c3 0 6-2 6-5.5.08-1.25-.27-2.48-1-3.5.28-1.15.28-2.35 0-3.5 0 0-1 0-3 1.5-2.64-.5-5.36-.5-8 0C6 2 5 2 5 2c-.3 1.15-.3 2.35 0 3.5A5.4 5.4 0 0 0 4 9c0 3.5 3 5.5 6 5.5-.39.49-.68 1.05-.85 1.65S8.93 17.38 9 18v4"/><path d="M9 18c-4.51 2-5-2-7-2"/>'),
   sun: svg('<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>'),
   moon: svg('<path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/>'),
+  // 单张导出工具条：同样是 Lucide（ISC 开源）线性图标，不用 emoji —— emoji 各平台字形不一
+  image: svg('<rect width="18" height="18" x="3" y="3" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.1-3.1a2 2 0 0 0-2.8 0L6 21"/>'),
+  download: svg('<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/><path d="M12 15V3"/>'),
+  x: svg('<path d="M18 6 6 18"/><path d="m6 6 12 12"/>'),
 };
 
 // 空状态占位图（与 index.html 中的初始 src 保持一致）
@@ -1030,10 +1034,12 @@ async function doRefreshPreview() {
 }
 const refreshPreview = debounce(doRefreshPreview, 350);
 
-// 说明文案跟随示例图方向（横图保持原文案）；显示真图时改为「合成结果 + 文件名」
+// 说明文案跟随示例图方向（横图保持原文案）；显示真图时改为「合成结果 + 文件名 + 自动识别的横竖」
 function updatePreviewCaps() {
   if (previewOwnMode && previewOwn && previewOwn.file) {
-    $('preview-cap').textContent = `合成结果 · ${previewOwn.file.name}`;
+    const o = previewOwn.orient;
+    $('preview-cap').textContent = `合成结果 · ${previewOwn.file.name}`
+      + (o ? ` · ${previewOwn.w}×${previewOwn.h} ${ORIENT_CN[o]}` : '');
     return;
   }
   const p = previewOrient === 'portrait';
@@ -1041,11 +1047,24 @@ function updatePreviewCaps() {
   $('preview-cap-auto').textContent = p ? '暗图·竖图示例（自动换白标）' : '暗图示例（自动换白标）';
 }
 
+const ORIENT_CN = { portrait: '竖图', landscape: '横图', square: '方图' };
+// 真图方向由图自己决定：读成图的实际像素，横/竖/方各给一个高度（竖图给足，横图与方图维持 280px 的版面）。
+// 横/竖 tab 已在进入真图模式时收起 —— 那个切换只对示例图有意义，对真图是噪音
+function applyOwnOrient(w, h) {
+  const st = previewOwn;
+  if (!st || !w || !h) return;
+  st.w = w; st.h = h;
+  st.orient = h > w ? 'portrait' : w > h ? 'landscape' : 'square';
+  const box = document.querySelector('.preview-box');
+  box.classList.remove('own-portrait', 'own-landscape', 'own-square');
+  box.classList.add(`own-${st.orient}`);
+  updatePreviewCaps();
+}
+
 // 横/竖示例图切换：sizeBase=long 时两者水印实际像素一致，可直观验证竖幅构图。
-// 预览区正在显示真图时，点示例 tab 即切回示例图
+// 只在示例图模式下出现（真图模式已把这组 tab 收起）
 document.querySelectorAll('#preview-orient .tab').forEach((b) => b.addEventListener('click', () => {
-  if (b.dataset.orient === previewOrient && !previewOwnMode) return;
-  if (previewOwnMode) previewOwnOff();
+  if (b.dataset.orient === previewOrient) return;
   previewOrient = b.dataset.orient;
   document.querySelectorAll('#preview-orient .tab').forEach((x) => x.classList.toggle('on', x === b));
   updatePreviewCaps();
@@ -1055,7 +1074,7 @@ document.querySelectorAll('#preview-orient .tab').forEach((b) => b.addEventListe
 // ---------- 用自己的图试样式 + 顺带单张导出 ----------
 // 真图与示例图共用这一块预览：服务端 /api/render 与批量是同一条合成管线，
 // 所以预览到的画面就是导出的那张 —— 所见即所得，不必先跑一遍批量再打开文件夹确认
-let previewOwn = null;       // {file, blob, name, url, gen}：正在预览的真图
+let previewOwn = null;       // {file, blob, name, url, gen, orient, w, h}：正在预览的真图
 let previewOwnMode = false;  // 预览区当前显示的是不是真图
 const oneHint = (s) => { $('one-hint').textContent = s; };
 
@@ -1063,6 +1082,10 @@ function previewOwnOff() {
   if (previewOwn && previewOwn.url) URL.revokeObjectURL(previewOwn.url);
   previewOwn = null;
   previewOwnMode = false;
+  // 回到示例：示例图没有真图那个横/竖自适应，高度与 tab 都还原
+  const box = document.querySelector('.preview-box');
+  box.classList.remove('own-portrait', 'own-landscape');
+  $('preview-orient').classList.remove('hidden');
   $('one-save').classList.add('hidden');
   $('one-clear').classList.add('hidden');
   $('one-save').disabled = true;
@@ -1089,7 +1112,10 @@ async function renderOwn() {
     st.blob = blob;
     st.name = decodeURIComponent(r.headers.get('X-ImgMark-Name') || 'image_wm.jpg');
     st.url = URL.createObjectURL(blob);
-    $('style-preview').src = st.url;
+    const im = $('style-preview');
+    im.onload = () => applyOwnOrient(im.naturalWidth, im.naturalHeight); // 方向自己认，不问用户
+    im.src = st.url;
+    if (im.complete && im.naturalWidth) applyOwnOrient(im.naturalWidth, im.naturalHeight); // 缓存命中时不再触发 onload
     // 暗图示例是配给示例图的，对真图没有意义
     $('style-preview-auto').classList.add('hidden');
     $('preview-cap-auto').classList.add('hidden');
@@ -1542,6 +1568,8 @@ function init() {
   $('btn-theme').addEventListener('click', () =>
     applyTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'));
   $('btn-home').innerHTML = I.github;
+  // 单张导出工具条的图标：index.html 里只留 .pv-ic[data-ic] 占位，图形统一在这里注入
+  document.querySelectorAll('.pv-ic[data-ic]').forEach((el) => { el.innerHTML = I[el.dataset.ic] || ''; });
   // 视图导航：点击切换 + 记住上次所在视图
   $('nav').addEventListener('click', (e) => {
     const b = e.target.closest('button[data-view]');
@@ -1612,7 +1640,9 @@ function init() {
     e.target.value = ''; // 允许重选同一个文件
     previewOwnOff();
     if (!f) { doRefreshPreview(); return; }
-    previewOwn = { file: f, blob: null, name: '', url: '', gen: 0 };
+    // 横/竖示例 tab 立即收起：真图的方向自己会识别，用不着让用户切
+    $('preview-orient').classList.add('hidden');
+    previewOwn = { file: f, blob: null, name: '', url: '', gen: 0, orient: null, w: 0, h: 0 };
     previewOwnMode = true;
     renderOwn();
   });

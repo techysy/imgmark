@@ -206,7 +206,15 @@ input[type="checkbox"] { accent-color: var(--pri); }
   color: var(--muted); background: var(--surface-2); border: 1px solid var(--border);
   border-radius: 20px; cursor: pointer; transition: all .15s; }
 .pv-own-btn:hover { color: var(--txt); border-color: var(--border-strong); }
+/* 按钮图标统一走 Lucide 线性图标（见 app.js 的 I），emoji 各平台字形不一，不适合做控件 */
+.pv-ic { display: inline-flex; align-items: center; width: 13px; height: 13px; margin-right: 4px; flex: none; }
+.pv-ic svg { width: 100%; height: 100%; display: block; }
+#one-save .pv-ic { margin-right: 4px; }
 #one-hint:empty { display: none; }
+
+/* 真图模式：横竖由图自己决定，竖图给足高度看细节，横图维持示例图那档，版面不跳 */
+.preview-box.own-portrait img { max-height: 340px; }
+.preview-box.own-landscape img { max-height: 260px; }
 
 /* ---- 预览放大（lightBox：点击示例图看原尺寸） ---- */
 #lightbox { position: fixed; inset: 0; z-index: 80; background: rgba(8, 10, 14, .78);
