@@ -4,7 +4,7 @@
 
 # ImgMark 批量图片水印
 
-**logo 白底 / 黑底自动去底，分组布局，按图片明暗自动换黑白标，一键给整个文件夹加水印**
+**logo 白底 / 黑底自动去底，分组布局，按图片明暗自动换黑白标，一键给整个文件夹加水印；识图生成平台文案，标题 / 话题一键复制**
 
 [![Release](https://img.shields.io/github/v/release/techysy/imgmark?label=%E7%89%88%E6%9C%AC&color=2563eb)](https://github.com/techysy/imgmark/releases/latest)
 [![CI](https://img.shields.io/github/actions/workflow/status/techysy/imgmark/ci.yml?branch=main&label=CI)](https://github.com/techysy/imgmark/actions/workflows/ci.yml)
@@ -15,7 +15,10 @@
 
 [下载](#下载) · [功能](#功能) · [快速开始](#快速开始) · [CLI](#cli-用法) · [HTTP API](#http-api) · [更新日志](CHANGELOG.md) · [Agent 手册](AGENTS.md)
 
-<img src="docs/images/screenshot-desktop.png" width="860" alt="ImgMark 桌面版界面">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/screenshot-desktop-dark.png">
+  <img src="docs/images/screenshot-desktop.png" width="860" alt="ImgMark 桌面版界面">
+</picture>
 
 </div>
 
@@ -84,6 +87,12 @@
 - **本地数据库去重**：按「路径 + 修改时间 + 大小」记录已输出的图片，批量与监听都能跳过已处理的文件
 - **方案保存**：logo 文件 + 全部分组布局 + 全局参数一键保存，下拉选择即可恢复
 - **CLI 与 HTTP API**：不开界面也能批量处理，方便脚本和 AI Agent 调用（见 [AGENTS.md](AGENTS.md)）
+
+**发布与文案（识图生成）**
+- **发布页签**：上传待发布图片 + 选平台 + 一句话描述场景，视觉模型识别画面后按平台格式给出**候选标题、正文、话题、@ 建议**，逐块复制到各平台手动发布（不代发）
+- **历史截图参考**：过往发过的内容拖入 / Ctrl+V 粘贴 / 选文件皆可，最多 3 张，模型模仿其语气与话题习惯
+- **平台默认规则**：话题语言、标题长度等按平台内置（Instagram 双语话题 / 小红书中文话题等），以实际发布效果为准
+- **模型自由**：走 OpenAI 兼容接口（10router 等），模型面板按供应商分组挑选视觉模型；密钥存本机数据目录，**不下发前端、不进任何接口响应**
 
 ## 快速开始
 
@@ -175,6 +184,12 @@ CLI 暂不支持分组布局、文件夹监听和数据库去重，这三项请�
 | GET | `/api/presets/:id/file/:idx` | 下载方案中第 idx 个 logo 原文件 |
 | DELETE | `/api/presets/:id` | 删除方案（连同拷贝的 logo 文件） |
 | POST | `/api/browse` | 本地目录浏览 |
+| GET | `/api/copy/platforms` | 发布页签的平台与默认文案规则 |
+| GET | `/api/copy/models` | 视觉模型列表（读模型服务 `/v1/models`，只保留视觉能力） |
+| GET / PUT | `/api/copy/config` | 模型服务配置（`baseUrl / model`；密钥只写不回读，`clearKey:true` 清除） |
+| GET / POST | `/api/copy/refs` | 历史参考截图列表 / 上传（multipart `file`，存 JPEG 缩略图） |
+| GET / DELETE | `/api/copy/refs/:id` | 读取（`/file`）/ 删除参考截图 |
+| POST | `/api/copy/generate` | multipart：`image` + `payload` `{platform, scene, model, refIds}` → `{titles, body, hashtags, mentions}` |
 | GET | `/api/fnos/status` · `/api/fnos/folders` | fnOS 开放 API 可用性 / 已授权目录 |
 | POST | `/api/fnos/list` · `/api/fnos/delete-authorization` | 列授权目录内容（先做 ACL 校验）/ 删除授权 |
 
@@ -196,6 +211,7 @@ imgmark/
 │   │       │   ├── watermark.js     水印准备、分组拼合、合成、编码
 │   │       │   ├── batch.js         目录扫描、并发池、输出路径与重名处理
 │   │       │   ├── watcher.js       文件夹监听
+│   │       │   ├── copywriting.js   发布文案：平台规则 / 参考截图 / 视觉模型调用
 │   │       │   └── db.js            本地处理数据库（去重）
 │   │       ├── formats/
 │   │       │   ├── ai.js            .ai → PNG（pdfjs，Ghostscript 兜底）
@@ -245,6 +261,7 @@ npm run dist                                # 打包 → dist/
 ## 已知限制
 
 - Web 界面无鉴权，属局域网工具，请勿直接暴露到公网（远程访问建议走 FN Connect + fnOS 侧访问控制）
+- 「发布」页签需自备 OpenAI 兼容的视觉模型服务（服务地址与密钥在「模型设置」里配置）；平台规则为默认经验值，请以实际发布效果为准
 - `.ai` 需以「创建 PDF 兼容文件」方式保存；纯 PostScript 的旧版 AI 需要系统安装 Ghostscript
 - BMP 不支持 RLE 压缩格式
 - 服务重启后需重新选择 logo 或恢复方案（处理后的水印缓存在临时目录，映射关系在内存中）；文件夹监听会转为暂停，需重新建立
@@ -256,7 +273,9 @@ npm run dist                                # 打包 → dist/
 
 ```bash
 cd app/server && npm install && cd ../..
-node scripts/smoke-test.js    # 26 项：去底 / 合成 / 批量 / CLI / HTTP / 分组 / 监听 / 去重 / BMP 等全链路
+node scripts/smoke-test.js                  # 39 项：去底 / 合成 / 批量 / CLI / HTTP / 分组 / 监听 / 去重 / BMP 等全链路
+node app/server/scripts/routes-smoke.js     # 24 项：路由判定（真实起服务发请求）
+node app/server/scripts/copy-smoke.js       # 12 项：发布文案（本地 mock 模型，不打真实 API）
 ```
 
 ## 许可证

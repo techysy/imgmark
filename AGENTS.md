@@ -194,7 +194,31 @@ curl -s -OJ -X POST http://127.0.0.1:28110/api/render \
 - 既没有分组也没有边框 → 400；引用了不存在/已失效的 logo 集 → 404
 - 出错仍是 JSON（`{"error":"中文原因"}`）——只有成功时才是图片字节，用 `-f`/`-OJ` 才能把错误存成文件
 
-## 7. CLI 等价命令
+## 7. 任务 E：文案生成（发布页签）
+
+```bash
+# 模型服务配置（OpenAI 兼容；密钥只写不回读，也可用环境变量 IMGMARK_LLM_BASE_URL / IMGMARK_LLM_API_KEY）
+curl -s -X PUT http://127.0.0.1:28110/api/copy/config \
+  -H 'Content-Type: application/json' \
+  -d '{"baseUrl":"http://127.0.0.1:20127/v1","apiKey":"sk-...","model":"mimo/mimo-v2.6-flash"}'
+
+curl -s http://127.0.0.1:28110/api/copy/models     # 视觉模型清单（只列 vision 能力）
+curl -s http://127.0.0.1:28110/api/copy/platforms  # 平台与默认文案规则
+
+# 历史截图参考（可选；存储于数据目录，最多 3 张参与生成）
+curl -s -X POST http://127.0.0.1:28110/api/copy/refs -F "file=@ref.png" -F "name=过往截图"
+
+# 生成：待发布图片 + 平台 + 一句话场景
+curl -s -X POST http://127.0.0.1:28110/api/copy/generate \
+  -F "image=@one.jpg" \
+  -F 'payload={"platform":"instagram","scene":"PNS 在成都 CPI 开快闪店，我去打卡拍照","model":"mimo/mimo-v2.6-flash","refIds":["<refId>"]}'
+# → {"platform","model","titles":[...],"body":"...","hashtags":[...],"mentions":[...]}
+```
+
+- `platform` 取值见 `GET /api/copy/platforms`（`instagram` / `xiaohongshu`）；`refIds` 可省略
+- 只产出文字供人工复制，**不代发**；`mentions` 只会原样输出场景描述里明确写过的 @ 账号
+
+## 8. CLI 等价命令
 
 ```bash
 cd app/server
@@ -207,13 +231,13 @@ node bin/wm.js apply -w combined.png -i /abs/photos --pos se --size 25 \
 CLI 暂不支持分组布局 / 监听 / 数据库去重 / 输出裁剪 cropRatio / 输出缩放 maxLongEdge（这些走 HTTP API；
 CLI 的 `--crop` 是水印源裁剪，别混淆）。
 
-## 8. 其他模式
+## 9. 其他模式
 
 - `mode=upload`：multipart 附 `files[]`（与 payload 同表单），结果用 `GET /api/jobs/:id/file/:idx` 逐个下载
 - `mode=fnos`：飞牛 NAS 内使用，UID 由应用网关注入 `x-trim-userid`（请求 payload/query 的 UID 不可信），输入和输出路径都必须位于当前用户可读/可写的授权目录（开放平台 `trim.file.*`），桌面壳内隐藏该页签
 - `mode=local-files`：桌面壳原生对话框的显式文件列表
 
-## 9. Agent 注意事项
+## 10. Agent 注意事项
 
 - **默认不要用 `overwrite`**：它会直接改写原图片文件（不可恢复）；勾选后强制保持原格式
 - `skipProcessed`：配合本地数据库跳过已输出文件（ overwrite 时无效）；「已输出」= 数据库身份命中且输出仍在，或输出文件已存在
