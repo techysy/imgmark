@@ -488,30 +488,32 @@
       </div>
     </div>
 
-    <div class="card">
-      <h2>⑦ 待发布图片与场景 <small>简单写就行,如地点、活动、想表达的感受</small></h2>
-      <div class="row">
-        <label class="file-btn">选择待发布图片
-          <input type="file" id="copy-image" accept="image/*" hidden>
-        </label>
-        <span id="copy-image-name" class="muted">未选择</span>
+    <div class="copy-split">
+      <div class="card">
+        <h2>⑦ 待发布图片与场景 <small>简单写就行,如地点、活动、想表达的感受</small></h2>
+        <div class="row">
+          <label class="file-btn">选择待发布图片
+            <input type="file" id="copy-image" accept="image/*" hidden>
+          </label>
+          <span id="copy-image-name" class="muted">未选择</span>
+        </div>
+        <div id="copy-image-preview" class="copy-preview"></div>
+        <div class="field" style="margin-top:10px">
+          <label>场景描述</label>
+          <textarea id="copy-scene" rows="3" placeholder="例:PNS 在成都 CPI 开了一家快闪店,我去打卡拍照" style="width:100%"></textarea>
+        </div>
       </div>
-      <div id="copy-image-preview" class="copy-preview"></div>
-      <div class="field" style="margin-top:10px">
-        <label>场景描述</label>
-        <textarea id="copy-scene" rows="3" placeholder="例:PNS 在成都 CPI 开了一家快闪店,我去打卡拍照" style="width:100%"></textarea>
-      </div>
-    </div>
 
-    <div class="card">
-      <h2>⑧ 历史截图 <small>过往发过的内容,作为语气与话题习惯的参考(最多选 3 张)</small></h2>
-      <div class="row">
-        <label class="file-btn">添加参考截图
-          <input type="file" id="copy-ref-file" accept="image/*" hidden>
-        </label>
-        <span class="muted">选中即上传保存,下次直接勾选</span>
+      <div class="card">
+        <h2>⑧ 历史截图 <small>过往发过的内容,作为语气与话题习惯的参考(最多选 3 张)</small></h2>
+        <div class="row">
+          <label class="file-btn">添加参考截图
+            <input type="file" id="copy-ref-file" accept="image/*" hidden>
+          </label>
+          <span class="muted">选中即上传保存,下次直接勾选</span>
+        </div>
+        <div id="copy-refs" class="copy-refs"></div>
       </div>
-      <div id="copy-refs" class="copy-refs"></div>
     </div>
 
     <div class="card">
