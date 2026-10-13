@@ -58,7 +58,7 @@
     "express": "^4.21.2",
     "multer": "^2.4.0",
     "pdfjs-dist": "^4.10.38",
-    "sharp": "^0.35.4"
+    "sharp": "^0.35.5"
   },
   "devDependencies": {
     "jsdom": "^26.0.0"

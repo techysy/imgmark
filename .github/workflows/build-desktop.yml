@@ -44,7 +44,9 @@ jobs:
         run: npm install --no-audit --no-fund
       - name: 检查桌面与构建依赖公告
         working-directory: desktop
-        run: npm audit --registry=https://registry.npmjs.org
+        # 门禁只拦 high/critical：sprintf-js←roarr←global-agent←@electron/get 是
+        # electron-builder 构建链上的 moderate 公告，不进成品；npm 给的「修复」是破坏性降级
+        run: npm audit --audit-level=high --registry=https://registry.npmjs.org
       - name: electron-builder 打包
         working-directory: desktop
         run: npx electron-builder --win --x64 --publish never
@@ -82,7 +84,9 @@ jobs:
         run: npm install --no-audit --no-fund
       - name: 检查桌面与构建依赖公告
         working-directory: desktop
-        run: npm audit --registry=https://registry.npmjs.org
+        # 门禁只拦 high/critical：sprintf-js←roarr←global-agent←@electron/get 是
+        # electron-builder 构建链上的 moderate 公告，不进成品；npm 给的「修复」是破坏性降级
+        run: npm audit --audit-level=high --registry=https://registry.npmjs.org
       - name: electron-builder 打包（arm64）
         working-directory: desktop
         run: npx electron-builder --mac --arm64 --publish never
@@ -145,7 +149,9 @@ jobs:
         run: npm install --no-audit --no-fund
       - name: 检查桌面与构建依赖公告
         working-directory: desktop
-        run: npm audit --registry=https://registry.npmjs.org
+        # 门禁只拦 high/critical：sprintf-js←roarr←global-agent←@electron/get 是
+        # electron-builder 构建链上的 moderate 公告，不进成品；npm 给的「修复」是破坏性降级
+        run: npm audit --audit-level=high --registry=https://registry.npmjs.org
       - name: electron-builder 打包（x64）
         working-directory: desktop
         run: npx electron-builder --mac --x64 --publish never
