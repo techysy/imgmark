@@ -58,6 +58,19 @@ function loadConfig() {
 const fnos = new TrimAppClient();
 const app = express();
 
+// fnOS 统一网关按 gatewayPrefix 带前缀转发（/app/imgmark/… 原样到达 app.sock），
+// 而应用资源都挂根路径；直连（浏览器/CLI/桌面壳访问 :端口）不带前缀。两种入口都兼容：
+// 剥掉前缀再走正常路由，裸前缀补斜杠（否则相对资源会解析到 /app/ 下）。
+const GATEWAY_PREFIX = process.env.IMGMARK_GATEWAY_PREFIX || '/app/imgmark';
+app.use((req, res, next) => {
+  const q = req.url.indexOf('?');
+  const p = q === -1 ? req.url : req.url.slice(0, q);
+  const rest = q === -1 ? '' : req.url.slice(q);
+  if (p === GATEWAY_PREFIX) return res.redirect(302, `${GATEWAY_PREFIX}/${rest}`);
+  if (p.startsWith(`${GATEWAY_PREFIX}/`)) req.url = p.slice(GATEWAY_PREFIX.length) + rest;
+  next();
+});
+
 // ---- 水印与任务状态 ----
 const watermarks = new Map(); // id -> {path,width,height,bgColor,notes,preview}
 const logoSets = new Map();   // setId -> { logos: [{key,path,altPath,name,width,height,monochrome,inkDark}] }（分组模式）

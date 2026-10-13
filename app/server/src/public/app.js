@@ -87,8 +87,10 @@ const PLACEHOLDER_WM = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/
 const PLACEHOLDER_STYLE = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='420' height='280'%3E%3Crect x='0' y='0' width='420' height='280' fill='%23dde3ea'/%3E%3Ccircle cx='90' cy='70' r='42' fill='%23ffffff' opacity='.35'/%3E%3Crect x='280' y='180' width='110' height='66' fill='%233d4f63' opacity='.3' rx='8'/%3E%3Ctext x='210' y='145' text-anchor='middle' font-family='sans-serif' font-size='13' fill='%237a8494'%3E选择水印样式后预览%3C/text%3E%3C/svg%3E";
 
 // ---------- 工具 ----------
+// API 路径一律相对文档解析（去掉开头的 /）：直连 /、fnOS 网关 /app/imgmark/ 两种入口都对
+function apiUrl(p) { return String(p).replace(/^\//, ''); }
 async function api(path, opts) {
-  const res = await fetch(path, opts);
+  const res = await fetch(apiUrl(path), opts);
   const body = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(body.error || body.message || `HTTP ${res.status}`);
   return body;
@@ -451,7 +453,7 @@ async function applyPreset(id) {
   try {
     files = [];
     for (let i = 0; i < meta.files.length; i++) {
-      const res = await fetch(`/api/presets/${encodeURIComponent(id)}/file/${i}`);
+      const res = await fetch(apiUrl(`/api/presets/${encodeURIComponent(id)}/file/${i}`));
       if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || `读取第 ${i + 1} 个 logo 失败`);
       files.push(new File([await res.blob()], meta.files[i].name));
     }
@@ -1199,7 +1201,7 @@ async function renderOwn() {
     const fd = new FormData();
     fd.append('file', st.file);
     fd.append('payload', JSON.stringify({ watermarkId: state.watermarkId, groups, options: options() }));
-    const r = await fetch('/api/render', { method: 'POST', body: fd });
+    const r = await fetch(apiUrl('/api/render'), { method: 'POST', body: fd });
     if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || `HTTP ${r.status}`);
     const blob = await r.blob();
     if (gen !== st.gen || previewOwn !== st) return; // 期间又改了样式，或已经换了图
@@ -1817,7 +1819,7 @@ async function pollJob(jobId) {
       lines.push(`<div class="done">输出目录：${esc(j.outputDir)}</div>`);
     }
     if (j.status === 'done' && j.dirKind === 'upload') {
-      (j.results || []).forEach((r, i) => { if (r.ok) lines.push(`<div><a href="/api/jobs/${jobId}/file/${i}" style="color:#7dd3fc">⬇ ${esc(r.name)}</a></div>`); });
+      (j.results || []).forEach((r, i) => { if (r.ok) lines.push(`<div><a href="${apiUrl(`/api/jobs/${jobId}/file/${i}`)}" style="color:#7dd3fc">⬇ ${esc(r.name)}</a></div>`); });
     }
     $('job-log').innerHTML = lines.join('');
     if (j.status === 'running') setTimeout(() => pollJob(jobId), 700);
@@ -1922,7 +1924,7 @@ async function uploadCopyRefFiles(files) {
     fd.append('file', f);
     fd.append('name', f.name || '粘贴截图');
     try {
-      const r = await fetch('/api/copy/refs', { method: 'POST', body: fd });
+      const r = await fetch(apiUrl('/api/copy/refs'), { method: 'POST', body: fd });
       const body = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(body.error || `HTTP ${r.status}`);
       saved++;
@@ -1947,7 +1949,7 @@ function renderCopyRefs() {
   box.innerHTML = copyState.refs.map((r) => {
     const on = copyState.selectedRefs.has(r.id);
     return `<div class="copy-ref${on ? ' on' : ''}" data-id="${esc(r.id)}">
-      <img src="/api/copy/refs/${encodeURIComponent(r.id)}/file" alt="">
+      <img src="${apiUrl(`/api/copy/refs/${encodeURIComponent(r.id)}/file`)}" alt="">
       <div class="copy-ref-name">${esc(r.name)}</div>
       <div class="row-inline">
         <button class="btn ghost" data-act="toggle">${on ? '取消选用' : '选用'}</button>
@@ -2093,7 +2095,7 @@ function bindCopy() {
     status.textContent = '生成中,通常需要十几秒…';
     out.innerHTML = '';
     try {
-      const r = await fetch('/api/copy/generate', { method: 'POST', body: fd });
+      const r = await fetch(apiUrl('/api/copy/generate'), { method: 'POST', body: fd });
       const body = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(body.error || `HTTP ${r.status}`);
       status.textContent = '';

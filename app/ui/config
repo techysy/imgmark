@@ -6,7 +6,7 @@
       "type": "iframe",
       "gatewayPrefix": "/app/imgmark",
       "gatewaySocket": "app.sock",
-      "url": "/app/imgmark",
+      "url": "/app/imgmark/",
       "allUsers": true
     }
   }
