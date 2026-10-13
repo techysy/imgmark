@@ -1825,12 +1825,22 @@ function renderCopyRules() {
     : '';
 }
 
+async function loadCopyConfig() {
+  const cfg = await api('/api/copy/config');
+  if (!document.activeElement || document.activeElement.id !== 'copy-cfg-key') {
+    $('copy-cfg-base').value = cfg.baseUrl || '';
+    // 密钥不回显:输入框始终为空,占位符提示是否已存
+    $('copy-cfg-key').placeholder = cfg.hasKey ? '已保存(留空则不修改)' : 'sk-…';
+  }
+  return cfg;
+}
+
 async function loadCopyModels() {
   const sel = $('copy-model');
   sel.innerHTML = '<option value="">加载中…</option>';
   try {
+    const cfg = await loadCopyConfig();
     const list = await api('/api/copy/models');
-    const cfg = await api('/api/copy/config');
     if (!list.length) {
       sel.innerHTML = '<option value="">没有可用的视觉模型</option>';
       return;
@@ -1871,18 +1881,48 @@ function bindCopy() {
   $('copy-platform').addEventListener('change', renderCopyRules);
   $('copy-models-refresh').addEventListener('click', loadCopyModels);
 
+  // 模型设置:展开/收起、保存(baseUrl + key)、清除已存密钥
+  $('copy-config-toggle').addEventListener('click', () => {
+    const box = $('copy-config');
+    const open = box.classList.toggle('hidden') === false;
+    $('copy-config-toggle').setAttribute('aria-expanded', String(open));
+    if (open) loadCopyConfig();
+  });
+  $('copy-cfg-save').addEventListener('click', async () => {
+    const status = $('copy-cfg-status');
+    const payload = { baseUrl: $('copy-cfg-base').value.trim() };
+    const key = $('copy-cfg-key').value.trim();
+    if (key) payload.apiKey = key;
+    try {
+      await api('/api/copy/config', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+      $('copy-cfg-key').value = '';
+      status.textContent = '已保存';
+      await loadCopyModels();
+    } catch (e) { status.textContent = e.message; }
+  });
+  $('copy-cfg-clear').addEventListener('click', async () => {
+    if (!confirm('清除已保存的 API Key?')) return;
+    try {
+      await api('/api/copy/config', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ clearKey: true }) });
+      $('copy-cfg-key').value = '';
+      $('copy-cfg-status').textContent = '密钥已清除';
+    } catch (e) { $('copy-cfg-status').textContent = e.message; }
+  });
+
   $('copy-image').addEventListener('change', (e) => {
     const f = e.target.files[0];
     copyState.image = f || null;
     if (copyState.imagePreviewUrl) URL.revokeObjectURL(copyState.imagePreviewUrl);
     copyState.imagePreviewUrl = f ? URL.createObjectURL(f) : null;
+    $('copy-image-name').textContent = f ? f.name : '未选择';
     $('copy-image-preview').innerHTML = copyState.imagePreviewUrl
       ? `<img src="${copyState.imagePreviewUrl}" alt="">` : '';
   });
 
-  $('copy-ref-add').addEventListener('click', async () => {
-    const f = $('copy-ref-file').files[0];
-    if (!f) { $('copy-status').textContent = '请先选择截图文件'; return; }
+  $('copy-ref-file').addEventListener('change', async (e) => {
+    const f = e.target.files[0];
+    e.target.value = '';
+    if (!f) return;
     const fd = new FormData();
     fd.append('file', f);
     fd.append('name', f.name);
@@ -1890,7 +1930,6 @@ function bindCopy() {
       const r = await fetch('/api/copy/refs', { method: 'POST', body: fd });
       const body = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(body.error || `HTTP ${r.status}`);
-      $('copy-ref-file').value = '';
       await loadCopyRefs();
       $('copy-status').textContent = '已保存参考截图';
     } catch (e) {

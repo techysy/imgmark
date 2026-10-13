@@ -446,46 +446,79 @@
   </section>
 
   <section class="view" id="view-copy">
-    <!-- 文案生成:上传待发布图片 + 选平台 + 简单描述场景;历史截图作风格参考 -->
+    <!-- 发布:上传待发布图片 + 选平台 + 简单描述场景;历史截图作风格参考 -->
     <div class="card">
-      <h2>发布 <small>平台规则为默认经验值,请按实际发布效果调整 · 只生成文字,手动复制到平台发布</small></h2>
-      <div class="row-inline wrap">
-        <label>平台
+      <h2>⑥ 平台与模型 <small>平台规则为默认经验值,请按实际发布效果调整 · 只生成文字,手动复制到平台发布</small></h2>
+      <div class="row">
+        <div class="field">
+          <label>平台</label>
           <select id="copy-platform"></select>
-        </label>
-        <label>模型
+        </div>
+        <div class="field" style="width:220px">
+          <label>模型</label>
           <select id="copy-model"><option value="">加载中…</option></select>
-        </label>
-        <button id="copy-models-refresh" class="btn ghost">刷新模型列表</button>
+        </div>
+        <div class="field">
+          <label>&nbsp;</label>
+          <button id="copy-models-refresh" class="btn ghost">刷新模型列表</button>
+        </div>
+        <div class="field">
+          <label>&nbsp;</label>
+          <button id="copy-config-toggle" class="btn ghost" aria-expanded="false">模型设置</button>
+        </div>
       </div>
       <div class="notes" id="copy-platform-rules"></div>
+      <div id="copy-config" class="hidden">
+        <div class="row">
+          <div class="field grow">
+            <label>服务地址(OpenAI 兼容,含 /v1)</label>
+            <input type="text" id="copy-cfg-base" placeholder="http://127.0.0.1:20127/v1" style="width:100%">
+          </div>
+          <div class="field grow">
+            <label>API Key</label>
+            <input type="password" id="copy-cfg-key" placeholder="sk-…(留空则不修改)" style="width:100%">
+          </div>
+        </div>
+        <div class="row-inline" style="margin-top:10px">
+          <button id="copy-cfg-save" class="btn primary">保存设置</button>
+          <button id="copy-cfg-clear" class="btn ghost">清除已存密钥</button>
+          <span id="copy-cfg-status" class="notes" style="margin:0"></span>
+        </div>
+        <div class="notes">设置保存在本机数据目录(llm.json),密钥不会回显、不会出现在任何接口响应里。</div>
+      </div>
     </div>
 
     <div class="card">
-      <h2>1 待发布图片</h2>
-      <input type="file" id="copy-image" accept="image/*">
+      <h2>⑦ 待发布图片与场景 <small>简单写就行,如地点、活动、想表达的感受</small></h2>
+      <div class="row">
+        <label class="file-btn">选择待发布图片
+          <input type="file" id="copy-image" accept="image/*" hidden>
+        </label>
+        <span id="copy-image-name" class="muted">未选择</span>
+      </div>
       <div id="copy-image-preview" class="copy-preview"></div>
+      <div class="field" style="margin-top:10px">
+        <label>场景描述</label>
+        <textarea id="copy-scene" rows="3" placeholder="例:PNS 在成都 CPI 开了一家快闪店,我去打卡拍照" style="width:100%"></textarea>
+      </div>
     </div>
 
     <div class="card">
-      <h2>2 场景描述 <small>简单写就行,如地点、活动、想表达的感受</small></h2>
-      <textarea id="copy-scene" rows="3" placeholder="例:PNS 在成都 CPI 开了一家快闪店,我去打卡拍照" style="width:100%"></textarea>
-    </div>
-
-    <div class="card">
-      <h2>3 历史截图 <small>过往发过的内容,作为语气与话题习惯的参考(最多选 3 张)</small></h2>
-      <div class="row-inline wrap">
-        <input type="file" id="copy-ref-file" accept="image/*">
-        <button id="copy-ref-add" class="btn">保存为参考截图</button>
+      <h2>⑧ 历史截图 <small>过往发过的内容,作为语气与话题习惯的参考(最多选 3 张)</small></h2>
+      <div class="row">
+        <label class="file-btn">添加参考截图
+          <input type="file" id="copy-ref-file" accept="image/*" hidden>
+        </label>
+        <span class="muted">选中即上传保存,下次直接勾选</span>
       </div>
       <div id="copy-refs" class="copy-refs"></div>
     </div>
 
     <div class="card">
-      <h2>4 生成</h2>
+      <h2>⑨ 生成</h2>
       <div class="row-inline">
         <button id="copy-generate" class="btn primary">生成文案</button>
-        <span id="copy-status" class="notes"></span>
+        <span id="copy-status" class="notes" style="margin:0"></span>
       </div>
       <div id="copy-result"></div>
     </div>
