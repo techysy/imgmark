@@ -95,6 +95,34 @@ async function api(path, opts) {
 }
 const debounce = (fn, ms) => { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; };
 function esc(s) { return String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
+// 统一确认框(替代原生 confirm):点遮罩/Esc/取消 → false,确定 → true
+function appConfirm(message, { okText = '确定', cancelText = '取消', danger = false } = {}) {
+  return new Promise((resolve) => {
+    const dlg = $('app-dlg');
+    $('app-dlg-msg').textContent = message;
+    const okBtn = dlg.querySelector('[data-act="ok"]');
+    dlg.querySelector('[data-act="cancel"]').textContent = cancelText;
+    okBtn.textContent = okText;
+    okBtn.classList.toggle('danger', danger);
+    okBtn.classList.toggle('primary', !danger);
+    dlg.classList.remove('hidden');
+    const done = (v) => {
+      dlg.classList.add('hidden');
+      dlg.removeEventListener('click', onClick);
+      document.removeEventListener('keydown', onKey);
+      resolve(v);
+    };
+    const onClick = (e) => {
+      const b = e.target.closest('[data-act]');
+      if (b) return done(b.dataset.act === 'ok');
+      if (e.target === dlg) done(false);
+    };
+    const onKey = (e) => { if (e.key === 'Escape') done(false); };
+    dlg.addEventListener('click', onClick);
+    document.addEventListener('keydown', onKey);
+    okBtn.focus();
+  });
+}
 
 // ---------- 自定义下拉（统一替换原生 select） ----------
 // 原生 <select> 保留在 DOM 中作为数据源与 change 事件目标：外部读 .value / 绑定 change 的代码完全不变，
@@ -1578,10 +1606,9 @@ async function pickFnosDirectory() {
   sdkBusy = true;
   try {
     // 确定 = 当前用户个人目录；取消 = 管理员共享目录（仅管理员可操作）
-    const personal = window.confirm(
-      '选择授权类型：\n\n' +
-      '【确定】当前用户个人目录 —— 授权给当前登录用户\n' +
-      '【取消】共享目录 —— 需要管理员身份，所有人可用'
+    const personal = await appConfirm(
+      '选择授权类型：\n\n当前用户个人目录 —— 授权给当前登录用户\n共享目录 —— 需要管理员身份，所有人可用',
+      { okText: '个人目录', cancelText: '共享目录' }
     );
     const result = personal
       ? await state.sdk.pickUserFile({ directory: true, title: '选择授权目录', okText: '确认授权' })
@@ -1736,7 +1763,7 @@ async function run() {
   if (!src || (!groups.length && !frame)) return;
   if (groups.some((g) => !g.text) && !state.watermarkId) return; // 有 logo 组但水印失效
   const overwrite = $('opt-overwrite').checked;
-  if (overwrite && !window.confirm('⚠ 将直接覆盖原图片文件（不可恢复），确定继续？')) return;
+  if (overwrite && !(await appConfirm('⚠ 将直接覆盖原图片文件（不可恢复），确定继续？', { okText: '覆盖并继续', danger: true }))) return;
 
   const payload = {
     watermarkId: state.watermarkId,
@@ -1810,7 +1837,7 @@ function applyTheme(t) {
 }
 
 // ---------- 文案生成 ----------
-const copyState = { platforms: [], refs: [], selectedRefs: new Set(), image: null, imagePreviewUrl: null };
+const copyState = { platforms: [], refs: [], selectedRefs: new Set(), image: null, imagePreviewUrl: null, models: [], model: '' };
 
 function renderCopyPlatforms() {
   const sel = $('copy-platform');
@@ -1835,20 +1862,47 @@ async function loadCopyConfig() {
   return cfg;
 }
 
+function modelProviderOf(m) {
+  return m.id.includes('/') ? m.id.split('/')[0] : (m.owned_by || '其他');
+}
+function modelShortName(id) {
+  return id.includes('/') ? id.split('/').slice(1).join('/') : id;
+}
+
+// 模型面板按供应商分组,每组一排卡片;选中记在 copyState.model
+function renderCopyModelMenu() {
+  const q = ($('copy-model-filter').value || '').trim().toLowerCase();
+  const list = copyState.models.filter((m) => !q || m.id.toLowerCase().includes(q));
+  const groups = new Map();
+  for (const m of list) {
+    const p = modelProviderOf(m);
+    if (!groups.has(p)) groups.set(p, []);
+    groups.get(p).push(m);
+  }
+  $('copy-model-list').innerHTML = [...groups.entries()].map(([prov, ms]) => `
+    <div class="mdl-group">
+      <div class="mdl-group-head">${esc(prov)}<span>${ms.length} 个</span></div>
+      <div class="mdl-cards">${ms.map((m) => `
+        <button type="button" class="pt-item mdl-card${m.id === copyState.model ? ' on' : ''}" data-id="${esc(m.id)}">
+          <div class="pt-item-head">
+            <span class="pt-item-name">${esc(modelShortName(m.id))}</span>
+            ${m.contextWindow ? `<span class="pt-item-time">${Math.round(m.contextWindow / 1000)}k</span>` : ''}
+          </div>
+        </button>`).join('')}</div>
+    </div>`).join('') || '<div class="pt-empty">没有匹配的模型</div>';
+  $('copy-model-current').textContent = copyState.model ? modelShortName(copyState.model) : '选择模型…';
+}
+
 async function loadCopyModels() {
-  const sel = $('copy-model');
-  sel.innerHTML = '<option value="">加载中…</option>';
   try {
     const cfg = await loadCopyConfig();
-    const list = await api('/api/copy/models');
-    if (!list.length) {
-      sel.innerHTML = '<option value="">没有可用的视觉模型</option>';
-      return;
-    }
-    sel.innerHTML = list.map((m) => `<option value="${esc(m.id)}">${esc(m.id)}</option>`).join('');
-    if (cfg.model && list.some((m) => m.id === cfg.model)) sel.value = cfg.model;
+    copyState.models = await api('/api/copy/models');
+    if (cfg.model && copyState.models.some((m) => m.id === cfg.model)) copyState.model = cfg.model;
+    renderCopyModelMenu();
   } catch (e) {
-    sel.innerHTML = '<option value="">无法获取模型列表</option>';
+    copyState.models = [];
+    $('copy-model-list').innerHTML = `<div class="pt-empty">${esc(e.message)}</div>`;
+    $('copy-model-current').textContent = '选择模型…';
     $('copy-status').textContent = e.message;
   }
 }
@@ -1858,10 +1912,36 @@ async function loadCopyRefs() {
   renderCopyRefs();
 }
 
+// 文件按钮 / 拖拽 / 粘贴共用的入口:逐张上传,新存的自动勾选(选满 3 张为止)
+async function uploadCopyRefFiles(files) {
+  const imgs = files.filter((f) => f && f.type && f.type.startsWith('image/'));
+  if (!imgs.length) { $('copy-status').textContent = '只支持图片文件'; return; }
+  let saved = 0;
+  for (const f of imgs) {
+    const fd = new FormData();
+    fd.append('file', f);
+    fd.append('name', f.name || '粘贴截图');
+    try {
+      const r = await fetch('/api/copy/refs', { method: 'POST', body: fd });
+      const body = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(body.error || `HTTP ${r.status}`);
+      saved++;
+      if (copyState.selectedRefs.size < 3) copyState.selectedRefs.add(body.id);
+    } catch (e) {
+      $('copy-status').textContent = e.message;
+      break;
+    }
+  }
+  if (saved) {
+    await loadCopyRefs();
+    $('copy-status').textContent = `已保存 ${saved} 张参考截图`;
+  }
+}
+
 function renderCopyRefs() {
   const box = $('copy-refs');
   if (!copyState.refs.length) {
-    box.innerHTML = '<div class="notes">还没有参考截图。上传后会保存在本地,下次直接勾选。</div>';
+    box.innerHTML = '<div class="notes">还没有参考截图。点「添加参考截图」、拖图进来,或 Ctrl+V 粘贴;保存在本地,下次直接勾选。</div>';
     return;
   }
   box.innerHTML = copyState.refs.map((r) => {
@@ -1880,6 +1960,34 @@ function renderCopyRefs() {
 function bindCopy() {
   $('copy-platform').addEventListener('change', renderCopyRules);
   $('copy-models-refresh').addEventListener('click', loadCopyModels);
+
+  // 模型卡片选择器:展开/收起、搜索、点卡片选中(并记住到配置)
+  $('copy-model-toggle').addEventListener('click', (e) => {
+    e.stopPropagation();
+    const menu = $('copy-model-menu');
+    const open = menu.classList.toggle('hidden') === false;
+    $('copy-model-toggle').setAttribute('aria-expanded', String(open));
+    $('copy-model-toggle').classList.toggle('open', open);
+    if (open) $('copy-model-filter').focus();
+  });
+  $('copy-model-filter').addEventListener('input', renderCopyModelMenu);
+  $('copy-model-list').addEventListener('click', (e) => {
+    const card = e.target.closest('.mdl-card');
+    if (!card) return;
+    copyState.model = card.dataset.id;
+    renderCopyModelMenu();
+    $('copy-model-menu').classList.add('hidden');
+    $('copy-model-toggle').classList.remove('open');
+    $('copy-model-toggle').setAttribute('aria-expanded', 'false');
+    api('/api/copy/config', { method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: copyState.model }) }).catch(() => {});
+  });
+  document.addEventListener('click', (e) => {
+    if (e.target.closest('#copy-model-picker')) return;
+    $('copy-model-menu').classList.add('hidden');
+    $('copy-model-toggle').classList.remove('open');
+    $('copy-model-toggle').setAttribute('aria-expanded', 'false');
+  });
 
   // 模型设置:展开/收起、保存(baseUrl + key)、清除已存密钥
   $('copy-config-toggle').addEventListener('click', () => {
@@ -1901,7 +2009,7 @@ function bindCopy() {
     } catch (e) { status.textContent = e.message; }
   });
   $('copy-cfg-clear').addEventListener('click', async () => {
-    if (!confirm('清除已保存的 API Key?')) return;
+    if (!(await appConfirm('清除已保存的 API Key?', { okText: '清除', danger: true }))) return;
     try {
       await api('/api/copy/config', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ clearKey: true }) });
       $('copy-cfg-key').value = '';
@@ -1920,21 +2028,31 @@ function bindCopy() {
   });
 
   $('copy-ref-file').addEventListener('change', async (e) => {
-    const f = e.target.files[0];
+    const files = [...e.target.files];
     e.target.value = '';
-    if (!f) return;
-    const fd = new FormData();
-    fd.append('file', f);
-    fd.append('name', f.name);
-    try {
-      const r = await fetch('/api/copy/refs', { method: 'POST', body: fd });
-      const body = await r.json().catch(() => ({}));
-      if (!r.ok) throw new Error(body.error || `HTTP ${r.status}`);
-      await loadCopyRefs();
-      $('copy-status').textContent = '已保存参考截图';
-    } catch (e) {
-      $('copy-status').textContent = e.message;
-    }
+    await uploadCopyRefFiles(files);
+  });
+
+  // 参考截图支持拖进 ⑧ 卡片、或在「发布」页任意位置 Ctrl+V 粘贴
+  const refCard = $('copy-refs').closest('.card');
+  refCard.addEventListener('dragover', (e) => {
+    if (![...(e.dataTransfer?.items || [])].some((i) => i.kind === 'file')) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+    refCard.classList.add('drag-over');
+  });
+  refCard.addEventListener('dragleave', () => refCard.classList.remove('drag-over'));
+  refCard.addEventListener('drop', async (e) => {
+    e.preventDefault();
+    refCard.classList.remove('drag-over');
+    await uploadCopyRefFiles([...(e.dataTransfer?.files || [])]);
+  });
+  document.addEventListener('paste', async (e) => {
+    if (!$('view-copy').classList.contains('active')) return;
+    const files = [...(e.clipboardData?.files || [])];
+    if (!files.length) return;
+    e.preventDefault();
+    await uploadCopyRefFiles(files);
   });
 
   $('copy-refs').addEventListener('click', async (e) => {
@@ -1947,7 +2065,7 @@ function bindCopy() {
       else { $('copy-status').textContent = '最多选 3 张参考截图'; return; }
       renderCopyRefs();
     } else if (btn.dataset.act === 'del') {
-      if (!confirm('删除这张参考截图?')) return;
+      if (!(await appConfirm('删除这张参考截图?', { okText: '删除', danger: true }))) return;
       await api(`/api/copy/refs/${encodeURIComponent(id)}`, { method: 'DELETE' });
       copyState.selectedRefs.delete(id);
       await loadCopyRefs();
@@ -1960,7 +2078,7 @@ function bindCopy() {
     if (!copyState.image) { status.textContent = '请先选择待发布图片'; return; }
     const scene = $('copy-scene').value.trim();
     if (!scene) { status.textContent = '请简单描述场景'; return; }
-    const model = $('copy-model').value;
+    const model = copyState.model;
     if (!model) { status.textContent = '请先选择模型'; return; }
     const fd = new FormData();
     fd.append('image', copyState.image);

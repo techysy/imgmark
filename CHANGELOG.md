@@ -9,6 +9,7 @@
 ### 新增
 - **「发布」页签（文案生成）**：上传待发布图片 + 选平台 + 简单描述场景，视觉模型识别画面后按平台格式给出候选标题、正文、话题与 @ 建议，手动复制到各平台发布（不自动发布）。历史截图可上传为参考（最多选 3 张），模型会模仿其语气与话题习惯
 - 平台默认规则（Instagram 双语话题 / 小红书中文话题等，经验值、可在生成前确认）；模型列表走 10router 等 OpenAI 兼容接口的 `/v1/models`，只列出视觉模型，支持海外模型
+- 参考截图支持**拖入卡片 / Ctrl+V 粘贴**，新存的自动勾选（最多 3 张）；模型选择改为**按供应商分组的卡片面板**（带搜索，选中记住到配置）；全站确认框改自定义样式（危险操作红色主按钮），不再弹原生 confirm
 - 模型服务配置存数据目录 `llm.json`（或环境变量 `IMGMARK_LLM_BASE_URL` / `IMGMARK_LLM_API_KEY`），**密钥不下发到前端、不出现在任何 `/api/*` 响应里**
 - 新增 `POST /api/copy/generate`、`GET /api/copy/models`、`GET/POST/DELETE /api/copy/refs`、`GET/PUT /api/copy/config`（详见 README）；`scripts/copy-smoke.js` 用本地 mock 模型服务覆盖全流程
 

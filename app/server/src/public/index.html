@@ -454,9 +454,18 @@
           <label>平台</label>
           <select id="copy-platform"></select>
         </div>
-        <div class="field" style="width:220px">
+        <div class="field" style="width:260px">
           <label>模型</label>
-          <select id="copy-model"><option value="">加载中…</option></select>
+          <div class="preset-picker" id="copy-model-picker">
+            <button type="button" id="copy-model-toggle" class="btn preset-toggle" aria-expanded="false">
+              <span id="copy-model-current" class="pt-name">选择模型…</span>
+              <span class="pt-caret"></span>
+            </button>
+            <div id="copy-model-menu" class="preset-menu hidden">
+              <input type="text" id="copy-model-filter" placeholder="搜索模型…">
+              <div id="copy-model-list"></div>
+            </div>
+          </div>
         </div>
         <div class="field">
           <label>&nbsp;</label>
@@ -510,7 +519,7 @@
           <label class="file-btn">添加参考截图
             <input type="file" id="copy-ref-file" accept="image/*" hidden>
           </label>
-          <span class="muted">选中即上传保存,下次直接勾选</span>
+          <span class="muted">也可直接拖进本卡片,或 Ctrl+V 粘贴截图;新存的自动勾选</span>
         </div>
         <div id="copy-refs" class="copy-refs"></div>
       </div>
@@ -538,6 +547,16 @@
   <button id="lightbox-copy" class="hidden" title="复制这张图到剪贴板（短边 1080，适合分享）；右键大图可选原始尺寸"><span class="pv-ic" data-ic="clipboard"></span>复制图片</button>
   <img id="lightbox-img" alt="预览大图">
   <div id="lightbox-cap"></div>
+</div>
+<!-- 全局确认框(替代原生 confirm;danger 操作用红色主按钮) -->
+<div class="app-dlg hidden" id="app-dlg">
+  <div class="app-dlg-box" role="dialog" aria-modal="true">
+    <div class="app-dlg-msg" id="app-dlg-msg"></div>
+    <div class="app-dlg-btns">
+      <button type="button" class="btn" data-act="cancel">取消</button>
+      <button type="button" class="btn primary" data-act="ok">确定</button>
+    </div>
+  </div>
 </div>
 <script type="module" src="/app.js"></script>
 </body>

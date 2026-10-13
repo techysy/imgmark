@@ -476,3 +476,27 @@ select.dd-native { position: absolute; width: 1px; height: 1px; opacity: 0; poin
   .copy-split { flex-direction: column; }
   .copy-split > .card { width: 100%; }
 }
+
+/* 参考截图拖拽落点:整张 ⑧ 卡片 */
+.copy-split > .card.drag-over { outline: 2px dashed var(--pri); outline-offset: -2px; }
+
+/* 模型卡片选择器:菜单比按钮宽,按供应商分组铺卡片 */
+#copy-model-menu { width: 420px; right: auto; }
+#copy-model-filter { width: 100%; box-sizing: border-box; margin-bottom: 4px; }
+.mdl-group + .mdl-group { margin-top: 8px; }
+.mdl-group-head { display: flex; justify-content: space-between; gap: 8px; padding: 4px 8px 2px;
+  font-size: 11px; font-weight: 700; color: var(--muted); }
+.mdl-group-head span { color: var(--text-3); font-weight: normal; }
+.mdl-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 4px; }
+.mdl-card { padding: 6px 10px; }
+@media (max-width: 880px) { #copy-model-menu { width: min(420px, calc(100vw - 80px)); } }
+
+/* 全局确认框:遮罩居中,危险操作主按钮标红 */
+.app-dlg { position: fixed; inset: 0; z-index: 100; background: rgba(0,0,0,.35);
+  display: flex; align-items: center; justify-content: center; }
+.app-dlg-box { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 18px 20px; width: min(360px, calc(100vw - 48px)); box-shadow: 0 12px 32px rgba(0,0,0,.18); }
+.app-dlg-msg { font-size: 13px; line-height: 1.6; white-space: pre-line; }
+.app-dlg-btns { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+.btn.danger { background: var(--bad); border-color: var(--bad); color: #fff; }
+.btn.danger:hover { opacity: .88; color: #fff; }
