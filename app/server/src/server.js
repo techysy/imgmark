@@ -1531,7 +1531,10 @@ function start({ port = PORT, host = HOST, socketPath = process.env.SOCKET_PATH 
       }).catch(() => {});
       if (socketPath) {
         try { fs.rmSync(socketPath, { force: true }); } catch {}
-        app.listen(socketPath, () => console.log(`[imgmark] 网关 socket: ${socketPath}`));
+        try { fs.mkdirSync(path.dirname(socketPath), { recursive: true }); } catch {}
+        // 网关 socket 只是额外通道：监听失败（路径/权限）告警即可，不能把整个服务进程带走
+        const sockSrv = app.listen(socketPath, () => console.log(`[imgmark] 网关 socket: ${socketPath}`));
+        sockSrv.on('error', (e) => console.warn(`[imgmark] 警告: 网关 socket 监听失败（${e.message}），HTTP 端口仍可用`));
       }
       resolve(srv);
     });
