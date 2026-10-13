@@ -60,7 +60,7 @@ let prepareGeneration = 0;
 
 // ---------- 视图导航（CreditDaddy 模式：三个视图 DOM 常驻、只做显隐） ----------
 // 表单状态/预览/事件绑定都不随切走而销毁，切回即原样；当前视图存 localStorage
-const VIEWS = ['style', 'batch', 'watch'];
+const VIEWS = ['style', 'batch', 'watch', 'copy'];
 function goView(v) {
   if (!VIEWS.includes(v)) v = 'style';
   document.querySelectorAll('#nav button').forEach((b) => b.classList.toggle('active', b.dataset.view === v));
@@ -1809,6 +1809,173 @@ function applyTheme(t) {
   if (b) b.innerHTML = t === 'dark' ? I.sun : I.moon;
 }
 
+// ---------- 文案生成 ----------
+const copyState = { platforms: [], refs: [], selectedRefs: new Set(), image: null, imagePreviewUrl: null };
+
+function renderCopyPlatforms() {
+  const sel = $('copy-platform');
+  sel.innerHTML = copyState.platforms.map((p) => `<option value="${esc(p.id)}">${esc(p.label)}</option>`).join('');
+  renderCopyRules();
+}
+
+function renderCopyRules() {
+  const p = copyState.platforms.find((x) => x.id === $('copy-platform').value);
+  $('copy-platform-rules').innerHTML = p
+    ? `<b>${esc(p.label)} 默认规则:</b>${p.rules.map((r) => `<br>· ${esc(r)}`).join('')}`
+    : '';
+}
+
+async function loadCopyModels() {
+  const sel = $('copy-model');
+  sel.innerHTML = '<option value="">加载中…</option>';
+  try {
+    const list = await api('/api/copy/models');
+    const cfg = await api('/api/copy/config');
+    if (!list.length) {
+      sel.innerHTML = '<option value="">没有可用的视觉模型</option>';
+      return;
+    }
+    sel.innerHTML = list.map((m) => `<option value="${esc(m.id)}">${esc(m.id)}</option>`).join('');
+    if (cfg.model && list.some((m) => m.id === cfg.model)) sel.value = cfg.model;
+  } catch (e) {
+    sel.innerHTML = '<option value="">无法获取模型列表</option>';
+    $('copy-status').textContent = e.message;
+  }
+}
+
+async function loadCopyRefs() {
+  copyState.refs = await api('/api/copy/refs');
+  renderCopyRefs();
+}
+
+function renderCopyRefs() {
+  const box = $('copy-refs');
+  if (!copyState.refs.length) {
+    box.innerHTML = '<div class="notes">还没有参考截图。上传后会保存在本地,下次直接勾选。</div>';
+    return;
+  }
+  box.innerHTML = copyState.refs.map((r) => {
+    const on = copyState.selectedRefs.has(r.id);
+    return `<div class="copy-ref${on ? ' on' : ''}" data-id="${esc(r.id)}">
+      <img src="/api/copy/refs/${encodeURIComponent(r.id)}/file" alt="">
+      <div class="copy-ref-name">${esc(r.name)}</div>
+      <div class="row-inline">
+        <button class="btn ghost" data-act="toggle">${on ? '取消选用' : '选用'}</button>
+        <button class="btn ghost" data-act="del">删除</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function bindCopy() {
+  $('copy-platform').addEventListener('change', renderCopyRules);
+  $('copy-models-refresh').addEventListener('click', loadCopyModels);
+
+  $('copy-image').addEventListener('change', (e) => {
+    const f = e.target.files[0];
+    copyState.image = f || null;
+    if (copyState.imagePreviewUrl) URL.revokeObjectURL(copyState.imagePreviewUrl);
+    copyState.imagePreviewUrl = f ? URL.createObjectURL(f) : null;
+    $('copy-image-preview').innerHTML = copyState.imagePreviewUrl
+      ? `<img src="${copyState.imagePreviewUrl}" alt="">` : '';
+  });
+
+  $('copy-ref-add').addEventListener('click', async () => {
+    const f = $('copy-ref-file').files[0];
+    if (!f) { $('copy-status').textContent = '请先选择截图文件'; return; }
+    const fd = new FormData();
+    fd.append('file', f);
+    fd.append('name', f.name);
+    try {
+      const r = await fetch('/api/copy/refs', { method: 'POST', body: fd });
+      const body = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(body.error || `HTTP ${r.status}`);
+      $('copy-ref-file').value = '';
+      await loadCopyRefs();
+      $('copy-status').textContent = '已保存参考截图';
+    } catch (e) {
+      $('copy-status').textContent = e.message;
+    }
+  });
+
+  $('copy-refs').addEventListener('click', async (e) => {
+    const btn = e.target.closest('button[data-act]');
+    if (!btn) return;
+    const id = btn.closest('.copy-ref').dataset.id;
+    if (btn.dataset.act === 'toggle') {
+      if (copyState.selectedRefs.has(id)) copyState.selectedRefs.delete(id);
+      else if (copyState.selectedRefs.size < 3) copyState.selectedRefs.add(id);
+      else { $('copy-status').textContent = '最多选 3 张参考截图'; return; }
+      renderCopyRefs();
+    } else if (btn.dataset.act === 'del') {
+      if (!confirm('删除这张参考截图?')) return;
+      await api(`/api/copy/refs/${encodeURIComponent(id)}`, { method: 'DELETE' });
+      copyState.selectedRefs.delete(id);
+      await loadCopyRefs();
+    }
+  });
+
+  $('copy-generate').addEventListener('click', async () => {
+    const status = $('copy-status');
+    const out = $('copy-result');
+    if (!copyState.image) { status.textContent = '请先选择待发布图片'; return; }
+    const scene = $('copy-scene').value.trim();
+    if (!scene) { status.textContent = '请简单描述场景'; return; }
+    const model = $('copy-model').value;
+    if (!model) { status.textContent = '请先选择模型'; return; }
+    const fd = new FormData();
+    fd.append('image', copyState.image);
+    fd.append('payload', JSON.stringify({
+      platform: $('copy-platform').value,
+      scene,
+      model,
+      refIds: [...copyState.selectedRefs],
+    }));
+    const btn = $('copy-generate');
+    btn.disabled = true;
+    status.textContent = '生成中,通常需要十几秒…';
+    out.innerHTML = '';
+    try {
+      const r = await fetch('/api/copy/generate', { method: 'POST', body: fd });
+      const body = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(body.error || `HTTP ${r.status}`);
+      status.textContent = '';
+      out.innerHTML = renderCopyResult(body);
+    } catch (e) {
+      status.textContent = e.message;
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  $('copy-result').addEventListener('click', (e) => {
+    const b = e.target.closest('button[data-copy]');
+    if (!b) return;
+    const el = $('copy-result').querySelector(`[data-field="${b.dataset.copy}"]`);
+    if (!el) return;
+    navigator.clipboard.writeText(el.textContent).then(() => { b.textContent = '已复制'; setTimeout(() => { b.textContent = '复制'; }, 1200); });
+  });
+}
+
+function renderCopyResult(r) {
+  const field = (key, text, label) => `<div class="copy-field">
+      <div class="copy-field-head"><b>${label}</b><button class="btn ghost" data-copy="${key}">复制</button></div>
+      <pre data-field="${key}">${esc(text)}</pre>
+    </div>`;
+  const titles = r.titles.map((t, i) => field(`title-${i}`, t, `标题 ${i + 1}`)).join('');
+  return titles
+    + field('body', r.body, '正文')
+    + field('hashtags', r.hashtags.join(' '), '话题')
+    + (r.mentions.length ? field('mentions', r.mentions.join(' '), '@ 建议') : '');
+}
+
+async function initCopy() {
+  copyState.platforms = await api('/api/copy/platforms');
+  renderCopyPlatforms();
+  await Promise.all([loadCopyModels(), loadCopyRefs()]);
+  bindCopy();
+}
+
 function init() {
   applyTheme(document.documentElement.dataset.theme || 'light');
   $('btn-theme').addEventListener('click', () =>
@@ -1822,6 +1989,7 @@ function init() {
     if (b) { goView(b.dataset.view); window.scrollTo(0, 0); }
   });
   goView(localStorage.getItem('imgmark_view') || 'style');
+  initCopy().catch((e) => { $('copy-status').textContent = e.message; });
   // 桌面壳：fnOS 状态无意义，隐藏；页脚换桌面版文案
   if (native) {
     document.querySelector('header .status').classList.add('hidden');

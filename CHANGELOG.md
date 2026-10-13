@@ -4,6 +4,17 @@
 
 > 发版时 CI 会从本文件截取对应版本的小节作为 GitHub Release 正文（`scripts/release-notes.js`），新版本请在顶部按同样格式追加。
 
+## [未发布]
+
+### 新增
+- **「发布」页签（文案生成）**：上传待发布图片 + 选平台 + 简单描述场景，视觉模型识别画面后按平台格式给出候选标题、正文、话题与 @ 建议，手动复制到各平台发布（不自动发布）。历史截图可上传为参考（最多选 3 张），模型会模仿其语气与话题习惯
+- 平台默认规则（Instagram 双语话题 / 小红书中文话题等，经验值、可在生成前确认）；模型列表走 10router 等 OpenAI 兼容接口的 `/v1/models`，只列出视觉模型，支持海外模型
+- 模型服务配置存数据目录 `llm.json`（或环境变量 `IMGMARK_LLM_BASE_URL` / `IMGMARK_LLM_API_KEY`），**密钥不下发到前端、不出现在任何 `/api/*` 响应里**
+- 新增 `POST /api/copy/generate`、`GET /api/copy/models`、`GET/POST/DELETE /api/copy/refs`、`GET/PUT /api/copy/config`（详见 README）；`scripts/copy-smoke.js` 用本地 mock 模型服务覆盖全流程
+
+### 修复
+- 文字字段非法（如字段名拼错）且未带 logo 的分组，此前被误判为「缺 logo 集」而报 404；现在正确报 400（第 N 组没有 logo 或有效文字字段）
+
 ## [0.9.5] - 2026-10-12
 
 ### 新增

@@ -37,6 +37,7 @@
   <button type="button" data-view="style" class="active">水印样式</button>
   <button type="button" data-view="batch">批量处理<span class="cnt hidden" id="cnt-job"></span></button>
   <button type="button" data-view="watch">文件夹监听<span class="cnt hidden" id="cnt-watch">0</span></button>
+  <button type="button" data-view="copy">发布</button>
 </nav>
 
 <main>
@@ -441,6 +442,52 @@
       <div id="watch-hint" class="notes">以当前选中的这一类水印建立监听；输出目录内的文件不会再次处理。
 ⓪ 下拉里选中了方案时，监听将绑定该方案 —— 重启后自动恢复，不再失效。</div>
       <div id="watch-list"></div>
+    </div>
+  </section>
+
+  <section class="view" id="view-copy">
+    <!-- 文案生成:上传待发布图片 + 选平台 + 简单描述场景;历史截图作风格参考 -->
+    <div class="card">
+      <h2>发布 <small>平台规则为默认经验值,请按实际发布效果调整 · 只生成文字,手动复制到平台发布</small></h2>
+      <div class="row-inline wrap">
+        <label>平台
+          <select id="copy-platform"></select>
+        </label>
+        <label>模型
+          <select id="copy-model"><option value="">加载中…</option></select>
+        </label>
+        <button id="copy-models-refresh" class="btn ghost">刷新模型列表</button>
+      </div>
+      <div class="notes" id="copy-platform-rules"></div>
+    </div>
+
+    <div class="card">
+      <h2>1 待发布图片</h2>
+      <input type="file" id="copy-image" accept="image/*">
+      <div id="copy-image-preview" class="copy-preview"></div>
+    </div>
+
+    <div class="card">
+      <h2>2 场景描述 <small>简单写就行,如地点、活动、想表达的感受</small></h2>
+      <textarea id="copy-scene" rows="3" placeholder="例:PNS 在成都 CPI 开了一家快闪店,我去打卡拍照" style="width:100%"></textarea>
+    </div>
+
+    <div class="card">
+      <h2>3 历史截图 <small>过往发过的内容,作为语气与话题习惯的参考(最多选 3 张)</small></h2>
+      <div class="row-inline wrap">
+        <input type="file" id="copy-ref-file" accept="image/*">
+        <button id="copy-ref-add" class="btn">保存为参考截图</button>
+      </div>
+      <div id="copy-refs" class="copy-refs"></div>
+    </div>
+
+    <div class="card">
+      <h2>4 生成</h2>
+      <div class="row-inline">
+        <button id="copy-generate" class="btn primary">生成文案</button>
+        <span id="copy-status" class="notes"></span>
+      </div>
+      <div id="copy-result"></div>
     </div>
   </section>
 </main>

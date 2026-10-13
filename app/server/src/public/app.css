@@ -451,3 +451,14 @@ select.dd-native { position: absolute; width: 1px; height: 1px; opacity: 0; poin
 /* ③ 输出设置的小节标题：输出画面（裁剪/长边）与输出文件（格式/质量）分属两类 */
 .outsec { margin: 6px 0 2px; font-size: 12px; font-weight: 700; color: var(--muted); }
 .outsec small { font-weight: normal; color: var(--text-3); margin-left: 6px; }
+
+/* 文案生成 */
+.copy-preview img { max-width: 260px; max-height: 260px; border-radius: 6px; margin-top: 8px; }
+.copy-refs { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 10px; }
+.copy-ref { width: 160px; border: 1px solid var(--line); border-radius: 8px; padding: 6px; }
+.copy-ref.on { border-color: var(--pri-dk); }
+.copy-ref img { width: 100%; height: 110px; object-fit: cover; border-radius: 4px; }
+.copy-ref-name { font-size: 12px; margin: 4px 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.copy-field { margin-top: 12px; }
+.copy-field-head { display: flex; justify-content: space-between; align-items: center; }
+.copy-field pre { white-space: pre-wrap; word-break: break-word; margin: 4px 0 0; font-family: inherit; }

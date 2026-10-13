@@ -21,6 +21,7 @@ const { ProcessDB } = require('./core/db');
 const { WatcherManager } = require('./core/watcher');
 const { TrimAppClient } = require('./fnos/trimapp');
 const { createFnosRouter } = require('./fnos/routes');
+const copywriting = require('./core/copywriting');
 
 const PORT = Number(process.env.PORT || 28110);
 const HOST = process.env.HOST || '127.0.0.1';
@@ -94,13 +95,13 @@ const watchers = new WatcherManager({
       const options = { ...preset.data.options };
       const set = await materializePreset(w.cfg.presetId);
       if (!set) return null;
-      const wantsLogo = (preset.data.groups || []).some((g) => !normTextSpec(g && g.text));
+      const wantsLogo = (preset.data.groups || []).some(groupNeedsLogoSet);
       if (wantsLogo && !set.logos.length) return null;
       return { groups: await resolveGroups(set, preset.data.groups, !!options.autoColor), options };
     }
     const options = { ...(w.cfg.options || {}) };
     if (Array.isArray(w.cfg.groups) && w.cfg.groups.length) {
-      const wantsLogo = w.cfg.groups.some((g) => !normTextSpec(g && g.text));
+      const wantsLogo = w.cfg.groups.some(groupNeedsLogoSet);
       const set = logoSets.get(w.cfg.watermarkId);
       if (wantsLogo && !set) return null;
       return { groups: await resolveGroups(set || { logos: [] }, w.cfg.groups, !!options.autoColor), options };
@@ -561,6 +562,12 @@ function normTextSpec(raw) {
   };
 }
 
+/** 这组会不会真的用到 logo 集：文字组（字段非法被归 null 的也算）不用，真正引用了 logo 的才算。
+ *  既没文字也没 logo 的组是配置错误，应交给 normalizeGroups 报 400，别在这儿误判成「缺 logo 集」404 */
+function groupNeedsLogoSet(g) {
+  return !normTextSpec(g && g.text) && Array.isArray(g && g.logos) && g.logos.length > 0;
+}
+
 function normGroup(g) {
   const src = g || {};
   return {
@@ -684,7 +691,7 @@ app.post('/api/preview', express.json(), async (req, res) => {
       : (options.frame ? [] : null);
     // 分组模式：多个分组一次性合成到示例图
     if (groups) {
-      const wantsLogo = groups.some((g) => !normTextSpec(g && g.text));
+      const wantsLogo = groups.some(groupNeedsLogoSet);
       const set = logoSets.get(body.watermarkId);
       if (wantsLogo && !set) return res.status(404).json({ error: 'logo 组不存在或服务已重启，请重新上传' });
       const auto = !!options.autoColor;
@@ -778,7 +785,7 @@ app.post('/api/render', reserveRenderSlot, requestContentLengthLimit(64 * 1024 *
     const groups = Array.isArray(payload.groups) ? payload.groups : [];
     // 与 /api/process 同一套判定：logo 组要 logo 集；纯文字组 / 纯边框不需要。
     // 只支持分组管线（composeGroups）—— 单/合并水印的旧路径没有裁剪与边框，已无单独价值
-    const wantsLogo = groups.some((g) => !normTextSpec(g && g.text));
+    const wantsLogo = groups.some(groupNeedsLogoSet);
     const set = logoSets.get(payload.watermarkId);
     if (wantsLogo && !set) return res.status(404).json({ error: 'logo 组不存在或服务已重启，请重新上传' });
     if (!groups.length && !options.frame) {
@@ -1073,7 +1080,7 @@ app.post('/api/process', reserveProcessSlot, requestContentLengthLimit(256 * 102
     let wm = null;
     if (Array.isArray(payload.groups) && payload.groups.length) {
       // 全是文字水印组时不需要 logo 集：不传 watermarkId 也能跑（只叠相机参数，不叠 logo）
-      const wantsLogo = payload.groups.some((g) => !normTextSpec(g && g.text));
+      const wantsLogo = payload.groups.some(groupNeedsLogoSet);
       const set = logoSets.get(payload.watermarkId);
       if (wantsLogo && !set) return res.status(404).json({ error: 'logo 组不存在或服务已重启，请重新上传' });
       groupDefs = await resolveGroups(set || { logos: [] }, payload.groups, options.autoColor);
@@ -1353,6 +1360,135 @@ app.post('/api/browse', express.json(), async (req, res) => {
   } catch (e) {
     res.status(e.status || 500).json({ error: e.message });
   }
+});
+
+// ---- 文案生成(历史截图 + 平台规则 + 视觉模型)----
+// 密钥只存 DATA_DIR/llm.json,任何响应都不回传;配置写入仅在非 fnOS 本地模式开放,避免多用户互相覆盖
+const uploadRef = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 22 * 1024 * 1024, files: 1, fields: 8, fieldSize: 256 * 1024 },
+  defParamCharset: 'utf8',
+});
+function copyUid(req) {
+  if (!fnos.isAvailable()) return 0;
+  const uid = gatewayUid(req);
+  if (!uid) throw httpError(403, '请求缺少 fnOS 网关注入的用户身份');
+  return uid;
+}
+function copyVisible(entry, uid) {
+  return !fnos.isAvailable() || entry.ownerUid == null || entry.ownerUid === uid;
+}
+function copyOwned(entry, uid) {
+  return !fnos.isAvailable() || entry.ownerUid === uid;
+}
+function sendCopyError(res, e) {
+  res.status(e.status || 500).json({ error: e.message });
+}
+
+app.get('/api/copy/platforms', (req, res) => res.json(copywriting.PLATFORMS));
+
+app.get('/api/copy/config', (req, res) => res.json(copywriting.llmConfigPublic(DATA_DIR)));
+
+app.put('/api/copy/config', express.json(), (req, res) => {
+  if (fnos.isAvailable()) return res.status(403).json({ error: 'fnOS 版本请在部署配置中设置模型服务' });
+  const b = req.body || {};
+  const patch = {};
+  if (typeof b.baseUrl === 'string') patch.baseUrl = b.baseUrl.trim().replace(/\/+$/, '');
+  if (typeof b.model === 'string') patch.model = b.model.trim();
+  if (typeof b.apiKey === 'string' && b.apiKey.trim()) patch.apiKey = b.apiKey.trim();
+  if (b.clearKey === true) patch.apiKey = '';
+  copywriting.saveLlmFile(DATA_DIR, patch);
+  res.json(copywriting.llmConfigPublic(DATA_DIR));
+});
+
+app.get('/api/copy/models', async (req, res) => {
+  try {
+    copyUid(req);
+    res.json(await copywriting.listVisionModels(copywriting.llmConfig(DATA_DIR)));
+  } catch (e) { sendCopyError(res, e); }
+});
+
+app.get('/api/copy/refs', (req, res) => {
+  try {
+    const uid = copyUid(req);
+    const store = copywriting.loadStore(DATA_DIR);
+    res.json(Object.entries(store.refs)
+      .filter(([, r]) => copyVisible(r, uid))
+      .map(([id, r]) => ({ id, name: r.name, time: r.time }))
+      .sort((a, b) => b.time - a.time));
+  } catch (e) { sendCopyError(res, e); }
+});
+
+app.post('/api/copy/refs', uploadRef.single('file'), async (req, res) => {
+  try {
+    const uid = copyUid(req);
+    if (!req.file) return res.status(400).json({ error: '缺少截图文件' });
+    const thumb = await copywriting.makeThumb(req.file.buffer);
+    const id = crypto.randomUUID();
+    const name = String(req.body.name || req.file.originalname || '截图').trim().slice(0, 100) || '截图';
+    fs.mkdirSync(copywriting.refDir(DATA_DIR), { recursive: true });
+    fs.writeFileSync(copywriting.refFile(DATA_DIR, id), thumb);
+    const store = copywriting.loadStore(DATA_DIR);
+    store.refs[id] = { name, time: Date.now(), ownerUid: fnos.isAvailable() ? uid : null };
+    copywriting.saveStore(DATA_DIR, store);
+    res.json({ id, name, time: store.refs[id].time });
+  } catch (e) { sendCopyError(res, e); }
+});
+
+app.get('/api/copy/refs/:id/file', (req, res) => {
+  try {
+    const uid = copyUid(req);
+    const r = copywriting.loadStore(DATA_DIR).refs[req.params.id];
+    if (!r || !copyVisible(r, uid)) return res.status(404).json({ error: '截图不存在' });
+    const full = copywriting.refFile(DATA_DIR, req.params.id);
+    if (!fs.existsSync(full)) return res.status(404).json({ error: '截图文件已丢失' });
+    res.type('jpeg').sendFile(full);
+  } catch (e) { sendCopyError(res, e); }
+});
+
+app.delete('/api/copy/refs/:id', (req, res) => {
+  try {
+    const uid = copyUid(req);
+    const store = copywriting.loadStore(DATA_DIR);
+    const r = store.refs[req.params.id];
+    if (!r || !copyOwned(r, uid)) return res.status(404).json({ error: '截图不存在' });
+    delete store.refs[req.params.id];
+    copywriting.saveStore(DATA_DIR, store);
+    fs.rmSync(copywriting.refFile(DATA_DIR, req.params.id), { force: true });
+    res.json({ ok: true });
+  } catch (e) { sendCopyError(res, e); }
+});
+
+app.post('/api/copy/generate', uploadRef.single('image'), async (req, res) => {
+  try {
+    const uid = copyUid(req);
+    if (!req.file) return res.status(400).json({ error: '缺少待发布图片' });
+    let body;
+    try { body = JSON.parse(req.body.payload || '{}'); } catch { return res.status(400).json({ error: 'payload 不是合法 JSON' }); }
+    const scene = String(body.scene || '').trim().slice(0, 1000);
+    if (!scene) return res.status(400).json({ error: '请简单描述场景' });
+    const refIds = Array.isArray(body.refIds) ? body.refIds.map(String).slice(0, copywriting.MAX_REFS_PER_GENERATE) : [];
+    const store = copywriting.loadStore(DATA_DIR);
+    const refImages = [];
+    for (const id of refIds) {
+      const r = store.refs[id];
+      if (!r || !copyVisible(r, uid)) return res.status(404).json({ error: '截图不存在' });
+      const full = copywriting.refFile(DATA_DIR, id);
+      if (!fs.existsSync(full)) return res.status(404).json({ error: '截图文件已丢失,请重新上传' });
+      refImages.push(fs.readFileSync(full));
+    }
+    const cfg = copywriting.llmConfig(DATA_DIR);
+    const targetImage = await copywriting.makeThumb(req.file.buffer);
+    const result = await copywriting.generateCopy({
+      cfg,
+      platformId: String(body.platform || ''),
+      scene,
+      model: String(body.model || cfg.model || ''),
+      refImages,
+      targetImage,
+    });
+    res.json(result);
+  } catch (e) { sendCopyError(res, e); }
 });
 
 app.use('/api', (req, res) => res.status(404).json({ error: '接口不存在' }));
