@@ -19,6 +19,7 @@ const state = {
   nativePaths: [], // 桌面壳：原生对话框选出的图片绝对路径
   sdk: null,
   fnosAvailable: false,
+  fnosFolders: [],
   // 裁剪（每个 logo 各自一份裁剪框）
   crops: [],
   editingIdx: 0,
@@ -1570,6 +1571,15 @@ function cropHintRefresh() {
   $('cropratio-port-hint').textContent = $('opt-cropratio-port').value ? '智能裁剪（保留细节多的一侧）' : '';
 }
 
+// ---------- 来源模式切换 ----------
+function switchSourceTab(mode) {
+  document.querySelectorAll('#source-tabs .tab').forEach((x) => x.classList.toggle('on', x.dataset.mode === mode));
+  ['fnos', 'local', 'upload'].forEach((m) => $(`src-${m}`).classList.toggle('hidden', m !== mode));
+  state.mode = mode;
+  $('opt-recursive').disabled = state.mode === 'upload';
+  updateRun();
+}
+
 // ---------- fnOS 目录 ----------
 async function loadFnosStatus() {
   try {
@@ -1580,6 +1590,11 @@ async function loadFnosStatus() {
       $('fnos-uid').title = '由 fnOS 网关身份头确定';
       $('fnos-dot').className = 'dot ok';
       $('fnos-text').textContent = `fnOS 开放 API 已连接（${esc(s.appName)}）`;
+      // fnOS 环境下默认激活「飞牛授权目录」
+      switchSourceTab('fnos');
+      // 选图打分页签支持选择飞牛授权目录
+      $('cull-dir-pick').classList.remove('hidden');
+      $('cull-dir-pick').textContent = '选择授权目录';
       // 尝试加载 SDK；在宿主 iframe 内可直接选目录授权
       try {
         const { TrimApp } = await import('/vendor/index.js');
@@ -1588,6 +1603,7 @@ async function loadFnosStatus() {
           ? '当前是独立浏览器页面：fnOS 目录访问需要应用网关注入当前用户身份，请从 fnOS 应用入口打开。'
           : '';
       } catch { $('fnos-hint').textContent = '未找到 fnOS SDK（可能不在宿主环境内），只能查询已授权目录。'; }
+      await refreshFolders();
     } else {
       $('fnos-dot').className = 'dot off';
       $('fnos-text').textContent = 'fnOS 不可用（本地模式）';
@@ -1611,13 +1627,18 @@ async function refreshFolders() {
       ...r.shared.map((f) => ({ ...f, tag: '共享' })),
       ...r.user.map((f) => ({ ...f, tag: '个人' })),
     ];
+    state.fnosFolders = items;
     box.innerHTML = items.length
       ? items.map((f) => `<div class="folder-item" data-path="${esc(f.path)}">
           <span>📁 ${esc(f.semanticPath || f.path)} <span class="muted">${esc(f.path)}</span></span>
           <span class="tag">${f.tag}</span></div>`).join('')
       : '<div class="muted">暂无授权目录：点击「选择并授权目录」授权一个图片文件夹</div>';
     box.querySelectorAll('.folder-item').forEach((el) => el.addEventListener('click', () => browseFnos(el.dataset.path)));
-    if (items.length) await browseFnos(items[0].path);
+    if (items.length) {
+      await browseFnos(items[0].path);
+      // 如果选图打分还没填路径，帮用户默认填上第一个授权目录
+      if (!$('cull-dir').value.trim()) $('cull-dir').value = items[0].path;
+    }
   } catch (e) {
     $('fnos-hint').textContent = '✗ ' + e.message;
   }
@@ -1677,6 +1698,17 @@ async function browseFnos(dir) {
 
 // ---------- 本地目录 ----------
 async function browseLocal(dir) {
+  // fnOS 模式下的容错与引导：如果输入为空，不要去打 / 导致 403
+  if (!dir && state.fnosAvailable) {
+    if (state.fnosFolders && state.fnosFolders.length) {
+      dir = state.fnosFolders[0].path;
+      $('local-path').value = dir;
+    } else {
+      $('local-picked').innerHTML = '<span style="color:var(--bad)">💡 飞牛 NAS 请先在「飞牛授权目录」中添加并选择授权文件夹</span>';
+      switchSourceTab('fnos');
+      return;
+    }
+  }
   try {
     const r = await api('/api/browse', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -2542,12 +2574,48 @@ function bindCullViewer() {
 function bindCull() {
   bindCullGrid();
   bindCullViewer();
+  $('cull-dir-pick').addEventListener('click', async () => {
+    if (native) {
+      const dir = await native.pickFolder('选择要评分的图片文件夹');
+      if (dir) {
+        $('cull-dir').value = dir;
+        loadCullGrid();
+      }
+    } else if (state.fnosAvailable) {
+      // 飞牛模式：如果已有授权目录，优先填入；如多个则提示，如无则引导授权
+      if (state.fnosFolders && state.fnosFolders.length > 0) {
+        if (state.fnosFolders.length === 1) {
+          $('cull-dir').value = state.fnosFolders[0].path;
+          loadCullGrid();
+        } else {
+          const listStr = state.fnosFolders.map((f, i) => `${i + 1}. ${f.semanticPath || f.path}`).join('\n');
+          const choice = await appConfirm(`请选择要评分的飞牛已授权目录：\n\n${listStr}\n\n（确定使用第 1 个，取消前往选择新目录）`, {
+            okText: '使用第 1 个',
+            cancelText: '授权新目录',
+          });
+          if (choice) {
+            $('cull-dir').value = state.fnosFolders[0].path;
+            loadCullGrid();
+          } else {
+            await pickFnosDirectory();
+            if (state.fnosFolders.length) {
+              $('cull-dir').value = state.fnosFolders[state.fnosFolders.length - 1].path;
+              loadCullGrid();
+            }
+          }
+        }
+      } else {
+        await pickFnosDirectory();
+        if (state.fnosFolders && state.fnosFolders.length) {
+          $('cull-dir').value = state.fnosFolders[0].path;
+          loadCullGrid();
+        }
+      }
+    }
+  });
   if (native) {
     $('cull-dir-pick').classList.remove('hidden');
-    $('cull-dir-pick').addEventListener('click', async () => {
-      const dir = await native.pickFolder('选择要评分的图片文件夹');
-      if (dir) $('cull-dir').value = dir;
-    });
+    $('cull-dir-pick').textContent = '选择文件夹';
   }
 }
 
@@ -2699,18 +2767,9 @@ function init() {
 
   // 来源 tabs（限定 data-mode，避免误伤预览区的横/竖示例 tab）
   document.querySelectorAll('.tab[data-mode]').forEach((t) => t.addEventListener('click', () => {
-    document.querySelectorAll('.tab[data-mode]').forEach((x) => x.classList.remove('on'));
-    t.classList.add('on');
-    state.mode = t.dataset.mode;
-    ['fnos', 'local', 'upload'].forEach((m) => $(`src-${m}`).classList.toggle('hidden', m !== state.mode));
-    // 上传的文件是平铺列表，无目录结构可保留
-    $('opt-recursive').disabled = state.mode === 'upload';
-    updateRun();
+    switchSourceTab(t.dataset.mode);
   }));
-  document.querySelector('.tab[data-mode="local"]').classList.add('on');
-  $('src-fnos').classList.add('hidden');
-  $('src-local').classList.remove('hidden');
-  state.mode = 'local';
+  switchSourceTab('local'); // 初始默认，loadFnosStatus 探测到 fnOS 时会自动切为 fnos
 
   // fnOS
   $('fnos-refresh').addEventListener('click', refreshFolders);

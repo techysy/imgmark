@@ -337,7 +337,14 @@ app.get('/api/fonts', async (req, res) => {
   }
 });
 app.use('/vendor', express.static(path.join(__dirname, '..', 'node_modules', '@trimjs', 'web-app', 'dist')));
-app.use(express.static(path.join(__dirname, 'public')));
+app.use(express.static(path.join(__dirname, 'public'), {
+  setHeaders: (res, filePath) => {
+    // HTML 文件绝不强缓存，版本更新时用户刷新/重新打开窗口立即拿到最新版
+    if (filePath.endsWith('.html')) {
+      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    }
+  },
+}));
 app.use('/api', validateMutationOrigin);
 app.use('/api/fnos', express.json({ limit: '64kb' }), createFnosRouter({ client: fnos, listImages: null }));
 
