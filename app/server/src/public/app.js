@@ -1597,12 +1597,15 @@ async function loadFnosStatus() {
       $('cull-dir-pick').textContent = '选择授权目录';
       // 尝试加载 SDK；在宿主 iframe 内可直接选目录授权
       try {
-        const { TrimApp } = await import('/vendor/index.js');
+        const { TrimApp } = await import(apiUrl('/vendor/index.js'));
         state.sdk = new TrimApp();
         $('fnos-hint').textContent = state.sdk.isStandaloneWeb
           ? '当前是独立浏览器页面：fnOS 目录访问需要应用网关注入当前用户身份，请从 fnOS 应用入口打开。'
           : '';
-      } catch { $('fnos-hint').textContent = '未找到 fnOS SDK（可能不在宿主环境内），只能查询已授权目录。'; }
+      } catch (err) {
+        console.warn('[fnos sdk load failed]', err);
+        $('fnos-hint').textContent = `加载 fnOS SDK 失败：${err.message || err}`;
+      }
       await refreshFolders();
     } else {
       $('fnos-dot').className = 'dot off';
@@ -1646,7 +1649,11 @@ async function refreshFolders() {
 
 let sdkBusy = false;
 async function pickFnosDirectory() {
-  if (!state.sdk || sdkBusy) return;
+  if (sdkBusy) return;
+  if (!state.sdk) {
+    appAlert('未能连接飞牛 fnOS 授权组件：请确认当前是从飞牛 NAS 桌面中打开的应用窗口。');
+    return;
+  }
   sdkBusy = true;
   try {
     // 确定 = 当前用户个人目录；取消 = 管理员共享目录（仅管理员可操作）
