@@ -146,6 +146,48 @@ function appConfirm(message, { okText = '确定', cancelText = '取消', danger 
   });
 }
 
+// 统一提示框（替代原生 alert）
+function appAlert(message) {
+  return appConfirm(message, { okText: '我知道了', cancelText: '' });
+}
+
+// 从飞牛服务端读取授权文件的二进制数据并包装成浏览器 File 对象
+async function fetchFnosFile(filePath) {
+  const uid = +$('fnos-uid')?.value || 0;
+  const res = await fetch(apiUrl('/api/fnos/file-content'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ uid, path: filePath }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || `读取飞牛文件失败: HTTP ${res.status}`);
+  }
+  const blob = await res.blob();
+  const name = filePath.split(/[/\\]/).pop() || 'file';
+  return new File([blob], name, { type: blob.type });
+}
+
+// 调用飞牛官方原生文件选择器挑选文件（Logo / 图片）
+async function pickFnosFiles({ accept = [], multiple = false, title = '选择文件' } = {}) {
+  if (!state.sdk) return [];
+  try {
+    if (typeof state.sdk.pickFile === 'function') {
+      const res = await state.sdk.pickFile({ multiple, accept, title });
+      return Array.isArray(res) ? res : (res ? [res] : []);
+    }
+    if (typeof state.sdk.pickUserFile === 'function') {
+      const res = await state.sdk.pickUserFile({ multiple, accept, title });
+      const data = res?.data;
+      return Array.isArray(data) ? data : (data ? [data] : []);
+    }
+  } catch (e) {
+    console.warn('[pickFnosFiles error]', e);
+    appAlert('选择文件未完成：' + (e.message || e));
+  }
+  return [];
+}
+
 // ---------- 自定义下拉（统一替换原生 select） ----------
 // 原生 <select> 保留在 DOM 中作为数据源与 change 事件目标：外部读 .value / 绑定 change 的代码完全不变，
 // 只在它旁边渲染一层自定义按钮 + 菜单，并负责触底向上弹、右侧空间不足时右对齐。
@@ -2151,6 +2193,20 @@ function bindCopy() {
 
 
   // 待发布图片：多选组图 + 拖入直接选（点 ✕ 移除单张）
+  $('copy-image-btn').addEventListener('click', async (e) => {
+    if (state.fnosAvailable && state.sdk) {
+      e.preventDefault();
+      const paths = await pickFnosFiles({
+        multiple: true,
+        accept: ['.jpg', '.jpeg', '.png', '.webp', '.bmp', '.gif', '.tif', '.tiff', '.avif'],
+        title: '选择待发布图片（飞牛 NAS，最多 9 张）',
+      });
+      if (paths && paths.length) {
+        const files = await Promise.all(paths.map(fetchFnosFile));
+        addCopyImages(files);
+      }
+    }
+  });
   $('copy-image').addEventListener('change', (e) => {
     addCopyImages([...e.target.files]);
     e.target.value = '';
@@ -2783,6 +2839,24 @@ function init() {
   });
   loadPresets();
   // 预览区换真图：一次合成同时用于「看效果」与「导出」，不额外跑一遍
+  $('one-file-btn').addEventListener('click', async (e) => {
+    if (state.fnosAvailable && state.sdk) {
+      e.preventDefault();
+      const paths = await pickFnosFiles({
+        multiple: false,
+        accept: ['.jpg', '.jpeg', '.png', '.webp', '.bmp', '.gif', '.tif', '.tiff', '.avif'],
+        title: '选择真实照片试当前样式（飞牛 NAS）',
+      });
+      if (paths && paths.length) {
+        const file = await fetchFnosFile(paths[0]);
+        previewOwnOff();
+        $('preview-orient').classList.add('hidden');
+        previewOwn = { file, blob: null, name: '', url: '', gen: 0, orient: null, w: 0, h: 0 };
+        previewOwnMode = true;
+        renderOwn();
+      }
+    }
+  });
   $('one-file').addEventListener('change', (e) => {
     const f = (e.target.files || [])[0] || null;
     e.target.value = ''; // 允许重选同一个文件
@@ -2819,16 +2893,26 @@ function init() {
     e.target.value = ''; // 允许移除后再次选择同一个文件
     if (files.length) onWmFiles(files);
   });
-  if (native) {
-    // 直接用 id 定位按钮：卡片区 DOM 顺序变化会让"取首元素"类选择器拿到错误目标
-    $('wm-file-btn').addEventListener('click', async (e) => {
+  $('wm-file-btn').addEventListener('click', async (e) => {
+    if (native) {
       e.preventDefault();
       const picked = await native.pickWatermark();
       const list = (Array.isArray(picked) ? picked : picked ? [picked] : [])
         .map((p) => new File([Uint8Array.from(atob(p.base64), (c) => c.charCodeAt(0))], p.name));
       if (list.length) onWmFiles(list);
-    });
-  }
+    } else if (state.fnosAvailable && state.sdk) {
+      e.preventDefault();
+      const paths = await pickFnosFiles({
+        multiple: true,
+        accept: ['.ai', '.svg', '.png', '.jpg', '.jpeg', '.webp', '.bmp', '.gif', '.tif', '.tiff'],
+        title: '选择 Logo 水印图片（飞牛 NAS）',
+      });
+      if (paths && paths.length) {
+        const files = await Promise.all(paths.map(fetchFnosFile));
+        onWmFiles(files);
+      }
+    }
+  });
 
   ['wm-bg'].forEach((id) => $(id).addEventListener('change', prepareDebounced));
   $('wm-tol').addEventListener('input', prepareDebounced);

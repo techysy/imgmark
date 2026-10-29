@@ -147,6 +147,35 @@ function createFnosRouter({ client, listImages }) {
     }
   });
 
+  // 读取授权文件的二进制内容（供前端加载飞牛选择器选出的 Logo / 示例图）
+  router.post('/file-content', async (req, res) => {
+    try {
+      const uid = resolveUid(req);
+      if (uid <= 0) return res.status(400).json({ error: 'uid 无效' });
+      const { path: rawFile } = req.body || {};
+      if (typeof rawFile !== 'string' || !rawFile.startsWith('/')) return res.status(400).json({ error: '路径无效' });
+      const file = path.posix.normalize(rawFile);
+      const dir = path.dirname(file);
+
+      const [user, shared] = await Promise.all([
+        client.getUserAccessibleFolders(uid).catch(() => []),
+        client.getSharedAccessibleFolders().catch(() => []),
+      ]);
+      const roots = [...new Set([...user, ...shared])];
+      const inside = roots.find((r) => dir === path.posix.normalize(r) ||
+        dir.startsWith(path.posix.normalize(r).replace(/\/+$/, '') + '/'));
+      if (!inside) return res.status(403).json({ error: '文件不在授权目录内' });
+
+      const acl = await client.checkUserACL(uid, file);
+      const entry = Array.isArray(acl) ? acl[0] : acl;
+      if (!entry || !entry.readable) return res.status(403).json({ error: '当前用户对该文件没有读权限' });
+
+      res.sendFile(file);
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   return router;
 }
 
