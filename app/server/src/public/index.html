@@ -309,9 +309,9 @@
       </div>
 
       <div id="src-fnos" class="src-panel hidden">
-        <div class="row-inline">
-          <label>当前用户 UID <input type="number" id="fnos-uid" value="1000" class="num" style="width:90px"></label>
-          <button id="fnos-pick" class="btn">＋ 选择并授权目录</button>
+        <input type="hidden" id="fnos-uid" value="1000">
+        <div class="row-inline" style="justify-content:space-between">
+          <button id="fnos-pick" class="btn primary">授权新目录</button>
           <button id="fnos-refresh" class="btn ghost">刷新授权列表</button>
         </div>
         <div id="fnos-hint" class="notes"></div>
@@ -558,7 +558,7 @@
       <div id="cull-fnos-box" class="hidden" style="margin: 12px 0; padding: 12px; background: var(--tertiary); border-radius: 8px; border: 1px solid var(--border-subtle);">
         <div class="row-inline" style="margin-bottom:8px; justify-content:space-between">
           <span style="font-weight:600;font-size:13px">📁 飞牛授权目录</span>
-          <button id="cull-fnos-pick" class="btn">＋ 选择并授权新目录</button>
+          <button id="cull-fnos-pick" class="btn primary">授权新目录</button>
         </div>
         <div id="cull-fnos-folders" class="folder-list"></div>
         <div id="cull-fnos-browser" class="browser hidden" style="margin-top:8px">
@@ -616,6 +616,6 @@
     </div>
   </div>
 </div>
-<script type="module" src="app.js?v=1.0.0.2"></script>
+<script type="module" src="app.js?v=1.0.0.3"></script>
 </body>
 </html>

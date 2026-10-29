@@ -1586,16 +1586,18 @@ async function loadFnosStatus() {
     const s = await api('/api/fnos/status');
     state.fnosAvailable = s.available;
     if (s.available) {
-      $('fnos-uid').readOnly = true; // fnOS 用户身份只认网关头，不接受页面自选 UID
-      $('fnos-uid').title = '由 fnOS 网关身份头确定';
       $('fnos-dot').className = 'dot ok';
       $('fnos-text').textContent = `fnOS 开放 API 已连接（${esc(s.appName)}）`;
-      // fnOS 环境下默认激活「飞牛授权目录」
+      // 飞牛场景纯粹走飞牛文件授权框架：隐藏「本地路径」Tab，直接激活「飞牛授权目录」
+      const localTab = document.querySelector('.tab[data-mode="local"]');
+      if (localTab) localTab.classList.add('hidden');
+      const fnosTab = document.querySelector('.tab[data-mode="fnos"]');
+      if (fnosTab) fnosTab.classList.remove('hidden');
       switchSourceTab('fnos');
       // 选图打分页签展示飞牛授权目录选择器（与批量处理对齐）
       if ($('cull-fnos-box')) $('cull-fnos-box').classList.remove('hidden');
-      $('cull-dir-pick').classList.remove('hidden');
-      $('cull-dir-pick').textContent = '选择授权目录';
+      // 隐藏冗余的原生按钮，统一用授权目录框架
+      $('cull-dir-pick').classList.add('hidden');
       // 尝试加载 SDK；在宿主 iframe 内可直接选目录授权
       try {
         let mod;
@@ -1619,6 +1621,13 @@ async function loadFnosStatus() {
       $('fnos-text').textContent = 'fnOS 不可用（本地模式）';
       $('fnos-hint').textContent = '当前不是 fnOS 应用环境：请用「本地路径」或「上传图片」。在 fnOS 上安装 ImgMark 后，此页可用飞牛授权目录。';
       $('fnos-pick').disabled = true;
+      const fnosTab = document.querySelector('.tab[data-mode="fnos"]');
+      if (fnosTab) fnosTab.classList.add('hidden');
+      const localTab = document.querySelector('.tab[data-mode="local"]');
+      if (localTab) localTab.classList.remove('hidden');
+      if ($('cull-fnos-box')) $('cull-fnos-box').classList.add('hidden');
+      if (native) $('cull-dir-pick').classList.remove('hidden');
+      switchSourceTab('local');
     }
   } catch {
     $('fnos-dot').className = 'dot off';
@@ -1645,7 +1654,7 @@ async function refreshFolders() {
         ? items.map((f) => `<div class="folder-item" data-path="${esc(f.path)}">
             <span>📁 ${esc(f.semanticPath || f.path)} <span class="muted">${esc(f.path)}</span></span>
             <span class="tag">${f.tag}</span></div>`).join('')
-        : '<div class="muted">暂无授权目录：点击「选择并授权目录」授权一个图片文件夹</div>';
+        : '<div class="muted">暂无已授权目录：点击上方「授权新目录」添加图片文件夹</div>';
       box.querySelectorAll('.folder-item').forEach((el) => el.addEventListener('click', () => browseFnos(el.dataset.path, 'batch')));
     }
 
@@ -1656,7 +1665,7 @@ async function refreshFolders() {
         ? items.map((f) => `<div class="folder-item" data-path="${esc(f.path)}">
             <span>📁 ${esc(f.semanticPath || f.path)} <span class="muted">${esc(f.path)}</span></span>
             <span class="tag">${f.tag}</span></div>`).join('')
-        : '<div class="muted">暂无授权目录：点击上方「＋ 选择并授权新目录」添加一个图片文件夹</div>';
+        : '<div class="muted">暂无已授权目录：点击上方「授权新目录」添加图片文件夹</div>';
       cullBox.querySelectorAll('.folder-item').forEach((el) => el.addEventListener('click', () => browseFnos(el.dataset.path, 'cull')));
     }
 
@@ -1707,6 +1716,17 @@ async function browseFnos(dir, target = 'batch') {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ uid: +$('fnos-uid').value || 0, path: dir }),
     });
+
+    // 高亮当前选中的授权目录卡片
+    const folderBox = target === 'cull' ? $('cull-fnos-folders') : $('fnos-folders');
+    if (folderBox) {
+      folderBox.querySelectorAll('.folder-item').forEach((el) => {
+        const itemPath = el.dataset.path;
+        const hit = dir === itemPath || dir.startsWith(itemPath.replace(/\/+$/, '') + '/');
+        el.classList.toggle('active', hit);
+      });
+    }
+
     if (target === 'cull') {
       $('cull-dir').value = dir;
       $('cull-fnos-crumbs').textContent = r.semanticPath || dir;

@@ -279,6 +279,7 @@ input[type="checkbox"] { accent-color: var(--pri); }
 .folder-item { display: flex; justify-content: space-between; gap: 8px; padding: 7px 10px; border: 1px solid var(--border-subtle);
   border-radius: 10px; cursor: pointer; font-size: 13px; align-items: center; background: var(--surface-2); }
 .folder-item:hover { border-color: var(--border-strong); }
+.folder-item.active { border-color: var(--pri); background: color-mix(in srgb, var(--pri) 12%, var(--surface-2)); box-shadow: 0 0 0 1px var(--pri); }
 .folder-item .sem { color: var(--muted); font-size: 12px; }
 .folder-item .tag { font-size: 11px; padding: 1px 8px; border-radius: 10px; background: color-mix(in srgb, var(--pri) 12%, transparent); color: var(--pri-dk); flex-shrink: 0; }
 
