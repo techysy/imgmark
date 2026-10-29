@@ -176,11 +176,22 @@ function requestContentLengthLimit(maxBytes) {
 
 function validateMutationOrigin(req, res, next) {
   if (!['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method) || !req.headers.origin) return next();
+  // fnOS 模式：请求经应用网关（unix socket，无 TCP 监听）转发进来，x-trim-userid 只能由网关注入。
+  // 网关侧 fnOS 会话 Cookie 是 SameSite=Strict，跨站请求带不上会话、到不了这里，
+  // 所以带网关身份的请求豁免 Origin 校验 —— 窗口板里网关二次转发的 Host 与浏览器
+  // Origin 对不上（nginx $host 不带端口），严格校验会误杀正常操作
+  if (fnos.isAvailable() && gatewayUid(req)) return next();
   let origin;
   try { origin = new URL(req.headers.origin); } catch { return res.status(403).json({ error: 'Origin 无效' }); }
+  // 主机名一致即放行，但候选带端口时必须端口也一致（防同主机跨端口）；
+  // 网关转发的 Host 可能被剥掉端口，不能要求 Origin 一定带端口
+  const normalize = (h) => String(h || '').trim().toLowerCase();
+  const originHost = normalize(origin.host);        // host[:port]
+  const originName = normalize(origin.hostname);    // host
   const hosts = [req.headers.host, ...String(req.headers['x-forwarded-host'] || '').split(',')]
-    .map((host) => String(host || '').trim().toLowerCase()).filter(Boolean);
-  if (!hosts.includes(origin.host.toLowerCase())) return res.status(403).json({ error: '拒绝跨站修改请求' });
+    .map(normalize).filter(Boolean);
+  const ok = hosts.some((h) => h === originHost || (h === originName && !h.includes(':')));
+  if (!ok) return res.status(403).json({ error: '拒绝跨站修改请求' });
   next();
 }
 

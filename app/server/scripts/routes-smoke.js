@@ -27,11 +27,11 @@ process.env.PORT = String(PORT);
 
 const { start } = require('../src/server.js');
 
-function req(method, urlPath, body) {
+function req(method, urlPath, body, extraHeaders = {}) {
   return new Promise((resolve, reject) => {
     const data = body == null ? null : Buffer.from(JSON.stringify(body));
     const r = http.request({ host: '127.0.0.1', port: PORT, path: urlPath, method,
-      headers: data ? { 'Content-Type': 'application/json', 'Content-Length': data.length } : {} },
+      headers: { ...(data ? { 'Content-Type': 'application/json', 'Content-Length': data.length } : {}), ...extraHeaders } },
     (res) => {
       let s = '';
       res.on('data', (c) => { s += c; });
@@ -77,6 +77,20 @@ function req(method, urlPath, body) {
   {
     const h = await req('GET', '/api/health');
     ok('GET /api/health 返回 ok', () => { eq(h.status, 200); eq(h.json.ok, true); });
+    // 写请求的 Origin 校验：本机 Host 之外的一律拒；
+    // 浏览器 Origin 总带端口，网关转发的 Host 可能被剥掉端口 —— 主机名一致要放行（窗口板被误杀过）
+    const post = (origin, host) => req('POST', '/api/browse', { path: inDir },
+      { ...(origin ? { Origin: origin } : {}), ...(host ? { Host: host } : {}) });
+    const r1 = await post(`http://127.0.0.1:${PORT}`);
+    const r2 = await post('http://nas.local:5666', 'nas.local'); // 网关转写形态：Origin 带端口、Host 不带
+    const r3 = await post(null);                                 // 非浏览器请求没有 Origin
+    const r4 = await post('http://evil.example');                // 跨站
+    const r5 = await post('http://127.0.0.1:9');                 // 同主机不同端口
+    ok('Origin 与 Host 一致（带端口）→ 放行', () => assert.notStrictEqual(r1.status, 403));
+    ok('Origin 带端口但转发 Host 不带端口 → 放行（fnOS 窗口板）', () => assert.notStrictEqual(r2.status, 403));
+    ok('无 Origin（非浏览器）→ 放行', () => assert.notStrictEqual(r3.status, 403));
+    ok('跨站 Origin → 403 拒绝跨站修改请求', () => { eq(r4.status, 403); eq(r4.json.error, '拒绝跨站修改请求'); });
+    ok('同主机不同端口 → 403', () => eq(r5.status, 403));
     const f = await req('GET', '/api/exif-fields');
     ok('GET /api/exif-fields 列出可选字段', () => {
       eq(f.status, 200);

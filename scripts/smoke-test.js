@@ -704,10 +704,15 @@ async function main() {
 
   // ---------- [10] 回归：文字水印不裁字 / 底色徽章紧贴墨迹 / inset 零边距 ----------
   console.log('\n[10] 文字水印与边框回归');
-  // 参考渲染：同一文本画在远大于内容的画布上 → trim 得到真实墨迹宽
-  const trueInkWidth = async (svgText, ls = 0) => {
-    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="6000" height="200">`
-      + `<text x="0" y="150" font-family="sans-serif" font-size="96" font-weight="bold" fill="#000"${ls ? ` letter-spacing="${ls}"` : ''}>${svgText}</text></svg>`;
+  // 参考渲染：同一文本画在远大于内容的画布上 → trim 得到真实墨迹宽。
+  // SVG 结构与文字属性（含字重！）必须和被测的 renderTextWatermark 调用一一对应：
+  // 参考若用 bold 而产物是 normal，常规体本来就窄，不同字体环境迟早互相矛盾
+  // （CI 曾因此差过 2px 与 80px —— 不是裁字，是拿粗体墨迹比常规体产物）
+  const trueInkWidth = async (svgText, { ls = 0, weight = 'normal' } = {}) => {
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="6000" height="400">`
+      + `<text font-family="sans-serif" font-size="96" font-weight="${weight}" fill="#000000"`
+      + (ls ? ` letter-spacing="${ls}"` : '')
+      + `><tspan x="0" dy="79">${svgText}</tspan></text></svg>`;
     const buf = await sharp(Buffer.from(svg)).png().toBuffer();
     return (await sharp(buf).trim({ threshold: 0 }).png().toBuffer({ resolveWithObject: true })).info.width;
   };
@@ -715,10 +720,10 @@ async function main() {
     const { renderTextWatermark } = require('../app/server/src/core/textmark');
     const wide = 'W'.repeat(20);
     const wm = await renderTextWatermark(wide, { fontSize: 96, fontWeight: 'bold' });
-    const refW = await trueInkWidth(wide);
+    const refW = await trueInkWidth(wide, { weight: 'bold' });
     assert(wm.width >= refW - 1, `宽字形不应被视口裁掉: 输出 ${wm.width}px < 真实墨迹 ${refW}px`);
     const wmLs = await renderTextWatermark('Hello World', { fontSize: 96, letterSpacing: 40 });
-    const refLs = await trueInkWidth('Hello World', 40);
+    const refLs = await trueInkWidth('Hello World', { ls: 40 });
     assert(wmLs.width >= refLs - 1, `正字距不应被视口裁掉: 输出 ${wmLs.width}px < 真实墨迹 ${refLs}px`);
   });
   await t('文字水印：底色徽章尺寸 = 墨迹 + 2×pad，四周留白均匀', async () => {
@@ -757,15 +762,24 @@ async function main() {
   });
   await t('字体清单：只给本机真装了的；墨迹指纹能认出被悄悄回落的名字', async () => {
     const { listAvailableFonts } = require('../app/server/src/core/fonts');
+    const { checkFontAvailable } = require('../app/server/src/core/textmark');
     const fonts = await listAvailableFonts();
     assert(fonts.length > 0, '字体清单不应为空');
     assert(fonts.some((f) => f.family === 'sans-serif'), '默认族 sans-serif 必须始终在列');
-    // 清单里不该有「回落指纹」那一类：这些名字在 Windows 上根本没装
+    // 合同（环境无关）：清单里的每个名字都必须真的渲染得出墨迹 —— Linux/mac 上装的字体不同也一样成立
+    const absent = [];
+    for (const f of fonts.filter((x) => x.family !== 'sans-serif').slice(0, 12)) {
+      if (!(await checkFontAvailable(f.family)).ok) absent.push(f.family);
+    }
+    assert.strictEqual(absent.length, 0, `清单里有渲染不出墨迹的字体: ${absent.join(', ')}`);
+    // 清单里不该有「回落指纹」那一类：这些名字在 CI 的 Linux/Windows 上根本没装
     const missing = fonts.filter((f) => ['PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC'].includes(f.family));
     assert.strictEqual(missing.length, 0, `未安装的字体不应出现在清单里: ${missing.map((f) => f.family).join(', ')}`);
-    // 装了的必须是真装了的：中文候选至少要留下两款 Windows 自带的
-    assert(fonts.filter((f) => ['SimSun', 'SimHei', 'KaiTi', 'Microsoft YaHei'].includes(f.family)).length >= 2,
-      'Windows 自带字体应当探测到');
+    // Windows 上额外验证：中文候选至少两款自带字体（别的环境装的字体不同，不强求）
+    if (process.platform === 'win32') {
+      assert(fonts.filter((f) => ['SimSun', 'SimHei', 'KaiTi', 'Microsoft YaHei'].includes(f.family)).length >= 2,
+        'Windows 自带字体应当探测到');
+    }
   });
 
   // ---------- [11] 监听绑定方案：服务重启后自动恢复（不再 paused） ----------
