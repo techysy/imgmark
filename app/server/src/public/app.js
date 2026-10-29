@@ -1592,12 +1592,19 @@ async function loadFnosStatus() {
       $('fnos-text').textContent = `fnOS 开放 API 已连接（${esc(s.appName)}）`;
       // fnOS 环境下默认激活「飞牛授权目录」
       switchSourceTab('fnos');
-      // 选图打分页签支持选择飞牛授权目录
+      // 选图打分页签展示飞牛授权目录选择器（与批量处理对齐）
+      if ($('cull-fnos-box')) $('cull-fnos-box').classList.remove('hidden');
       $('cull-dir-pick').classList.remove('hidden');
       $('cull-dir-pick').textContent = '选择授权目录';
       // 尝试加载 SDK；在宿主 iframe 内可直接选目录授权
       try {
-        const { TrimApp } = await import(apiUrl('/vendor/index.js'));
+        let mod;
+        try {
+          mod = await import('./vendor/index.js');
+        } catch {
+          mod = await import('/app/imgmark/vendor/index.js');
+        }
+        const TrimApp = mod?.TrimApp || mod?.default || mod;
         state.sdk = new TrimApp();
         $('fnos-hint').textContent = state.sdk.isStandaloneWeb
           ? '当前是独立浏览器页面：fnOS 目录访问需要应用网关注入当前用户身份，请从 fnOS 应用入口打开。'
@@ -1625,22 +1632,40 @@ async function refreshFolders() {
   try {
     const r = await api(`/api/fnos/folders?uid=${uid}`);
     $('fnos-uid').value = String(r.uid);
-    const box = $('fnos-folders');
     const items = [
       ...r.shared.map((f) => ({ ...f, tag: '共享' })),
       ...r.user.map((f) => ({ ...f, tag: '个人' })),
     ];
     state.fnosFolders = items;
-    box.innerHTML = items.length
-      ? items.map((f) => `<div class="folder-item" data-path="${esc(f.path)}">
-          <span>📁 ${esc(f.semanticPath || f.path)} <span class="muted">${esc(f.path)}</span></span>
-          <span class="tag">${f.tag}</span></div>`).join('')
-      : '<div class="muted">暂无授权目录：点击「选择并授权目录」授权一个图片文件夹</div>';
-    box.querySelectorAll('.folder-item').forEach((el) => el.addEventListener('click', () => browseFnos(el.dataset.path)));
+
+    // 1. 批量处理页签的授权目录列表
+    const box = $('fnos-folders');
+    if (box) {
+      box.innerHTML = items.length
+        ? items.map((f) => `<div class="folder-item" data-path="${esc(f.path)}">
+            <span>📁 ${esc(f.semanticPath || f.path)} <span class="muted">${esc(f.path)}</span></span>
+            <span class="tag">${f.tag}</span></div>`).join('')
+        : '<div class="muted">暂无授权目录：点击「选择并授权目录」授权一个图片文件夹</div>';
+      box.querySelectorAll('.folder-item').forEach((el) => el.addEventListener('click', () => browseFnos(el.dataset.path, 'batch')));
+    }
+
+    // 2. 选图打分页签的授权目录列表（对齐相同模式）
+    const cullBox = $('cull-fnos-folders');
+    if (cullBox) {
+      cullBox.innerHTML = items.length
+        ? items.map((f) => `<div class="folder-item" data-path="${esc(f.path)}">
+            <span>📁 ${esc(f.semanticPath || f.path)} <span class="muted">${esc(f.path)}</span></span>
+            <span class="tag">${f.tag}</span></div>`).join('')
+        : '<div class="muted">暂无授权目录：点击上方「＋ 选择并授权新目录」添加一个图片文件夹</div>';
+      cullBox.querySelectorAll('.folder-item').forEach((el) => el.addEventListener('click', () => browseFnos(el.dataset.path, 'cull')));
+    }
+
     if (items.length) {
-      await browseFnos(items[0].path);
-      // 如果选图打分还没填路径，帮用户默认填上第一个授权目录
-      if (!$('cull-dir').value.trim()) $('cull-dir').value = items[0].path;
+      await browseFnos(items[0].path, 'batch');
+      if (!$('cull-dir').value.trim()) {
+        $('cull-dir').value = items[0].path;
+        await browseFnos(items[0].path, 'cull');
+      }
     }
   } catch (e) {
     $('fnos-hint').textContent = '✗ ' + e.message;
@@ -1676,12 +1701,34 @@ async function pickFnosDirectory() {
   }
 }
 
-async function browseFnos(dir) {
+async function browseFnos(dir, target = 'batch') {
   try {
     const r = await api('/api/fnos/list', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ uid: +$('fnos-uid').value || 0, path: dir }),
     });
+    if (target === 'cull') {
+      $('cull-dir').value = dir;
+      $('cull-fnos-crumbs').textContent = r.semanticPath || dir;
+      $('cull-fnos-browser').classList.remove('hidden');
+      const parentBtn = r.parents && r.parents.length > 1
+        ? `<button data-up="${esc(r.parents[r.parents.length - 2])}">⬆ 上一级</button>` : '';
+      $('cull-fnos-entries').innerHTML =
+        parentBtn +
+        r.dirs.map((d) => `<button data-sub="${esc(d.name)}">📁 ${esc(d.name)}</button>`).join('') +
+        `<button class="img-count picked-dir" data-pick="${esc(dir)}">✓ 用这个目录开始选图打分（${r.imageCount} 张图）</button>`;
+      $('cull-fnos-entries').querySelectorAll('button').forEach((b) => b.addEventListener('click', () => {
+        if (b.dataset.up) browseFnos(b.dataset.up, 'cull');
+        else if (b.dataset.sub) browseFnos(dir.replace(/\/+$/, '') + '/' + b.dataset.sub, 'cull');
+        else if (b.dataset.pick) {
+          $('cull-dir').value = b.dataset.pick;
+          loadCullGrid();
+        }
+      }));
+      if (r.imageCount) loadCullGrid();
+      return;
+    }
+
     state.fnosPicked = dir;
     $('fnos-picked').textContent = `${dir}（${r.imageCount} 张图片，${r.writable ? '可写' : '只读'}）`;
     $('fnos-crumbs').textContent = r.semanticPath || dir;
@@ -1693,13 +1740,14 @@ async function browseFnos(dir) {
       r.dirs.map((d) => `<button data-sub="${esc(d.name)}">📁 ${esc(d.name)}</button>`).join('') +
       (r.imageCount ? `<button class="img-count picked-dir" data-pick="${esc(dir)}">✓ 用这个目录（${r.imageCount} 张图）</button>` : '');
     $('fnos-entries').querySelectorAll('button').forEach((b) => b.addEventListener('click', () => {
-      if (b.dataset.up) browseFnos(b.dataset.up);
-      else if (b.dataset.sub) browseFnos(dir.replace(/\/+$/, '') + '/' + b.dataset.sub);
+      if (b.dataset.up) browseFnos(b.dataset.up, 'batch');
+      else if (b.dataset.sub) browseFnos(dir.replace(/\/+$/, '') + '/' + b.dataset.sub, 'batch');
       else if (b.dataset.pick) { state.fnosPicked = b.dataset.pick; $('fnos-picked').textContent = b.dataset.pick; updateRun(); }
     }));
     updateRun();
   } catch (e) {
-    $('fnos-hint').textContent = '✗ ' + e.message;
+    if (target === 'batch') $('fnos-hint').textContent = '✗ ' + e.message;
+    else gridStatus('✗ ' + e.message);
   }
 }
 
@@ -2623,6 +2671,9 @@ function bindCull() {
   if (native) {
     $('cull-dir-pick').classList.remove('hidden');
     $('cull-dir-pick').textContent = '选择文件夹';
+  }
+  if ($('cull-fnos-pick')) {
+    $('cull-fnos-pick').addEventListener('click', pickFnosDirectory);
   }
 }
 

@@ -553,6 +553,20 @@
         <label class="check"><input type="checkbox" id="cull-recursive"> 包含子目录</label>
       </div>
       <div class="notes">JPG / JPEG 文件无损内嵌星级（<b>xmp:Rating</b> 与 <b>分级</b>），0 画质损耗，Windows 资源管理器、Lightroom、Bridge 原生直接显示；1 星自动附「淘汰」关键词。非 JPG 格式自动回退到同名 .xmp 伴生文件。</div>
+
+      <!-- 飞牛 fnOS 模式下的授权目录选择器（与批量处理对齐） -->
+      <div id="cull-fnos-box" class="hidden" style="margin: 12px 0; padding: 12px; background: var(--tertiary); border-radius: 8px; border: 1px solid var(--border-subtle);">
+        <div class="row-inline" style="margin-bottom:8px; justify-content:space-between">
+          <span style="font-weight:600;font-size:13px">📁 飞牛授权目录</span>
+          <button id="cull-fnos-pick" class="btn">＋ 选择并授权新目录</button>
+        </div>
+        <div id="cull-fnos-folders" class="folder-list"></div>
+        <div id="cull-fnos-browser" class="browser hidden" style="margin-top:8px">
+          <div class="crumbs" id="cull-fnos-crumbs"></div>
+          <div id="cull-fnos-entries" class="entries"></div>
+        </div>
+      </div>
+
       <!-- 快速打星：缩略图网格 + 直接点星（或键盘 1-5），即刻内嵌写入 -->
       <div class="outsec" style="margin-top:14px">快速打星 <small>点缩略图进全屏逐张打星 · ← → 切换、1-5 打星、Esc 退出</small></div>
       <div class="row-inline">
@@ -602,6 +616,6 @@
     </div>
   </div>
 </div>
-<script type="module" src="app.js?v=1.0.0.1"></script>
+<script type="module" src="app.js?v=1.0.0.2"></script>
 </body>
 </html>
