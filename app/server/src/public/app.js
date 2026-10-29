@@ -60,7 +60,7 @@ let prepareGeneration = 0;
 
 // ---------- 视图导航（CreditDaddy 模式：三个视图 DOM 常驻、只做显隐） ----------
 // 表单状态/预览/事件绑定都不随切走而销毁，切回即原样；当前视图存 localStorage
-const VIEWS = ['style', 'batch', 'watch', 'copy'];
+const VIEWS = ['style', 'batch', 'watch', 'copy', 'cull'];
 function goView(v) {
   if (!VIEWS.includes(v)) v = 'style';
   document.querySelectorAll('#nav button').forEach((b) => b.classList.toggle('active', b.dataset.view === v));
@@ -80,6 +80,10 @@ const I = {
   x: svg('<path d="M18 6 6 18"/><path d="m6 6 12 12"/>'),
     // 复制成图到剪贴板（分享到社交平台）
     clipboard: svg('<rect width="8" height="4" x="8" y="2" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/>'),
+    // 模型服务设置（顶栏齿轮）
+    gear: svg('<path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.01a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h.01a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.01a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>'),
+    // 饱满五角星（打星选图）
+    star: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>',
 };
 
 // 空状态占位图（与 index.html 中的初始 src 保持一致）
@@ -97,6 +101,21 @@ async function api(path, opts) {
 }
 const debounce = (fn, ms) => { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; };
 function esc(s) { return String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
+// 文件名中间截断，保留头部与尾部序号/扩展名（如 20261024-YSY05378.jpg -> 202610…05378.jpg）
+function truncMid(name, max = 16) {
+  if (!name || name.length <= max) return name;
+  const extDot = name.lastIndexOf('.');
+  const ext = extDot > 0 ? name.slice(extDot) : '';
+  const base = extDot > 0 ? name.slice(0, extDot) : name;
+  const keepTail = Math.min(base.length - 2, 5) + ext.length;
+  const keepHead = Math.max(3, max - 1 - keepTail);
+  return name.slice(0, keepHead) + '…' + name.slice(-keepTail);
+}
+// 生成饱满矢量五角星按钮
+function starBtn(n, rating) {
+  const on = n <= rating;
+  return `<button type="button" class="cull-star${on ? ' on' : ''}" data-n="${n}" title="${n} 星" aria-label="${n} 星">${I.star}</button>`;
+}
 // 统一确认框(替代原生 confirm):点遮罩/Esc/取消 → false,确定 → true
 function appConfirm(message, { okText = '确定', cancelText = '取消', danger = false } = {}) {
   return new Promise((resolve) => {
@@ -1456,6 +1475,8 @@ function options() {
     sizeBase: $('opt-sizebase') ? $('opt-sizebase').value : 'long',
     autoColor: !$('opt-autocolor').disabled && $('opt-autocolor').checked,
     cropRatio: $('opt-cropratio') ? $('opt-cropratio').value || null : null,
+    // 裁剪取景方式：智能（保细节）/ 居中（合照）
+    cropAnchor: $('opt-cropanchor') ? $('opt-cropanchor').value : 'smart',
     // 只有勾了「横竖分开设置」才把竖图比例一起发出去；不勾时 cropRatio 两个方向都管
     cropRatioPort: $('opt-cropsplit') && $('opt-cropsplit').checked
       ? ($('opt-cropratio-port').value || null) : null,
@@ -1695,13 +1716,17 @@ function updateRun() {
   };
   const active = ['logo', 'text'].filter((k) => state.layers[k]);
   const styleReady = active.length > 0 && active.every((k) => ready[k]);
-  const ok = styleReady && !!currentSource();
+  // 仅导出：不需要任何水印样式，有输出动作（裁剪/长边/格式）即可跑
+  const exportOnly = !!$('opt-exportonly') && $('opt-exportonly').checked;
+  const hasExportAction = !!(options().cropRatio || options().cropRatioPort || options().maxLongEdge || ($('opt-format').value !== 'auto'));
+  const ok = !!currentSource() && (exportOnly ? hasExportAction : styleReady);
   $('run').disabled = !ok;
   $('group-add').disabled = !state.logoSet; // 有 logo 才能建分组
   $('watch-create').disabled = !styleReady; // 监听复用当前选中的这一类水印
   const pending = active.find((k) => !ready[k]);
   $('run-hint').textContent = ok ? '准备就绪'
     : !currentSource() ? '先选择图片来源'
+    : exportOnly ? '仅导出：请至少配置裁剪、长边上限或输出格式中的一项'
     : !active.length ? '先选择一类水印'
     : pending === 'logo' ? (!state.logoSet ? 'Logo 水印：先添加 logo' : 'Logo 水印：等待水印准备…')
     : style === '' ? '文字 / 画框：先勾选要输出的字段'
@@ -1761,19 +1786,21 @@ async function run() {
   const src = currentSource();
   const groups = groupsForPayload();
   const frame = frameDef();
-  // 纯相机参数 / 纯边框（不传 logo）也能跑，服务端两类都放行
-  if (!src || (!groups.length && !frame)) return;
-  if (groups.some((g) => !g.text) && !state.watermarkId) return; // 有 logo 组但水印失效
+  const exportOnly = $('opt-exportonly').checked;
+  // 纯相机参数 / 纯边框（不传 logo）/ 仅导出（什么都不叠）都能跑，服务端都放行
+  if (!src || (!groups.length && !frame && !exportOnly)) return;
+  if (!exportOnly && groups.some((g) => !g.text) && !state.watermarkId) return; // 有 logo 组但水印失效
   const overwrite = $('opt-overwrite').checked;
   if (overwrite && !(await appConfirm('⚠ 将直接覆盖原图片文件（不可恢复），确定继续？', { okText: '覆盖并继续', danger: true }))) return;
 
   const payload = {
-    watermarkId: state.watermarkId,
+    watermarkId: exportOnly ? null : state.watermarkId,
     mode: src.mode,
     inputDir: src.inputDir,
     uid: src.uid,
     options: options(),
-    groups,
+    groups: exportOnly ? [] : groups,
+    exportOnly,
     skipProcessed: $('opt-skipdone').checked && !$('opt-overwrite').checked,
     recursive: $('opt-recursive').checked && src.mode !== 'local-files',
     overwrite,
@@ -1839,7 +1866,32 @@ function applyTheme(t) {
 }
 
 // ---------- 文案生成 ----------
-const copyState = { platforms: [], refs: [], selectedRefs: new Set(), image: null, imagePreviewUrl: null, models: [], model: '' };
+const copyState = { platforms: [], refs: [], selectedRefs: new Set(), images: [], imageUrls: [], models: [], model: '', genAbort: null, lastResult: null };
+
+// 待发布图片（组图，最多 9 张）：文件选择、拖入、Ctrl+V 共用入口
+function addCopyImages(files) {
+  const imgs = files.filter((f) => f && f.type && f.type.startsWith('image/'));
+  if (!imgs.length) { $('copy-status').textContent = '只支持图片文件'; return; }
+  if (copyState.images.length + imgs.length > 9) imgs.length = 9 - copyState.images.length;
+  if (!imgs.length) { $('copy-status').textContent = '最多 9 张待发布图片'; return; }
+  copyState.images.push(...imgs);
+  renderCopyImages();
+  $('copy-status').textContent = '';
+}
+function renderCopyImages() {
+  for (const u of copyState.imageUrls) URL.revokeObjectURL(u);
+  copyState.imageUrls = copyState.images.map((f) => URL.createObjectURL(f));
+  $('copy-image-name').textContent = copyState.images.length ? `已选 ${copyState.images.length} 张` : '未选择';
+  $('copy-image-preview').innerHTML = copyState.images.length
+    ? copyState.images.map((f, i) => `
+      <div class="copy-img-tile">
+        <img src="${copyState.imageUrls[i]}" alt="">
+        <button type="button" class="copy-img-rm" data-rm="${i}" title="移除这张">✕</button>
+        ${copyState.images.length > 1 ? `<span class="copy-img-idx">${i + 1}</span>` : ''}
+      </div>`).join('')
+      + '<div class="notes" style="grid-column:1/-1">组图会一起发给模型写一篇覆盖整组的文案；把图片直接拖进本卡片也能添加。</div>'
+    : '';
+}
 
 function renderCopyPlatforms() {
   const sel = $('copy-platform');
@@ -1856,10 +1908,10 @@ function renderCopyRules() {
 
 async function loadCopyConfig() {
   const cfg = await api('/api/copy/config');
-  if (!document.activeElement || document.activeElement.id !== 'copy-cfg-key') {
-    $('copy-cfg-base').value = cfg.baseUrl || '';
+  if (!document.activeElement || document.activeElement.id !== 'llm-key') {
+    $('llm-base').value = cfg.baseUrl || '';
     // 密钥不回显:输入框始终为空,占位符提示是否已存
-    $('copy-cfg-key').placeholder = cfg.hasKey ? '已保存(留空则不修改)' : 'sk-…';
+    $('llm-key').placeholder = cfg.hasKey ? '已保存(留空则不修改)' : 'sk-…';
   }
   return cfg;
 }
@@ -1961,7 +2013,6 @@ function renderCopyRefs() {
 
 function bindCopy() {
   $('copy-platform').addEventListener('change', renderCopyRules);
-  $('copy-models-refresh').addEventListener('click', loadCopyModels);
 
   // 模型卡片选择器:展开/收起、搜索、点卡片选中(并记住到配置)
   $('copy-model-toggle').addEventListener('click', (e) => {
@@ -1991,42 +2042,32 @@ function bindCopy() {
     $('copy-model-toggle').setAttribute('aria-expanded', 'false');
   });
 
-  // 模型设置:展开/收起、保存(baseUrl + key)、清除已存密钥
-  $('copy-config-toggle').addEventListener('click', () => {
-    const box = $('copy-config');
-    const open = box.classList.toggle('hidden') === false;
-    $('copy-config-toggle').setAttribute('aria-expanded', String(open));
-    if (open) loadCopyConfig();
-  });
-  $('copy-cfg-save').addEventListener('click', async () => {
-    const status = $('copy-cfg-status');
-    const payload = { baseUrl: $('copy-cfg-base').value.trim() };
-    const key = $('copy-cfg-key').value.trim();
-    if (key) payload.apiKey = key;
-    try {
-      await api('/api/copy/config', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
-      $('copy-cfg-key').value = '';
-      status.textContent = '已保存';
-      await loadCopyModels();
-    } catch (e) { status.textContent = e.message; }
-  });
-  $('copy-cfg-clear').addEventListener('click', async () => {
-    if (!(await appConfirm('清除已保存的 API Key?', { okText: '清除', danger: true }))) return;
-    try {
-      await api('/api/copy/config', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ clearKey: true }) });
-      $('copy-cfg-key').value = '';
-      $('copy-cfg-status').textContent = '密钥已清除';
-    } catch (e) { $('copy-cfg-status').textContent = e.message; }
-  });
 
+  // 待发布图片：多选组图 + 拖入直接选（点 ✕ 移除单张）
   $('copy-image').addEventListener('change', (e) => {
-    const f = e.target.files[0];
-    copyState.image = f || null;
-    if (copyState.imagePreviewUrl) URL.revokeObjectURL(copyState.imagePreviewUrl);
-    copyState.imagePreviewUrl = f ? URL.createObjectURL(f) : null;
-    $('copy-image-name').textContent = f ? f.name : '未选择';
-    $('copy-image-preview').innerHTML = copyState.imagePreviewUrl
-      ? `<img src="${copyState.imagePreviewUrl}" alt="">` : '';
+    addCopyImages([...e.target.files]);
+    e.target.value = '';
+  });
+  const imgCard = $('copy-image-preview').closest('.card');
+  imgCard.addEventListener('dragover', (e) => {
+    if (![...(e.dataTransfer?.items || [])].some((i) => i.kind === 'file')) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+    imgCard.classList.add('drag-over');
+  });
+  imgCard.addEventListener('dragleave', () => imgCard.classList.remove('drag-over'));
+  imgCard.addEventListener('drop', (e) => {
+    // 拖进参考截图卡片走参考图，其余区域视为待发布图片
+    if (e.target.closest('#copy-refs') || e.target.closest('#copy-ref-file-btn')) return;
+    e.preventDefault();
+    imgCard.classList.remove('drag-over');
+    addCopyImages([...(e.dataTransfer?.files || [])]);
+  });
+  $('copy-image-preview').addEventListener('click', (e) => {
+    const rm = e.target.closest('[data-rm]');
+    if (!rm) return;
+    copyState.images.splice(+rm.dataset.rm, 1);
+    renderCopyImages();
   });
 
   $('copy-ref-file').addEventListener('change', async (e) => {
@@ -2077,33 +2118,45 @@ function bindCopy() {
   $('copy-generate').addEventListener('click', async () => {
     const status = $('copy-status');
     const out = $('copy-result');
-    if (!copyState.image) { status.textContent = '请先选择待发布图片'; return; }
+    const btn = $('copy-generate');
+    // 生成中再点一次 = 停止（中断请求，不再傻等）
+    if (copyState.genAbort) { copyState.genAbort.abort(); return; }
+    if (!copyState.images.length) { status.textContent = '请先选择待发布图片'; return; }
     const scene = $('copy-scene').value.trim();
     if (!scene) { status.textContent = '请简单描述场景'; return; }
     const model = copyState.model;
     if (!model) { status.textContent = '请先选择模型'; return; }
+    // 修改意见：有上一版结果且填了意见 → 带上上一版让模型在原基础上改（单次上下文）
+    const feedback = $('copy-feedback').value.trim();
+    const revise = feedback && copyState.lastResult;
+    if (feedback && !copyState.lastResult) { status.textContent = '还没有上一版结果，先不带意见生成一次'; return; }
     const fd = new FormData();
-    fd.append('image', copyState.image);
+    for (const f of copyState.images) fd.append('image', f);
     fd.append('payload', JSON.stringify({
       platform: $('copy-platform').value,
       scene,
       model,
       refIds: [...copyState.selectedRefs],
+      ...(revise ? { feedback, previous: JSON.stringify(copyState.lastResult) } : {}),
     }));
-    const btn = $('copy-generate');
-    btn.disabled = true;
-    status.textContent = '生成中,通常需要十几秒…';
+    copyState.genAbort = new AbortController();
+    btn.classList.add('danger');
+    btn.textContent = '停止生成';
+    status.textContent = revise ? '按修改意见重写中…再次点击可停止' : '生成中,通常需要十几秒…再次点击可停止';
     out.innerHTML = '';
     try {
-      const r = await fetch(apiUrl('/api/copy/generate'), { method: 'POST', body: fd });
+      const r = await fetch(apiUrl('/api/copy/generate'), { method: 'POST', body: fd, signal: copyState.genAbort.signal });
       const body = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(body.error || `HTTP ${r.status}`);
-      status.textContent = '';
+      status.textContent = body.revised ? '已按修改意见更新' : '';
+      copyState.lastResult = body; // 记住这一版，供下一次「意见修改」做上下文
       out.innerHTML = renderCopyResult(body);
     } catch (e) {
-      status.textContent = e.message;
+      status.textContent = e.name === 'AbortError' ? '已停止' : e.message;
     } finally {
-      btn.disabled = false;
+      copyState.genAbort = null;
+      btn.classList.remove('danger');
+      btn.textContent = '生成文案';
     }
   });
 
@@ -2135,6 +2188,369 @@ async function initCopy() {
   bindCopy();
 }
 
+// ---------- 选图打分（评星 + 问题标记写 XMP sidecar，LR 按星筛选） ----------
+// ---------- 模型服务设置（顶栏齿轮弹层，发布文案与选图打分共用） ----------
+function bindLlmSettings() {
+  $('btn-llm').innerHTML = I.gear;
+  const close = () => {
+    $('llm-pop').classList.add('hidden');
+    $('btn-llm').setAttribute('aria-expanded', 'false');
+  };
+  $('btn-llm').addEventListener('click', (e) => {
+    e.stopPropagation();
+    const open = $('llm-pop').classList.toggle('hidden') === false;
+    $('btn-llm').setAttribute('aria-expanded', String(open));
+    if (open) loadCopyConfig().catch(() => {});
+  });
+  $('llm-pop').addEventListener('click', (e) => e.stopPropagation());
+  document.addEventListener('click', (e) => {
+    if (!$('llm-pop').classList.contains('hidden') && !e.target.closest('#btn-llm')) close();
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !$('llm-pop').classList.contains('hidden')) close();
+  });
+  $('llm-save').addEventListener('click', async () => {
+    const status = $('llm-status');
+    const payload = { baseUrl: $('llm-base').value.trim() };
+    const key = $('llm-key').value.trim();
+    if (key) payload.apiKey = key;
+    try {
+      await api('/api/copy/config', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+      $('llm-key').value = '';
+      status.textContent = '已保存';
+      await loadCopyModels();
+    } catch (e) { status.textContent = e.message; }
+  });
+  $('llm-refresh').addEventListener('click', async () => {
+    $('llm-status').textContent = '刷新中…';
+    try {
+      await loadCopyModels();
+      $('llm-status').textContent = `已刷新 ${copyState.models.length} 个模型`;
+    } catch (e) { $('llm-status').textContent = e.message; }
+  });
+  $('llm-clear').addEventListener('click', async () => {
+    if (!(await appConfirm('清除已保存的 API Key？', { okText: '清除', danger: true }))) return;
+    try {
+      await api('/api/copy/config', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ clearKey: true }) });
+      $('llm-key').value = '';
+      $('llm-status').textContent = '密钥已清除';
+    } catch (e) { $('llm-status').textContent = e.message; }
+  });
+  loadCopyConfig().catch(() => {});
+}
+
+// ---------- 快速打星：缩略图网格，点星 / 键盘即刻写 sidecar ----------
+const cullGrid = { items: [], focus: -1 };
+function gridStatus(msg) { $('cull-grid-status').textContent = msg || ''; }
+
+async function loadCullGrid() {
+  const dir = $('cull-dir').value.trim();
+  if (!dir) { gridStatus('请先在上面填写图片目录'); return; }
+  gridStatus('加载中…');
+  try {
+    const r = await api(`/api/cull/list?dir=${encodeURIComponent(dir)}${$('cull-recursive').checked ? '&recursive=1' : ''}`);
+    cullGrid.items = r.files;
+    cullGrid.focus = -1;
+    renderCullGrid();
+    gridStatus(r.files.length ? `共 ${r.files.length} 张 · 点缩略图选中，键盘 1-5 打星` : '目录里没有图片');
+  } catch (e) { gridStatus(e.message); }
+}
+
+function renderCullGrid() {
+  const box = $('cull-grid');
+  if (!cullGrid.items.length) { box.innerHTML = ''; return; }
+  box.innerHTML = cullGrid.items.map((it, i) => `
+    <div class="cull-tile${i === cullGrid.focus ? ' focus' : ''}" data-i="${i}" tabindex="0">
+      <img loading="lazy" src="${apiUrl(`/api/cull/thumb?file=${encodeURIComponent(it.file)}`)}" alt="">
+      <div class="cull-tile-overlay">
+        <div class="cull-tile-name" title="${esc(it.file)}">${esc(truncMid(it.name, 17))}</div>
+        <div class="cull-tile-stars" data-i="${i}">
+          ${[1, 2, 3, 4, 5].map((n) => starBtn(n, it.rating)).join('')}
+        </div>
+      </div>
+    </div>`).join('');
+}
+
+// 只刷新一张卡片的星星与聚焦态 —— 打星/翻页都只动一张卡，
+// 全量重建网格会让 830+ 张缩略图每次按键都重新挂 DOM、重新请求
+function refreshCullTile(i) {
+  const el = $('cull-grid').children[i];
+  const it = cullGrid.items[i];
+  if (!el || !it) return;
+  el.classList.toggle('focus', i === cullGrid.focus);
+  el.querySelectorAll('.cull-tile-stars .cull-star').forEach((s) => {
+    s.classList.toggle('on', +s.dataset.n <= it.rating);
+  });
+}
+
+async function setCullRating(i, n) {
+  const it = cullGrid.items[i];
+  if (!it || it.rating === n) return;
+  const prev = it.rating;
+  it.rating = n;
+  refreshCullTile(i);
+  try {
+    await api('/api/cull/set', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ file: it.file, rating: n, labels: it.labels }) });
+  } catch (e) {
+    it.rating = prev;
+    refreshCullTile(i);
+    gridStatus(e.message);
+  }
+}
+
+function bindCullGrid() {
+  $('cull-grid-load').addEventListener('click', loadCullGrid);
+
+  // 鼠标悬停星星实时预览打星效果（摸到第N颗，1..N全部高亮点亮；移开恢复实际星级）
+  $('cull-grid').addEventListener('mouseover', (e) => {
+    const star = e.target.closest('.cull-star');
+    if (!star) return;
+    const box = star.closest('.cull-tile-stars');
+    if (!box) return;
+    const n = +star.dataset.n;
+    box.querySelectorAll('.cull-star').forEach((s) => {
+      s.classList.toggle('on', +s.dataset.n <= n);
+    });
+  });
+  $('cull-grid').addEventListener('mouseout', (e) => {
+    const box = e.target.closest('.cull-tile-stars');
+    if (!box) return;
+    const rel = e.relatedTarget;
+    if (rel && box.contains(rel)) return;
+    const tile = box.closest('.cull-tile');
+    if (!tile) return;
+    const it = cullGrid.items[+tile.dataset.i];
+    const rating = it ? it.rating : 0;
+    box.querySelectorAll('.cull-star').forEach((s) => {
+      s.classList.toggle('on', +s.dataset.n <= rating);
+    });
+  });
+
+  $('cull-grid').addEventListener('click', (e) => {
+    const star = e.target.closest('.cull-star');
+    const tile = e.target.closest('.cull-tile');
+    if (!tile) return;
+    const i = +tile.dataset.i;
+    const prevFocus = cullGrid.focus;
+    cullGrid.focus = i;
+    if (prevFocus >= 0 && prevFocus !== i) refreshCullTile(prevFocus);
+    if (star) {
+      const n = +star.dataset.n;
+      // 点当前星数 = 0 星取消打星，点其他星数 = 切换星级
+      const to = cullGrid.items[i].rating === n ? 0 : n;
+      setCullRating(i, to);
+    } else {
+      refreshCullTile(i);
+      openCullViewer(i); // 点缩略图本体 → 全屏逐张打星
+    }
+  });
+  // 键盘：全屏预览打开时由它接管；否则 ←→ 在网格里移动、0~5 给聚焦项打星
+  document.addEventListener('keydown', (e) => {
+    if (!$('view-cull').classList.contains('active')) return;
+    const tag = document.activeElement && document.activeElement.tagName;
+    if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+    if (!cullGrid.items.length) return;
+    const viewerOpen = !$('cull-viewer').classList.contains('hidden');
+    if (viewerOpen) {
+      if (e.key === 'Escape') { closeCullViewer(); return; }
+      if (e.key === 'ArrowLeft') { cullViewerNav(-1); return; }
+      if (e.key === 'ArrowRight') { cullViewerNav(1); return; }
+      if (e.key === '0') {
+        setCullRating(cullGrid.focus, 0).then(renderCullViewer);
+        return;
+      }
+      if (/^[1-5]$/.test(e.key)) {
+        const cur = cullGrid.items[cullGrid.focus]?.rating || 0;
+        const to = cur === +e.key ? 0 : +e.key; // 连按同一个数字 = 0 星取消
+        setCullRating(cullGrid.focus, to).then(renderCullViewer);
+        return;
+      }
+      return;
+    }
+    if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+      e.preventDefault();
+      const prev = cullGrid.focus;
+      cullGrid.focus = Math.max(0, Math.min(cullGrid.items.length - 1,
+        (cullGrid.focus < 0 ? 0 : cullGrid.focus) + (e.key === 'ArrowRight' ? 1 : -1)));
+      if (prev >= 0 && prev !== cullGrid.focus) refreshCullTile(prev);
+      refreshCullTile(cullGrid.focus);
+      const el = $('cull-grid').children[cullGrid.focus];
+      if (el) el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    } else if (e.key === '0') {
+      if (cullGrid.focus >= 0) setCullRating(cullGrid.focus, 0);
+    } else if (/^[1-5]$/.test(e.key)) {
+      if (cullGrid.focus < 0) cullGrid.focus = 0;
+      const cur = cullGrid.items[cullGrid.focus]?.rating || 0;
+      const to = cur === +e.key ? 0 : +e.key;
+      setCullRating(cullGrid.focus, to);
+    } else if (e.key === 'Enter') {
+      if (cullGrid.focus >= 0) openCullViewer(cullGrid.focus);
+    }
+  });
+}
+
+// ---------- 选图全屏预览：大图 + 滚轮缩放/拖动 + 左右切换 + 打星 ----------
+const cullZoom = { scale: 1, x: 0, y: 0, dragging: false, startX: 0, startY: 0 };
+
+function resetCullZoom() {
+  cullZoom.scale = 1;
+  cullZoom.x = 0;
+  cullZoom.y = 0;
+  cullZoom.dragging = false;
+  applyCullZoom();
+}
+
+function applyCullZoom() {
+  const img = $('cull-viewer-img');
+  if (!img) return;
+  if (cullZoom.scale <= 1.02) {
+    cullZoom.scale = 1;
+    cullZoom.x = 0;
+    cullZoom.y = 0;
+    img.style.transform = '';
+    img.style.cursor = 'zoom-in';
+  } else {
+    img.style.transform = `translate(${cullZoom.x}px, ${cullZoom.y}px) scale(${cullZoom.scale})`;
+    img.style.cursor = cullZoom.dragging ? 'grabbing' : 'grab';
+  }
+}
+
+function openCullViewer(i) {
+  if (i < 0 || i >= cullGrid.items.length) return;
+  cullGrid.focus = i;
+  document.body.style.overflow = 'hidden'; // 锁定背景滚动
+  resetCullZoom();
+  $('cull-viewer').classList.remove('hidden');
+  renderCullViewer();
+}
+
+function closeCullViewer() {
+  $('cull-viewer').classList.add('hidden');
+  document.body.style.overflow = '';
+  resetCullZoom();
+}
+
+function cullViewerNav(d) {
+  const next = cullGrid.focus + d;
+  if (next < 0 || next >= cullGrid.items.length) return;
+  const prev = cullGrid.focus;
+  cullGrid.focus = next;
+  resetCullZoom();
+  renderCullViewer();
+  // 网格里同步聚焦与滚动（关掉预览时停在看的那张）
+  if (prev >= 0 && prev !== next) refreshCullTile(prev);
+  refreshCullTile(next);
+  const el = $('cull-grid').children[cullGrid.focus];
+  if (el) el.scrollIntoView({ block: 'nearest' });
+}
+
+function renderCullViewer() {
+  const it = cullGrid.items[cullGrid.focus];
+  if (!it) return;
+  const url = apiUrl(`/api/cull/thumb?file=${encodeURIComponent(it.file)}&size=big`);
+  $('cull-viewer-img').src = url;
+  $('cull-viewer-name').textContent = `${cullGrid.focus + 1} / ${cullGrid.items.length} · ${it.name}`;
+  $('cull-viewer-stars').innerHTML = [1, 2, 3, 4, 5].map((n) => starBtn(n, it.rating)).join('');
+}
+
+function bindCullViewer() {
+  $('cull-viewer-close').addEventListener('click', closeCullViewer);
+  $('cull-viewer-prev').addEventListener('click', () => cullViewerNav(-1));
+  $('cull-viewer-next').addEventListener('click', () => cullViewerNav(1));
+
+  // 全屏模式打星：点击当前星数 = 0 星取消打星
+  $('cull-viewer-stars').addEventListener('click', (e) => {
+    const s = e.target.closest('.cull-star');
+    if (!s) return;
+    const n = +s.dataset.n;
+    const to = cullGrid.items[cullGrid.focus].rating === n ? 0 : n;
+    setCullRating(cullGrid.focus, to).then(renderCullViewer);
+  });
+  // 全屏星星 Hover 预览连续点亮
+  $('cull-viewer-stars').addEventListener('mouseover', (e) => {
+    const star = e.target.closest('.cull-star');
+    if (!star) return;
+    const n = +star.dataset.n;
+    $('cull-viewer-stars').querySelectorAll('.cull-star').forEach((s) => {
+      s.classList.toggle('on', +s.dataset.n <= n);
+    });
+  });
+  $('cull-viewer-stars').addEventListener('mouseout', (e) => {
+    const rel = e.relatedTarget;
+    if (rel && $('cull-viewer-stars').contains(rel)) return;
+    const it = cullGrid.items[cullGrid.focus];
+    const rating = it ? it.rating : 0;
+    $('cull-viewer-stars').querySelectorAll('.cull-star').forEach((s) => {
+      s.classList.toggle('on', +s.dataset.n <= rating);
+    });
+  });
+
+  // 全屏预览：鼠标滚轮缩放放大，阻止背后页面乱滚
+  $('cull-viewer').addEventListener('wheel', (e) => {
+    e.preventDefault();
+    const factor = e.deltaY < 0 ? 1.18 : 0.85;
+    const nextScale = Math.max(1, Math.min(6, cullZoom.scale * factor));
+    if (nextScale <= 1.05) {
+      resetCullZoom();
+      return;
+    }
+    cullZoom.scale = nextScale;
+    applyCullZoom();
+  }, { passive: false });
+
+  // 鼠标拖拽平移放大后的画面
+  $('cull-viewer-img').addEventListener('mousedown', (e) => {
+    if (cullZoom.scale <= 1) return;
+    e.preventDefault();
+    cullZoom.dragging = true;
+    cullZoom.startX = e.clientX - cullZoom.x;
+    cullZoom.startY = e.clientY - cullZoom.y;
+    applyCullZoom();
+  });
+  window.addEventListener('mousemove', (e) => {
+    if (!cullZoom.dragging) return;
+    cullZoom.x = e.clientX - cullZoom.startX;
+    cullZoom.y = e.clientY - cullZoom.startY;
+    applyCullZoom();
+  });
+  window.addEventListener('mouseup', () => {
+    if (cullZoom.dragging) {
+      cullZoom.dragging = false;
+      applyCullZoom();
+    }
+  });
+
+  // 双击图片快速在 1x 与 2.5x 之间切换
+  $('cull-viewer-img').addEventListener('dblclick', (e) => {
+    e.preventDefault();
+    if (cullZoom.scale > 1.05) {
+      resetCullZoom();
+    } else {
+      cullZoom.scale = 2.5;
+      applyCullZoom();
+    }
+  });
+
+  // 点击背景遮罩关闭（仅当未缩放时生效，防止拖拽松开误关闭）
+  $('cull-viewer').addEventListener('click', (e) => {
+    if (cullZoom.scale > 1.05) return;
+    if (e.target === $('cull-viewer')) closeCullViewer();
+  });
+}
+
+function bindCull() {
+  bindCullGrid();
+  bindCullViewer();
+  if (native) {
+    $('cull-dir-pick').classList.remove('hidden');
+    $('cull-dir-pick').addEventListener('click', async () => {
+      const dir = await native.pickFolder('选择要评分的图片文件夹');
+      if (dir) $('cull-dir').value = dir;
+    });
+  }
+}
+
 function init() {
   applyTheme(document.documentElement.dataset.theme || 'light');
   $('btn-theme').addEventListener('click', () =>
@@ -2149,6 +2565,8 @@ function init() {
   });
   goView(localStorage.getItem('imgmark_view') || 'style');
   initCopy().catch((e) => { $('copy-status').textContent = e.message; });
+  bindLlmSettings();
+  bindCull();
   // 桌面壳：fnOS 状态无意义，隐藏；页脚换桌面版文案
   if (native) {
     document.querySelector('header .status').classList.add('hidden');
@@ -2160,14 +2578,19 @@ function init() {
   slider('wm-tol', 'tol-v'); slider('opt-quality', 'q-v');
 
   // 原生 select 统一升级为自定义下拉（保留原生元素做数据源与事件目标）
-  ['wm-bg', 'opt-sizebase', 'opt-format', 'opt-cropratio', 'opt-cropratio-port', 'exif-sep', 'exif-weight', 'exif-font', 'exif-frame-align'].forEach((id) => enhanceSelect($(id)));
+  ['wm-bg', 'opt-sizebase', 'opt-format', 'opt-cropratio', 'opt-cropratio-port', 'opt-cropanchor', 'exif-sep', 'exif-weight', 'exif-font', 'exif-frame-align'].forEach((id) => enhanceSelect($(id)));
   renderFramePresets();
   ['wm-tol', 'opt-quality'].forEach((id) => $(id).addEventListener('input', refreshPreview));
   bindPreviewOn('#opt-maxedge', 'input');
   bindPreviewOn('#opt-format', 'change');
   bindPreviewOn('#opt-sizebase', 'change');
+  // 仅导出：开关本身及它依赖的输出动作（裁剪/长边/格式）变化都要重判「开始处理」
+  ['opt-exportonly', 'opt-cropratio', 'opt-cropratio-port', 'opt-format'].forEach((id) =>
+    $(id).addEventListener('change', updateRun));
+  $('opt-maxedge').addEventListener('input', debounce(updateRun, 300));
   bindPreviewOn('#opt-cropratio', 'change');
   bindPreviewOn('#opt-cropratio-port', 'change');
+  bindPreviewOn('#opt-cropanchor', 'change');
   $('opt-autocolor').addEventListener('change', refreshPreview);
   $('opt-cropratio').addEventListener('change', cropHintRefresh);
   $('opt-cropratio-port').addEventListener('change', cropHintRefresh);

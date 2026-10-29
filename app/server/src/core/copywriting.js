@@ -105,13 +105,14 @@ async function listVisionModels(cfg) {
     .map((m) => ({ id: m.id, owned_by: m.owned_by || '', contextWindow: m.capabilities.contextWindow || null }));
 }
 
-function buildMessages({ platform, scene, refImages, targetImage }) {
+function buildMessages({ platform, scene, refImages = [], targetImages, feedback, previous }) {
   const system = [
     '你是社交媒体文案助手。根据待发布图片与场景描述,为指定平台写一篇发布文案。',
     `目标平台:${platform.label}`,
     '平台规则:',
     ...platform.rules.map((r) => `- ${r}`),
     '如果提供了参考截图,那是该账号过去发过的内容,请模仿其语气、分段与话题习惯。',
+    '多张待发布图片是同一次发布的组图,请写一篇覆盖整组图片的文案,不要逐张分开写。',
     '只输出一个 JSON 对象,不要解释,不要代码块,结构如下:',
     '{"titles":["候选标题1","候选标题2","候选标题3"],"body":"正文","hashtags":["#标签"],"mentions":[]}',
     'mentions 只能原样填入场景描述里出现过的 @ 账号,没有则为空数组。',
@@ -119,12 +120,19 @@ function buildMessages({ platform, scene, refImages, targetImage }) {
   const user = [
     { type: 'text', text: `场景描述:${scene}` },
   ];
+  // 修改意见（单次上下文）：带上上一版结果让模型在其基础上改，而不是从头重写
+  if (feedback && previous) {
+    user.push({ type: 'text', text: `上一版文案(请在此基础上修改,保留没被意见涉及的部分):\n${previous}` });
+    user.push({ type: 'text', text: `修改意见:${feedback}` });
+  }
   refImages.forEach((buf, i) => {
     user.push({ type: 'text', text: `参考截图 ${i + 1}:` });
     user.push({ type: 'image_url', image_url: { url: `data:image/jpeg;base64,${buf.toString('base64')}` } });
   });
-  user.push({ type: 'text', text: '待发布图片:' });
-  user.push({ type: 'image_url', image_url: { url: `data:image/jpeg;base64,${targetImage.toString('base64')}` } });
+  targetImages.forEach((buf, i) => {
+    user.push({ type: 'text', text: `待发布图片 ${i + 1}${targetImages.length > 1 ? `/${targetImages.length}` : ''}:` });
+    user.push({ type: 'image_url', image_url: { url: `data:image/jpeg;base64,${buf.toString('base64')}` } });
+  });
   return [{ role: 'system', content: system }, { role: 'user', content: user }];
 }
 
@@ -165,15 +173,19 @@ function parseModelJson(text) {
   };
 }
 
-async function generateCopy({ cfg, platformId, scene, model, refImages, targetImage }) {
+async function generateCopy({ cfg, platformId, scene, model, refImages, targetImages, feedback, previous }) {
   const platform = platformById(platformId);
   if (!platform) throw httpErr(400, '未知平台');
   if (!cfg.baseUrl) throw httpErr(400, '未配置模型服务地址');
   if (!cfg.apiKey) throw httpErr(400, '未配置模型密钥');
   if (!model) throw httpErr(400, '未选择模型');
-  const messages = buildMessages({ platform, scene, refImages, targetImage });
+  const images = Array.isArray(targetImages) && targetImages.length ? targetImages : [targetImages];
+  if (!images[0]) throw httpErr(400, '缺少待发布图片');
+  const messages = buildMessages({ platform, scene, refImages, targetImages: images, feedback, previous });
   const text = await chatComplete(cfg, model, messages);
-  return { platform: platform.id, model, ...parseModelJson(text) };
+  const out = { platform: platform.id, model, imageCount: images.length, ...parseModelJson(text) };
+  if (feedback && previous) out.revised = true;
+  return out;
 }
 
 module.exports = {
@@ -190,6 +202,7 @@ module.exports = {
   llmConfigPublic,
   saveLlmFile,
   listVisionModels,
+  chatComplete,
   generateCopy,
   parseModelJson,
 };

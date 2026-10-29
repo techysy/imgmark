@@ -216,4 +216,4 @@ async function runBatch(p) {
   return { total: list.length, ok: okCount, failed: failCount, skipped, results };
 }
 
-module.exports = { runBatch, listImages, outPathFor, expectedExt, isInside, pathKey, normalizeSuffix, assertOutputTarget };
+module.exports = { runBatch, listImages, mapPool, outPathFor, expectedExt, isInside, pathKey, normalizeSuffix, assertOutputTarget };

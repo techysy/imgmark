@@ -390,6 +390,7 @@ async function loadTarget(buffer) {
 function extForFormat(f) {
   switch (f) {
     case 'jpeg': case 'jpg': return '.jpg';
+    case 'webp': return '.webp';
     case 'avif': case 'heif': return '.avif'; // sharp 把 AVIF 输入报告为 heif
     case 'tiff': return '.tiff';
     case 'gif': return '.gif';
@@ -496,9 +497,10 @@ function offsetEntry(entry, frame) {
  */
 async function composeGroups(targetBuffer, groupDefs, o = {}) {
   const { format = 'auto', quality = 90, sizeBase = 'width', mozjpeg = false } = o;
-  // 允许「只加边框、不叠任何水印」：此时没有分组，但边框本身就是要输出的内容。
-  // 边框随后可能因为这张图没 EXIF 而被跳过，那种情况下真就没有任何可输出的了
-  if (!groupDefs.length && !o.frame) {
+  // 允许「只加边框、不叠任何水印」「无水印纯导出」：前者边框就是要输出的内容，
+  // 后者裁剪 / 长边上限 / 格式转换本身就是输出动作。什么都没有才是请求有误
+  if (!groupDefs.length && !o.frame && !o.cropRatio && !o.cropRatioPort && !o.maxLongEdge &&
+      format === 'auto') {
     const e = new Error('没有可合成的分组');
     e.status = 400; // 调用方没给任何要画的东西，属于请求有误
     throw e;
@@ -735,16 +737,21 @@ async function cropWindow(buffer, meta, o) {
   if (Math.abs(targetAR - srcAR) < 0.01) return null;
 
   let cropW, cropH, cropLeft, cropTop;
+  // cropAnchor='center' 跳过智能分析直接居中：合照等主体分散的场景，
+  // 亮度方差判断容易偏向一侧把人裁掉，居中取景更保险
+  const anchor = o.cropAnchor === 'center' ? 'center' : 'smart';
   if (targetAR > srcAR) {
     cropW = W;
     cropH = Math.round(W / targetAR);
     cropLeft = 0;
-    cropTop = await smartOffset(buffer, W, H, cropW, cropH, 'vertical');
+    cropTop = anchor === 'center' ? Math.round((H - cropH) / 2)
+      : await smartOffset(buffer, W, H, cropW, cropH, 'vertical');
   } else {
     cropH = H;
     cropW = Math.round(H * targetAR);
     cropTop = 0;
-    cropLeft = await smartOffset(buffer, W, H, cropW, cropH, 'horizontal');
+    cropLeft = anchor === 'center' ? Math.round((W - cropW) / 2)
+      : await smartOffset(buffer, W, H, cropW, cropH, 'horizontal');
   }
   return {
     left: Math.max(0, Math.min(cropLeft, W - cropW)),

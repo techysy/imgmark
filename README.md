@@ -76,7 +76,8 @@
 - **亮度自适应黑白**：纯黑白 logo 所在的分组，按水印落点区域的亮度自动选黑标或白标；彩色 logo 所在分组保持原色
 - **相机参数水印**：把拍摄参数写进画面（`FUJIFILM X-E4 · XC15-45mmF3.5-5.6 · 15mm f/6.4 30s ISO800 · 2021-06-17 16:55`），参数从每张照片**自己的 EXIF** 读取，一批里不同相机的照片各写各的；机身名自动归一（`NIKON CORPORATION`+`Z 6_2` → `Nikon Z6 II`），镜头名的候选尾巴（`or Tamron Lens`）自动去掉；可选机身 / 镜头 / 曝光 / 日期时间 / 固件等字段，自由排序拼接、自定义分隔符与前后缀，位置大小独立设置，支持亮度自适应换黑 / 白字。**没有 EXIF 的照片自动跳过这一组**，不会画出空白水印
 - **边框 / 条幅**：把参数放进画面外的留白 —— **下方条幅**、**四周白框**、**装裱细线框**三种版式，底色与对齐可选；条幅文字留空会自动用该照片的机型与曝光参数填
-- **输出裁剪**：按长宽比智能裁剪（保留细节多的一侧），横图 / 竖图可分开设置
+- **输出裁剪**：按长宽比智能裁剪（保留细节多的一侧），横图 / 竖图可分开设置；合照等主体分散的画面可切换**居中裁剪**，不偏不倚取正中
+- **无水印纯导出**：不叠任何水印也能跑 —— 只做批量裁剪 / 长边缩放 / 格式转换
 - **大小基准**：长边（默认，同一相机横 / 竖构图水印实际大小一致）/ 短边 / 图宽
 - **其他**：平铺、旋转、EXIF 自动摆正、保留 EXIF / ICC 元数据
 
@@ -89,10 +90,16 @@
 - **CLI 与 HTTP API**：不开界面也能批量处理，方便脚本和 AI Agent 调用（见 [AGENTS.md](AGENTS.md)）
 
 **发布与文案（识图生成）**
-- **发布页签**：上传待发布图片 + 选平台 + 一句话描述场景，视觉模型识别画面后按平台格式给出**候选标题、正文、话题、@ 建议**，逐块复制到各平台手动发布（不代发）
+- **发布页签**：上传待发布图片（**组图最多 9 张**，可直接拖入）+ 选平台 + 一句话描述场景，视觉模型识别画面后按平台格式给出**候选标题、正文、话题、@ 建议**，逐块复制到各平台手动发布（不代发）
+- **修改意见**：对上一版不满意就写一句意见（带上一次结果作为单次上下文重新生成）；「停止生成」随时打断
 - **历史截图参考**：过往发过的内容拖入 / Ctrl+V 粘贴 / 选文件皆可，最多 3 张，模型模仿其语气与话题习惯
 - **平台默认规则**：话题语言、标题长度等按平台内置（Instagram 双语话题 / 小红书中文话题等），以实际发布效果为准
 - **模型自由**：走 OpenAI 兼容接口（10router 等），模型面板按供应商分组挑选视觉模型；密钥存本机数据目录，**不下发前端、不进任何接口响应**
+
+**选图打分（快速选片）**
+- **极速打星**：网格缩略图 + 键盘 1-5 / 0 打星（0 = 取消），点缩略图进全屏逐张过目（← → 翻页、滚轮缩放、拖拽平移看细节），大号星星悬停连续点亮
+- **星级写进图片本体**：JPG 无损内嵌 XMP（0 画质损耗、无碎文件），Windows 资源管理器「分级」与 Lightroom 星级原生直读；非 JPG（如 RAW）写同名 `.xmp` sidecar；1 星自动附「淘汰」关键词
+- **大相册秒开**：只读文件头部 128KB + 16 路并发扫描，830 张网络盘大图 1 秒内出列表；缩略图磁盘缓存，原图被替换自动失效
 
 ## 快速开始
 
@@ -189,11 +196,15 @@ CLI 暂不支持分组布局、文件夹监听和数据库去重，这三项请�
 | GET / PUT | `/api/copy/config` | 模型服务配置（`baseUrl / model`；密钥只写不回读，`clearKey:true` 清除） |
 | GET / POST | `/api/copy/refs` | 历史参考截图列表 / 上传（multipart `file`，存 JPEG 缩略图） |
 | GET / DELETE | `/api/copy/refs/:id` | 读取（`/file`）/ 删除参考截图 |
-| POST | `/api/copy/generate` | multipart：`image` + `payload` `{platform, scene, model, refIds}` → `{titles, body, hashtags, mentions}` |
+| POST | `/api/copy/generate` | multipart：`image`（可重复，最多 9 张）+ `payload` `{platform, scene, model, refIds, feedback?, previous?}` → `{titles, body, hashtags, mentions}` |
+| GET | `/api/cull/list` | 选图打分：列目录图片与星级（`?dir=&recursive=1`，头部 128KB 快扫） |
+| GET | `/api/cull/thumb` | 选图缩略图（`?file=&size=big` → 1600px 全屏预览；磁盘缓存） |
+| POST | `/api/cull/set` | 手动打星 `{file, rating:0-5, labels?}`：JPG 无损内嵌 XMP，非 JPG 写 sidecar |
+| POST | `/api/cull` | 自动预评分任务 `{inputDir, writeXmp?, recursive?}` → `{jobId}`（UI 已移除入口，仅 API / CLI） |
 | GET | `/api/fnos/status` · `/api/fnos/folders` | fnOS 开放 API 可用性 / 已授权目录 |
 | POST | `/api/fnos/list` · `/api/fnos/delete-authorization` | 列授权目录内容（先做 ACL 校验）/ 删除授权 |
 
-`options`：`position, sizePct, opacity, marginPct, offsetX, offsetY, rotate, tile, tileGapPct, format(auto|png|jpeg|webp), quality, mozjpeg, autoColor, sizeBase(long|short|width)`
+`options`：`position, sizePct, opacity, marginPct, offsetX, offsetY, rotate, tile, tileGapPct, format(auto|png|jpeg|webp), quality, mozjpeg, autoColor, sizeBase(long|short|width), cropRatio, cropRatioPort, cropAnchor(smart|center), maxLongEdge`
 
 `groups`：`[{logos:[序号], position, sizePct, marginPct, direction(h|v), gapX, gapY, ratios[], opacity, offsetX, offsetY}]`。每个分组先把组内 logo 按方向、间距和比例拼成组合水印，再按 `sizePct`（占大小基准边 %）缩放、按 `position` 落位；开启 `autoColor` 时，组内 logo 全为纯黑白的分组按落点亮度整组切换黑 / 白标。
 

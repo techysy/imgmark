@@ -31,6 +31,8 @@ function usage() {
                   [--quality 90] [--mozjpeg] [--recursive] [--overwrite] [--suffix _wm] [--concurrency 3]
                   [--bg auto|white|black] [--tolerance 40] [--force] [--trim] [--crop "..."] [--gap 10] [--unequal]
   imgmark serve   启动 Web 界面（默认只监听本机；非回环 HOST 还需 IMGMARK_ALLOW_REMOTE=1）
+  imgmark cull    -i <图片目录> [--recursive] [--no-xmp]
+                  选图打分：评星 + 问题标记（曝光/虚焦），JPG 无损内嵌 XMP、其余写同名 .xmp，Lightroom/资源管理器按星筛选
 
 说明:
   -w 可重复传入多个 logo，自动等高并排合并（--gap 间距%，--unequal 关闭等高）
@@ -134,6 +136,26 @@ async function main() {
       console.log(`✓ ${f} → ${out}  (${prepared.width}×${prepared.height}${prepared.removed ? '' : '，已是透明底'})`);
       prepared.notes.forEach((n) => console.log(`    · ${n}`));
     }
+    return;
+  }
+
+  if (cmd === 'cull') {
+    const { runCull } = require('../src/core/culling');
+    if (!args.i) { usage(); process.exit(1); }
+    const result = await runCull({
+      inputDir: path.resolve(args.i),
+      recursive: !!args.recursive,
+      writeXmp: !args['no-xmp'],
+      onProgress: ({ done, total, current }) => {
+        if (current) console.log(`[${done}/${total}] ${path.basename(current)}`);
+      },
+    });
+    console.log(`\n完成：成功 ${result.ok}，失败 ${result.failed}，共 ${result.total}`);
+    for (const r of result.results) {
+      const stars = r.rating ? '★'.repeat(r.rating) + '☆'.repeat(5 - r.rating) : '—';
+      console.log(`  ${stars}  ${path.basename(r.input)}${r.flags.length ? '  [' + r.flags.join(' / ') + ']' : ''}${r.error ? '  ✗ ' + r.error : ''}`);
+    }
+    process.exit(result.failed ? 1 : 0);
     return;
   }
 

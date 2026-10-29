@@ -39,8 +39,13 @@ cd app/server && npm install && npm start
   `text.fontFamily` 与 `options.frame.fontFamily` 都只认这份清单里的名字，其余回落 `sans-serif`
 - 裁剪比例支持方向前缀：`land@5:4` 只对横图生效、`port@4:5` 只对竖图生效，
   不带前缀（`4:5`、`1:1`）两个方向都裁 —— 老方案里存的就是这种，行为与旧版一致
+- 裁剪取景 `options.cropAnchor`：`smart`（默认，亮度方差保细节）| `center`（居中取景，
+  合照等主体分散的场景用 —— 亮度方差容易偏向一侧把人裁掉）
 - 裁剪在**加水印之前**生效：水印（logo / 相机参数文字 / 边框）按裁剪后的最终画面定位，预览与输出一致；
   智能选区在无水印的原图上分析；带裁剪时整条管线只编码一次（旧版「先叠标再裁」已废弃）
+- **无水印纯导出**：`groups`/`watermarkId`/`frame` 都不给，只配 `cropRatio` / `maxLongEdge` /
+  `format`（非 auto）之一即可跑批量或单张导出（`exportOnly:true` 显式声明也行）；
+  三样都没配才是 400（等于原样复制）。用途：批量裁剪 / 缩放 / 转格式，不叠任何水印
 
 ## 2. 任务 A：给文件夹批量加水印（最常用）
 
@@ -208,17 +213,49 @@ curl -s http://127.0.0.1:28110/api/copy/platforms  # 平台与默认文案规则
 # 历史截图参考（可选；存储于数据目录，最多 3 张参与生成）
 curl -s -X POST http://127.0.0.1:28110/api/copy/refs -F "file=@ref.png" -F "name=过往截图"
 
-# 生成：待发布图片 + 平台 + 一句话场景
+# 生成：待发布图片（可多张组图，image 字段重复传，最多 9 张）+ 平台 + 一句话场景
 curl -s -X POST http://127.0.0.1:28110/api/copy/generate \
-  -F "image=@one.jpg" \
+  -F "image=@one.jpg" -F "image=@two.jpg" \
   -F 'payload={"platform":"instagram","scene":"PNS 在成都 CPI 开快闪店，我去打卡拍照","model":"mimo/mimo-v2.6-flash","refIds":["<refId>"]}'
-# → {"platform","model","titles":[...],"body":"...","hashtags":[...],"mentions":[...]}
+# → {"platform","model","imageCount","titles":[...],"body":"...","hashtags":[...],"mentions":[...]}
 ```
 
 - `platform` 取值见 `GET /api/copy/platforms`（`instagram` / `xiaohongshu`）；`refIds` 可省略
 - 只产出文字供人工复制，**不代发**；`mentions` 只会原样输出场景描述里明确写过的 @ 账号
 
-## 8. CLI 等价命令
+## 8. 任务 F：选图打分（JPG 无损内嵌评星 / 非 JPG 写入 XMP sidecar）
+
+给文件夹里的图片评 1-5 星并打问题标记（曝光过度/曝光不足/虚焦/快门过慢）：
+- **JPG / JPEG 文件直接无损内嵌写入文件头部 XMP**（0 画质损耗，毫秒级注入），Windows 资源管理器、Lightroom、Bridge 原生直接显示“分级”星级，无需产生任何 .xmp 碎文件；
+- **非 JPG 格式（如 RAW）**自动写入每张图旁的**同名 `.xmp` sidecar**；
+- LR 的旗标不落 XMP：1 星自动附「淘汰」关键词。
+评星以人工在 UI 里确认为准。
+
+```bash
+curl -s -X POST http://127.0.0.1:28110/api/cull -H "Content-Type: application/json" \
+  -d '{"inputDir":"/abs/photos","writeXmp":true}'
+# → {"jobId":"..."}；用 GET /api/jobs/<jobId> 轮询（job.kind='cull'）
+# done 后 results[] 逐文件 {name,input,rating,flags[],xmp}
+
+# 手动改一张图的星级 / 追加关键词（JPG 直接无损内嵌更新，非 JPG 写 sidecar）
+curl -s -X POST http://127.0.0.1:28110/api/cull/set -H "Content-Type: application/json" \
+  -d '{"file":"/abs/photos/IMG_001.jpg","rating":4,"labels":["备选"]}'
+
+# 手动快速打星（UI「快速打星」网格用的两个接口）
+curl -s "http://127.0.0.1:28110/api/cull/list?dir=/abs/photos&recursive=1"  # 16路并发快速扫头部128KB列图+星级
+curl -s -o t.jpg "http://127.0.0.1:28110/api/cull/thumb?file=/abs/photos/IMG_001.jpg&size=big"
+# thumb：420px 网格缩略图（size=big → 1600px 全屏预览），按 路径+尺寸+mtime+大小 磁盘缓存（原图被替换自动失效）
+```
+
+- `writeXmp:false` 只回传结果不落盘；`recursive:true` 含子目录
+- 已存在元数据或 sidecar 时**安全合并**：星级替换、用户关键词并集；本工具词表的旧标记先剥再并，不破坏原有属性；
+  JPG 内嵌成功会删掉同名 sidecar（其内容已并入内嵌 XMP，不丢）；0 星 = 未分级（xmp:Rating="0"）
+- `rating:0` 同样可写（取消打星）；`labels` 只增不删（本工具词表词随星级走）
+- UI：选图页快速打星（缩略图网格 + 全屏预览，点缩略图进全屏，← → 切换、1-5 打星、0 取消）；
+  自动预评分入口已从 UI 移除，仅保留 API / CLI 形式
+- CLI：`node bin/wm.js cull -i <目录> [--recursive] [--no-xmp]`
+
+## 9. CLI 等价命令
 
 ```bash
 cd app/server
@@ -229,15 +266,15 @@ node bin/wm.js apply -w combined.png -i /abs/photos --pos se --size 25 \
 ```
 
 CLI 暂不支持分组布局 / 监听 / 数据库去重 / 输出裁剪 cropRatio / 输出缩放 maxLongEdge（这些走 HTTP API；
-CLI 的 `--crop` 是水印源裁剪，别混淆）。
+CLI 的 `--crop` 是水印源裁剪，别混淆；选图打分另见第 8 节 `wm.js cull`）。
 
-## 9. 其他模式
+## 10. 其他模式
 
 - `mode=upload`：multipart 附 `files[]`（与 payload 同表单），结果用 `GET /api/jobs/:id/file/:idx` 逐个下载
 - `mode=fnos`：飞牛 NAS 内使用，UID 由应用网关注入 `x-trim-userid`（请求 payload/query 的 UID 不可信），输入和输出路径都必须位于当前用户可读/可写的授权目录（开放平台 `trim.file.*`），桌面壳内隐藏该页签
 - `mode=local-files`：桌面壳原生对话框的显式文件列表
 
-## 10. Agent 注意事项
+## 11. Agent 注意事项
 
 - **默认不要用 `overwrite`**：它会直接改写原图片文件（不可恢复）；勾选后强制保持原格式
 - `skipProcessed`：配合本地数据库跳过已输出文件（ overwrite 时无效）；「已输出」= 数据库身份命中且输出仍在，或输出文件已存在

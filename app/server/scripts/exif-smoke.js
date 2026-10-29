@@ -11,6 +11,9 @@
  * 用法：node scripts/exif-smoke.js
  */
 const assert = require('assert');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
 const sharp = require('sharp');
 const { parseExif, readExif } = require('../src/core/exif');
 const { formatCameraText } = require('../src/core/exiftext');
@@ -214,6 +217,68 @@ async function jpegWithExif(exif, w = 64, h = 48) {
         eq(r.ext, ext); eq(m.format, real);
       });
     }
+  }
+
+  console.log('\n[9] 选图打分（评星内嵌读写）');
+  {
+    const culling = require('../src/core/culling');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'imgmark-cull-'));
+    const mkJpg = async (name) => {
+      const p = path.join(dir, name);
+      fs.writeFileSync(p, await sharp({ create: { width: 32, height: 24, channels: 3, background: '#445566' } }).jpeg().toBuffer());
+      return p;
+    };
+
+    const jpg = await mkJpg('a.jpg');
+    const w1 = culling.writeRating(jpg, { rating: 4, labels: ['备选'] });
+    ok('JPG 无损内嵌写入（不产生 sidecar 碎片）', () => {
+      assert(w1.embedded, JSON.stringify(w1));
+      eq(fs.existsSync(path.join(dir, 'a.xmp')), false);
+    });
+    const r1 = culling.readRating(jpg);
+    ok('内嵌 XMP 读回星级与关键词', () => { assert(r1.embedded); eq(r1.rating, 4); assert(r1.labels.includes('备选')); });
+    ok('Windows 分级同步写入（4 星 = MicrosoftPhoto:Rating 75）', () =>
+      assert(/MicrosoftPhoto:Rating="75"/.test(fs.readFileSync(jpg).toString('latin1'))));
+
+    // 既有 sidecar（如 Lightroom 写的用户关键词）在首次内嵌时并入，不能随碎片删除而丢
+    const jpg2 = await mkJpg('b.jpg');
+    fs.writeFileSync(path.join(dir, 'b.xmp'),
+      `<?xpacket begin="﻿" id="W5M0MpCehiHzreSzNTczkc9d"?><x:xmpmeta xmlns:x="adobe:ns:meta/">`
+      + `<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about=""`
+      + ` xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:subject><rdf:Bag>`
+      + `<rdf:li xml:lang="x-default">家庭</rdf:li></rdf:Bag></dc:subject></rdf:Description>`
+      + `</rdf:RDF></x:xmpmeta><?xpacket end="w"?>`);
+    culling.writeRating(jpg2, { rating: 5, labels: [] });
+    const r2 = culling.readRating(jpg2);
+    ok('sidecar 用户关键词并入内嵌 XMP 后删碎片', () => {
+      eq(fs.existsSync(path.join(dir, 'b.xmp')), false);
+      assert(r2.embedded); eq(r2.rating, 5); assert(r2.labels.includes('家庭'), JSON.stringify(r2.labels));
+    });
+
+    culling.writeRating(jpg2, { rating: 0, labels: [] });
+    ok('0 星写入并读回（未分级）', () => eq(culling.readRating(jpg2).rating, 0));
+
+    const png = path.join(dir, 'c.png');
+    fs.writeFileSync(png, await sharp({ create: { width: 8, height: 8, channels: 3, background: '#123456' } }).png().toBuffer());
+    const w3 = culling.writeRating(png, { rating: 2, labels: [] });
+    ok('非 JPG 写同名 .xmp sidecar 并能读回', () => { assert(w3.sidecar); eq(culling.readRating(png).rating, 2); });
+
+    // XMP 段前面垫 >128KB 的段（大 EXIF/ICC 的真实形态）：
+    // 头部扫描不完整时必须整文件兜底重读，不能误判「没有星级」
+    const mkFill = (n) => Buffer.concat([Buffer.from([0xFF, 0xFE, (n + 2) >> 8, (n + 2) & 0xFF]), Buffer.alloc(n, 0x41)]);
+    const xmpXml = culling.buildXmp(3, []);
+    const xmpHead = Buffer.from('http://ns.adobe.com/xap/1.0/\0', 'latin1');
+    const xmpPayload = Buffer.from(xmpXml, 'utf8');
+    const segLen = 2 + xmpHead.length + xmpPayload.length;
+    const app1 = Buffer.concat([Buffer.from([0xFF, 0xE1, segLen >> 8, segLen & 0xFF]), xmpHead, xmpPayload]);
+    const big = await mkJpg('big.jpg');
+    fs.writeFileSync(big, Buffer.concat([
+      fs.readFileSync(big).slice(0, 2), mkFill(60000), mkFill(60000), mkFill(60000), app1, fs.readFileSync(big).slice(2),
+    ]));
+    const rb = culling.readRating(big);
+    ok('XMP 在 128KB 之后仍能整文件兜底读到', () => { assert(rb.embedded); eq(rb.rating, 3); });
+
+    fs.rmSync(dir, { recursive: true, force: true });
   }
 
   console.log(`\n全部通过（${pass} 项）\n`);

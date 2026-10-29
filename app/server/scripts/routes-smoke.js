@@ -211,6 +211,23 @@ function req(method, urlPath, body) {
     }
   }
 
+  console.log('\n[9] 无水印纯导出（只转格式 / 裁剪 / 长边，不叠任何东西）');
+  {
+    // 曾因 composeGroups 的分组门被整批 400：format !== 'auto' 本身就是输出动作
+    const id = await postJob({ mode: 'local', inputDir: inDir, outputDir: path.join(TMP, 'out-export'),
+      options: { format: 'png', quality: 90 } });
+    const j = await waitJob(id);
+    ok('只转格式也能跑（不再报「没有可合成的分组」）', () => { eq(j.status, 'done'); eq(j.ok, 2); eq(j.failed, 0); });
+    for (const result of j.results) {
+      const meta = await sharp(result.output).metadata();
+      ok(`${result.name} 输出为 PNG`, () => { eq(meta.format, 'png'); eq(meta.width, 800); });
+    }
+    // 三样都没配的「纯导出」等于原样复制，应当被拦下说清楚
+    const bad = await req('POST', '/api/process', { mode: 'local', inputDir: inDir,
+      outputDir: path.join(TMP, 'out-none'), options: { format: 'auto' } });
+    ok('什么都不配置的纯导出 → 400', () => eq(bad.status, 400));
+  }
+
   srv.close();
   console.log(`\n全部通过（${pass} 项）\n`);
   process.exit(0);

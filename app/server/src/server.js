@@ -16,12 +16,13 @@ const { prepareWatermark, mergeWatermarks, composeWatermark, composeGroups, buil
 const { checkFontAvailable } = require('./core/textmark');
 const { listAvailableFonts, normalizeFontFamily, DEFAULT_FONT_FAMILY } = require('./core/fonts');
 const { formatCameraText } = require('./core/exiftext');
-const { runBatch, isInside, normalizeSuffix } = require('./core/batch');
+const { runBatch, isInside, normalizeSuffix, listImages } = require('./core/batch');
 const { ProcessDB } = require('./core/db');
 const { WatcherManager } = require('./core/watcher');
 const { TrimAppClient } = require('./fnos/trimapp');
 const { createFnosRouter } = require('./fnos/routes');
 const copywriting = require('./core/copywriting');
+const culling = require('./core/culling');
 
 const PORT = Number(process.env.PORT || 28110);
 const HOST = process.env.HOST || '127.0.0.1';
@@ -723,7 +724,7 @@ app.post('/api/preview', express.json(), async (req, res) => {
       const toPreviewG = async (kind) => {
         const composed = await composeGroups(await getSampleImage(kind, orient), groupDefs,
           { sizeBase: options.sizeBase, frame: previewFrame,
-            cropRatio: options.cropRatio, cropRatioPort: options.cropRatioPort });
+            cropRatio: options.cropRatio, cropRatioPort: options.cropRatioPort, cropAnchor: options.cropAnchor });
         // 预览与批量同一条管线：裁剪在合成内部（水印前）生效，最后只做长边收敛
         composed.buffer = await applyResize(composed.buffer, options);
         return previewDataUrl(composed);
@@ -802,7 +803,9 @@ app.post('/api/render', reserveRenderSlot, requestContentLengthLimit(64 * 1024 *
     const set = logoSets.get(payload.watermarkId);
     if (wantsLogo && !set) return res.status(404).json({ error: 'logo 组不存在或服务已重启，请重新上传' });
     if (!groups.length && !options.frame) {
-      return res.status(400).json({ error: '没有可合成的内容：请提供相机参数分组或边框' });
+      // 无水印单张导出：只应用裁剪 / 长边上限 / 格式（同批量的纯导出模式）
+      const plain = options.cropRatio || options.cropRatioPort || options.maxLongEdge || options.format !== 'auto';
+      if (!plain) return res.status(400).json({ error: '没有可合成的内容：请提供水印、相机参数分组、边框，或配置裁剪/长边/格式做仅导出' });
     }
     const groupDefs = groups.length
       ? await resolveGroups(set || { logos: [] }, groups, options.autoColor)
@@ -1034,6 +1037,8 @@ function parseOptions(raw) {
     // 用 parseCropRatio 校验（直接查 CROP_RATIOS 会把带前缀的一律判成非法而丢掉）
     cropRatio: parseCropRatio(o.cropRatio) ? o.cropRatio : null,
     cropRatioPort: parseCropRatio(o.cropRatioPort) ? o.cropRatioPort : null,
+    // 裁剪取景：smart=亮度方差保细节（默认）| center=居中（合照等主体分散时更保险）
+    cropAnchor: o.cropAnchor === 'center' ? 'center' : 'smart',
     // 输出长边上限（像素）：超过的图在裁剪后等比缩小（只缩不放），0/缺省 = 保持原始尺寸
     maxLongEdge: Math.max(0, Math.min(30000, numOr(o.maxLongEdge, 0))) || null,
     // 边框 / 条幅：把相机参数放进新撑出来的留白，而不是浮在画面上
@@ -1099,6 +1104,14 @@ app.post('/api/process', reserveProcessSlot, requestContentLengthLimit(256 * 102
       groupDefs = await resolveGroups(set || { logos: [] }, payload.groups, options.autoColor);
     } else if (options.frame) {
       // 只要边框、不叠任何水印：走分组管线（groups 里只有边框在起作用）
+      groupDefs = [];
+    } else if (options.cropRatio || options.cropRatioPort || options.maxLongEdge ||
+               options.format !== 'auto' || payload.exportOnly === true) {
+      // 无水印纯导出：不叠任何东西，只应用输出裁剪 / 长边上限 / 格式转换。
+      // 三样都没配的「纯导出」等于原样复制，提前拦下说清楚
+      if (!options.cropRatio && !options.cropRatioPort && !options.maxLongEdge && options.format === 'auto') {
+        return res.status(400).json({ error: '仅导出模式需要至少配置裁剪、长边上限或输出格式中的一项' });
+      }
       groupDefs = [];
     } else {
       // 走到这里既没有分组也没有边框。给了 watermarkId 就是想用单/合并水印，去查它；
@@ -1379,7 +1392,7 @@ app.post('/api/browse', express.json(), async (req, res) => {
 // 密钥只存 DATA_DIR/llm.json,任何响应都不回传;配置写入仅在非 fnOS 本地模式开放,避免多用户互相覆盖
 const uploadRef = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 22 * 1024 * 1024, files: 1, fields: 8, fieldSize: 256 * 1024 },
+  limits: { fileSize: 22 * 1024 * 1024, files: 9, fields: 8, fieldSize: 256 * 1024 },
   defParamCharset: 'utf8',
 });
 function copyUid(req) {
@@ -1472,10 +1485,10 @@ app.delete('/api/copy/refs/:id', (req, res) => {
   } catch (e) { sendCopyError(res, e); }
 });
 
-app.post('/api/copy/generate', uploadRef.single('image'), async (req, res) => {
+app.post('/api/copy/generate', uploadRef.array('image', 9), async (req, res) => {
   try {
     const uid = copyUid(req);
-    if (!req.file) return res.status(400).json({ error: '缺少待发布图片' });
+    if (!req.files || !req.files.length) return res.status(400).json({ error: '缺少待发布图片' });
     let body;
     try { body = JSON.parse(req.body.payload || '{}'); } catch { return res.status(400).json({ error: 'payload 不是合法 JSON' }); }
     const scene = String(body.scene || '').trim().slice(0, 1000);
@@ -1491,17 +1504,168 @@ app.post('/api/copy/generate', uploadRef.single('image'), async (req, res) => {
       refImages.push(fs.readFileSync(full));
     }
     const cfg = copywriting.llmConfig(DATA_DIR);
-    const targetImage = await copywriting.makeThumb(req.file.buffer);
+    const targetImages = [];
+    for (const f of req.files) targetImages.push(await copywriting.makeThumb(f.buffer));
     const result = await copywriting.generateCopy({
       cfg,
       platformId: String(body.platform || ''),
       scene,
       model: String(body.model || cfg.model || ''),
       refImages,
-      targetImage,
+      targetImages,
+      // 修改意见（单次上下文）：previous 是上一版结果 JSON，feedback 是本次意见
+      feedback: String(body.feedback || '').trim().slice(0, 500) || null,
+      previous: String(body.previous || '').slice(0, 4000) || null,
     });
     res.json(result);
   } catch (e) { sendCopyError(res, e); }
+});
+
+// ---- 选图打分（评星 + 问题标记写 XMP sidecar，Lightroom 按星筛选）----
+// 任务复用 /api/jobs/:id 轮询（job.kind='cull'）；sidecar 写在图片旁边，所以输入目录必须可写
+
+// 手动快速打星：列出目录里的图片与已有 sidecar 星级，配合缩略图端点渲染网格
+app.get('/api/cull/list', async (req, res) => {
+  try {
+    const inputDir = String(req.query.dir || '').trim();
+    if (!path.isAbsolute(inputDir)) return res.status(400).json({ error: '请输入绝对路径' });
+    const fnosUid = fnos.isAvailable() ? gatewayUid(req) : 0;
+    if (fnos.isAvailable() && !fnosUid) return res.status(403).json({ error: '请求缺少 fnOS 网关注入的用户身份' });
+    if (!fs.existsSync(inputDir) || !fs.statSync(inputDir).isDirectory()) {
+      return res.status(400).json({ error: `目录不存在：${inputDir}` });
+    }
+    if (fnos.isAvailable()) await assertFnosPath(fnosUid, inputDir, { write: true });
+    const files = await listImages(inputDir, { recursive: req.query.recursive === '1', skipDirs: new Set() });
+    files.sort();
+    const targetFiles = files.slice(0, 3000);
+    const items = new Array(targetFiles.length);
+    let nextIdx = 0;
+    const concurrency = 16;
+    const runners = Array.from({ length: Math.min(concurrency, targetFiles.length) }, async () => {
+      while (true) {
+        const i = nextIdx++;
+        if (i >= targetFiles.length) break;
+        const f = targetFiles[i];
+        const x = await culling.readRatingAsync(f);
+        items[i] = {
+          file: f,
+          name: path.basename(f),
+          rating: x ? x.rating : 0,
+          labels: x ? x.labels.filter((l) => !culling.FLAG_SET.has(l)) : [],
+        };
+      }
+    });
+    await Promise.all(runners);
+    res.json({ files: items });
+  } catch (e) {
+    console.error('[cull/list]', e);
+    res.status(e.status || 500).json({ error: e.message });
+  }
+});
+
+// 缩略图：按需生成、磁盘缓存（路径+mtime+size 命中直接回文件），网格滚动加载不至于反复解码大图
+const THUMB_DIR = path.join(os.tmpdir(), 'imgmark-cull-thumbs');
+fs.mkdirSync(THUMB_DIR, { recursive: true });
+app.get('/api/cull/thumb', async (req, res) => {
+  try {
+    const file = String(req.query.file || '');
+    if (!path.isAbsolute(file) || !IMAGE_EXTS.has(extOf(file))) {
+      return res.status(400).json({ error: '图片路径无效' });
+    }
+    const fnosUid = fnos.isAvailable() ? gatewayUid(req) : 0;
+    if (fnos.isAvailable() && !fnosUid) return res.status(403).json({ error: '请求缺少 fnOS 网关注入的用户身份' });
+    if (!fs.existsSync(file)) return res.status(404).json({ error: '文件不存在' });
+    if (fnos.isAvailable()) await assertFnosPath(fnosUid, file, { roots: null });
+
+    const st = fs.statSync(file);
+    // size=big 供全屏预览（1600px），默认 420px 供网格
+    const edge = req.query.size === 'big' ? 1600 : 420;
+    // 缓存 key 绑定 路径+尺寸+mtime+大小（打星只改 XMP，mtime 变了才重生成；原图被替换/重导出时自动失效）
+    const key = crypto.createHash('sha1').update(`${file}|${edge}|${st.size}|${st.mtimeMs}`).digest('hex');
+    const cache = path.join(THUMB_DIR, `${key}.jpg`);
+    if (fs.existsSync(cache)) return res.type('jpeg').sendFile(cache);
+    const thumb = await sharp(file, { limitInputPixels: 50_000_000 }).rotate()
+      .resize(edge, edge, { fit: 'inside', withoutEnlargement: true }).jpeg({ quality: edge > 800 ? 85 : 78 }).toBuffer();
+    fs.writeFile(cache, thumb, () => {});
+    res.type('jpeg').send(thumb);
+  } catch (e) {
+    if (!res.headersSent) res.status(e.status || 500).json({ error: e.message });
+  }
+});
+
+app.post('/api/cull', reserveProcessSlot, express.json(), async (req, res) => {
+  try {
+    const body = req.body || {};
+    const inputDir = String(body.inputDir || '').trim();
+    if (!path.isAbsolute(inputDir)) return res.status(400).json({ error: '请输入绝对路径' });
+    const fnosUid = fnos.isAvailable() ? gatewayUid(req) : 0;
+    if (fnos.isAvailable() && !fnosUid) return res.status(403).json({ error: '请求缺少 fnOS 网关注入的用户身份' });
+    if (!fnos.isAvailable() && !fs.existsSync(inputDir)) {
+      return res.status(400).json({ error: `目录不存在：${inputDir}` });
+    }
+    if (fnos.isAvailable()) await assertFnosPath(fnosUid, inputDir, { write: true });
+
+    const jobId = crypto.randomUUID();
+    const job = {
+      id: jobId, kind: 'cull', status: 'running', mode: 'local', dirKind: 'local',
+      inputDir, ownerUid: fnosUid || null,
+      total: 0, done: 0, ok: 0, failed: 0, current: null, results: [], error: null,
+      startedAt: Date.now(),
+    };
+    jobs.set(jobId, job);
+    req.releaseProcessSlot();
+    res.json({ jobId });
+
+    const onProgress = (p) => {
+      job.total = p.total; job.done = p.done; job.current = p.current || job.current;
+      if (p.ok !== undefined) { if (p.ok) job.ok++; else job.failed++; }
+    };
+    try {
+      const result = await culling.runCull({
+        inputDir, recursive: !!body.recursive,
+        writeXmp: body.writeXmp !== false,
+        authorizeInput: fnosUid ? (file) => assertFnosPath(fnosUid, file, { write: true }) : undefined,
+        onProgress,
+      });
+      Object.assign(job, {
+        status: 'done',
+        total: result.total, done: result.total, ok: result.ok, failed: result.failed,
+        results: result.results.map((r) => ({ name: path.basename(r.input), input: r.input, rating: r.rating, flags: r.flags, xmp: r.xmp, ok: !r.error, error: r.error || null })),
+        finishedAt: Date.now() });
+    } catch (e) {
+      Object.assign(job, { status: 'error', error: e.message, finishedAt: Date.now() });
+    }
+  } catch (e) {
+    console.error('[cull]', e);
+    if (!res.headersSent) res.status(e.status || 500).json({ error: e.message });
+  }
+});
+
+// 手动改一张图的星级 / 关键词：读现有 sidecar 做底，合并后写回
+app.post('/api/cull/set', express.json(), async (req, res) => {
+  try {
+    const body = req.body || {};
+    const file = String(body.file || '').trim();
+    if (!path.isAbsolute(file)) return res.status(400).json({ error: '请输入绝对路径' });
+    if (!IMAGE_EXTS.has(extOf(file))) return res.status(400).json({ error: '不支持的图片格式' });
+    const rating = Math.round(Number(body.rating));
+    if (!(rating >= 0 && rating <= 5)) return res.status(400).json({ error: '星级须为 0-5' });
+    const fnosUid = fnos.isAvailable() ? gatewayUid(req) : 0;
+    if (fnos.isAvailable() && !fnosUid) return res.status(403).json({ error: '请求缺少 fnOS 网关注入的用户身份' });
+    if (!fs.existsSync(file)) return res.status(404).json({ error: `文件不存在：${file}` });
+    if (fnos.isAvailable()) await assertFnosPath(fnosUid, file, { write: true });
+
+    const extra = (Array.isArray(body.labels) ? body.labels : [])
+      .map((s) => String(s).trim().slice(0, 60)).filter(Boolean).slice(0, 12);
+    // 手动改星保留之前评分写入的问题标记（「淘汰」除外，它跟着星级走）；用户额外关键词只增不删
+    const existing = culling.readRating(file);
+    const keepFlags = (existing ? existing.labels : []).filter((l) => culling.FLAG_SET.has(l) && l !== culling.FLAGS.reject);
+    const resWrite = culling.writeRating(file, { rating, labels: [...keepFlags, ...extra] });
+    res.json({ ok: true, embedded: !!resWrite.embedded, xmp: resWrite.xmp, rating: resWrite.rating });
+  } catch (e) {
+    console.error('[cull/set]', e);
+    res.status(e.status || 500).json({ error: e.message });
+  }
 });
 
 app.use('/api', (req, res) => res.status(404).json({ error: '接口不存在' }));

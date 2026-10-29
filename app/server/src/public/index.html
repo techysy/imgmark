@@ -27,7 +27,28 @@
       <span id="fnos-text">检测 fnOS 环境…</span>
     </span>
     <a class="icon-btn" id="btn-home" href="https://github.com/techysy/imgmark" target="_blank" rel="noopener" title="项目主页（GitHub）" aria-label="GitHub 项目主页"></a>
+    <button class="icon-btn" id="btn-llm" title="模型服务设置（发布文案生成用）" aria-haspopup="dialog" aria-expanded="false"></button>
     <button class="icon-btn" id="btn-theme" title="切换亮色 / 暗色"></button>
+  </div>
+  <!-- 模型服务设置：独立弹层，发布文案与选图打分的 AI 部分共用同一份配置 -->
+  <div id="llm-pop" class="llm-pop hidden" role="dialog" aria-label="模型服务设置">
+    <div class="llm-pop-title">模型服务设置</div>
+    <div class="field">
+      <label>服务地址（OpenAI 兼容，含 /v1）</label>
+      <input type="text" id="llm-base" placeholder="http://127.0.0.1:20127/v1" style="width:100%">
+    </div>
+    <div class="field">
+      <label>API Key</label>
+      <input type="password" id="llm-key" placeholder="sk-…（留空则不修改）" style="width:100%">
+    </div>
+    <div class="row-inline" style="margin-top:8px">
+      <button id="llm-save" class="btn primary">保存</button>
+      <button id="llm-clear" class="btn ghost">清除已存密钥</button>
+      <button id="llm-refresh" class="btn ghost">刷新模型列表</button>
+      <span id="llm-status" class="notes" style="margin:0"></span>
+    </div>
+    <div class="notes">「发布」页的文案生成使用这份配置；设置保存在本机数据目录（llm.json），
+密钥不会回显、不会出现在任何接口响应里。</div>
   </div>
 </header>
 
@@ -38,6 +59,7 @@
   <button type="button" data-view="batch">批量处理<span class="cnt hidden" id="cnt-job"></span></button>
   <button type="button" data-view="watch">文件夹监听<span class="cnt hidden" id="cnt-watch">0</span></button>
   <button type="button" data-view="copy">发布</button>
+  <button type="button" data-view="cull">选图</button>
 </nav>
 
 <main>
@@ -358,6 +380,11 @@
               <option value="port@1:1">1:1 正方形</option>
             </optgroup>
           </select>
+          <div class="sublabel" style="margin-top:6px">裁剪方式</div>
+          <select id="opt-cropanchor">
+            <option value="smart" selected>智能裁剪（保留细节多的一侧）</option>
+            <option value="center">居中裁剪（合照等主体分散更保险）</option>
+          </select>
           <div id="cropratio-hint" class="notes"></div>
           <label class="check" title="勾选后横图、竖图各用一个比例；不勾选则只按左边横图的比例处理两种方向的图片">
             <input type="checkbox" id="opt-cropsplit"> 横竖分开设置</label>
@@ -406,6 +433,7 @@
         <label class="check danger"><input type="checkbox" id="opt-overwrite"> 覆盖原图（危险）</label>
       </div>
       <div class="row-inline wrap">
+        <label class="check" title="不叠任何水印，只应用输出裁剪、长边上限与格式转换"><input type="checkbox" id="opt-exportonly"> 仅导出（不叠水印，只用裁剪 / 缩放 / 格式）</label>
         <label class="check"><input type="checkbox" id="opt-skipdone"> 跳过已处理（本地数据库校验，避免重复输出水印图）</label>
       </div>
       <div class="row-inline">
@@ -467,42 +495,16 @@
             </div>
           </div>
         </div>
-        <div class="field">
-          <label>&nbsp;</label>
-          <button id="copy-models-refresh" class="btn ghost">刷新模型列表</button>
-        </div>
-        <div class="field">
-          <label>&nbsp;</label>
-          <button id="copy-config-toggle" class="btn ghost" aria-expanded="false">模型设置</button>
-        </div>
       </div>
       <div class="notes" id="copy-platform-rules"></div>
-      <div id="copy-config" class="hidden">
-        <div class="row">
-          <div class="field grow">
-            <label>服务地址(OpenAI 兼容,含 /v1)</label>
-            <input type="text" id="copy-cfg-base" placeholder="http://127.0.0.1:20127/v1" style="width:100%">
-          </div>
-          <div class="field grow">
-            <label>API Key</label>
-            <input type="password" id="copy-cfg-key" placeholder="sk-…(留空则不修改)" style="width:100%">
-          </div>
-        </div>
-        <div class="row-inline" style="margin-top:10px">
-          <button id="copy-cfg-save" class="btn primary">保存设置</button>
-          <button id="copy-cfg-clear" class="btn ghost">清除已存密钥</button>
-          <span id="copy-cfg-status" class="notes" style="margin:0"></span>
-        </div>
-        <div class="notes">设置保存在本机数据目录(llm.json),密钥不会回显、不会出现在任何接口响应里。</div>
-      </div>
     </div>
 
     <div class="copy-split">
       <div class="card">
-        <h2>⑦ 待发布图片与场景 <small>简单写就行,如地点、活动、想表达的感受</small></h2>
+        <h2>⑦ 待发布图片与场景 <small>可多选组图 · 也可直接拖图片进下面的框</small></h2>
         <div class="row">
-          <label class="file-btn">选择待发布图片
-            <input type="file" id="copy-image" accept="image/*" hidden>
+          <label class="file-btn">选择待发布图片（可多选，最多 9 张）
+            <input type="file" id="copy-image" accept="image/*" multiple hidden>
           </label>
           <span id="copy-image-name" class="muted">未选择</span>
         </div>
@@ -510,6 +512,10 @@
         <div class="field" style="margin-top:10px">
           <label>场景描述</label>
           <textarea id="copy-scene" rows="3" placeholder="例:PNS 在成都 CPI 开了一家快闪店,我去打卡拍照" style="width:100%"></textarea>
+        </div>
+        <div class="field" style="margin-top:8px">
+          <label>修改意见 <span class="muted">可选 · 生成过一次后填意见再点生成，会在上一版基础上改</span></label>
+          <textarea id="copy-feedback" rows="2" placeholder="例:标题更短一点、语气活泼些、多加骑行话题" style="width:100%"></textarea>
         </div>
       </div>
 
@@ -534,7 +540,45 @@
       <div id="copy-result"></div>
     </div>
   </section>
+
+  <section class="view" id="view-cull">
+    <!-- 选图打分：JPG 直接内嵌评星，Windows 资源管理器 / Lightroom 直接显示星星，无碎文件 -->
+    <div class="card">
+      <h2>⑩ 选图打分 <small>JPG 直接内嵌写入星级，Windows 资源管理器 / Lightroom 打开即见，无碎文件</small></h2>
+      <div class="row-inline">
+        <input type="text" id="cull-dir" placeholder="图片目录（绝对路径），如 C:\photos\2026-10" class="path-input" style="flex:1;min-width:240px">
+        <button id="cull-dir-pick" class="btn hidden">选择文件夹</button>
+      </div>
+      <div class="row-inline wrap" style="margin-top:4px">
+        <label class="check"><input type="checkbox" id="cull-recursive"> 包含子目录</label>
+      </div>
+      <div class="notes">JPG / JPEG 文件无损内嵌星级（<b>xmp:Rating</b> 与 <b>分级</b>），0 画质损耗，Windows 资源管理器、Lightroom、Bridge 原生直接显示；1 星自动附「淘汰」关键词。非 JPG 格式自动回退到同名 .xmp 伴生文件。</div>
+      <!-- 快速打星：缩略图网格 + 直接点星（或键盘 1-5），即刻内嵌写入 -->
+      <div class="outsec" style="margin-top:14px">快速打星 <small>点缩略图进全屏逐张打星 · ← → 切换、1-5 打星、Esc 退出</small></div>
+      <div class="row-inline">
+        <button id="cull-grid-load" class="btn">加载缩略图</button>
+        <span id="cull-grid-status" class="notes" style="margin:0"></span>
+      </div>
+      <div id="cull-grid" class="cull-grid"></div>
+    </div>
+  </section>
 </main>
+
+<!-- 选图全屏沉浸预览：居中大图 + 左右悬浮翻页 + 悬浮打星 + 顶部胶囊信息 -->
+<div id="cull-viewer" class="cull-viewer hidden" role="dialog" aria-modal="true">
+  <div class="cull-viewer-top">
+    <div id="cull-viewer-name" class="cull-viewer-tag"></div>
+    <button type="button" class="cull-viewer-btn close" id="cull-viewer-close" title="关闭全屏 (Esc)">✕</button>
+  </div>
+  <div class="cull-viewer-canvas">
+    <button type="button" class="cull-viewer-nav prev" id="cull-viewer-prev" title="上一张 (←)">‹</button>
+    <img id="cull-viewer-img" alt="">
+    <button type="button" class="cull-viewer-nav next" id="cull-viewer-next" title="下一张 (→)">›</button>
+  </div>
+  <div class="cull-viewer-bottom">
+    <div class="cull-viewer-stars-wrap" id="cull-viewer-stars"></div>
+  </div>
+</div>
 
 <footer id="page-footer">ImgMark · AI/SVG/PNG/JPG 白底黑底自动转透明 · fnOS 开放平台文件授权 · 局域网工具，无鉴权，请勿暴露公网</footer>
 
